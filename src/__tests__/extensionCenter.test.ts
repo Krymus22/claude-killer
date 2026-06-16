@@ -21,12 +21,23 @@ vi.mock("node:fs", () => ({
 
 // Mock logger
 vi.mock("../logger.js", () => ({
-  default: {
-    debug: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
-    info: vi.fn(),
-  },
+  debug: vi.fn(),
+  warn: vi.fn(),
+  error: vi.fn(),
+  info: vi.fn(),
+}));
+
+const { mockGetRegistry, mockGetActiveMCPServers } = vi.hoisted(() => ({
+  mockGetRegistry: vi.fn(),
+  mockGetActiveMCPServers: vi.fn(),
+}));
+
+vi.mock("../externalTools.js", () => ({
+  getRegistry: (...args: any[]) => mockGetRegistry(...args),
+}));
+
+vi.mock("../extensions.js", () => ({
+  getActiveMCPServers: (...args: any[]) => mockGetActiveMCPServers(...args),
 }));
 
 import {
@@ -48,6 +59,7 @@ import {
   getTriggerModes,
   getCategoryIcon,
   getCategoryColor,
+  discoverExtensions,
   type ExtensionEntry,
   type TriggerMode,
 } from "../extensionCenter.js";
@@ -298,9 +310,192 @@ describe("extensionCenter", () => {
       expect(getCategoryIcon("plugin")).toBeTruthy();
     });
 
-    it("getCategoryColor returns hex color for each category", () => {
-      expect(getCategoryColor("skill")).toMatch(/^#/);
-      expect(getCategoryColor("tool")).toMatch(/^#/);
+    it("getCategoryColor returns correct hex color for each category", () => {
+      expect(getCategoryColor("skill")).toBe("#6EE7F7");
+      expect(getCategoryColor("tool")).toBe("#FBBF24");
+      expect(getCategoryColor("mcp")).toBe("#A78BFA");
+      expect(getCategoryColor("plugin")).toBe("#34D399");
+    });
+
+    it("getTriggerModes returns all four modes in order", () => {
+      expect(getTriggerModes()).toEqual(["disabled", "on_file", "on_task", "always"]);
+    });
+  });
+
+  describe("discoverExtensions", () => {
+    beforeEach(() => {
+      vi.mocked(fs.existsSync).mockReset().mockReturnValue(false);
+      vi.mocked(fs.readdirSync).mockReset().mockReturnValue([]);
+      mockGetRegistry.mockReset();
+      mockGetActiveMCPServers.mockReset();
+      syncExtensions([]);
+    });
+
+    it("should discover skills from home directory", () => {
+      vi.mocked(fs.existsSync).mockImplementation((p: any) => {
+        const s = String(p);
+        return s.includes("claude-killer") && s.includes("skills");
+      });
+      vi.mocked(fs.readdirSync)
+        .mockReturnValueOnce(["mySkill.md", "another.yaml", "readme.txt"] as any)
+        .mockReturnValueOnce(["extra.yml"] as any);
+
+      discoverExtensions();
+
+      const skills = getAllExtensions().filter((e) => e.category === "skill");
+      expect(skills).toHaveLength(3);
+      expect(skills.some((e) => e.id === "skill:mySkill")).toBe(true);
+      expect(skills.some((e) => e.id === "skill:another")).toBe(true);
+      expect(skills.some((e) => e.id === "skill:extra")).toBe(true);
+      expect(skills.some((e) => e.id === "skill:readme")).toBe(false);
+    });
+
+    it("should discover skills from both home and cwd directories", () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readdirSync)
+        .mockReturnValueOnce(["homeSkill.md"] as any)
+        .mockReturnValueOnce(["cwdSkill.yaml"] as any);
+
+      discoverExtensions();
+
+      expect(vi.mocked(fs.readdirSync)).toHaveBeenCalledTimes(2);
+      const skills = getAllExtensions().filter((e) => e.category === "skill");
+      expect(skills).toHaveLength(2);
+      expect(skills.some((e) => e.id === "skill:homeSkill")).toBe(true);
+      expect(skills.some((e) => e.id === "skill:cwdSkill")).toBe(true);
+    });
+
+    it("should skip non-existent skill directories", () => {
+      vi.mocked(fs.existsSync).mockReturnValue(false);
+
+      discoverExtensions();
+
+      expect(vi.mocked(fs.readdirSync)).not.toHaveBeenCalled();
+      expect(getAllExtensions().filter((e) => e.category === "skill")).toHaveLength(0);
+    });
+
+    it("should handle unreadable skill directories gracefully", () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readdirSync).mockImplementation(() => {
+        throw new Error("EACCES");
+      });
+
+      // Should not throw
+      discoverExtensions();
+      expect(getAllExtensions().filter((e) => e.category === "skill")).toHaveLength(0);
+    });
+
+    it("should handle missing external tools module gracefully", () => {
+      vi.mocked(fs.existsSync).mockReturnValue(false);
+      mockGetRegistry.mockImplementation(() => { throw new Error("Module not found"); });
+
+      discoverExtensions();
+      expect(getAllExtensions().filter((e) => e.category === "tool")).toHaveLength(0);
+    });
+
+    it("should handle missing extensions module gracefully", () => {
+      vi.mocked(fs.existsSync).mockReturnValue(false);
+      mockGetActiveMCPServers.mockImplementation(() => { throw new Error("Module not found"); });
+
+      discoverExtensions();
+      expect(getAllExtensions().filter((e) => e.category === "mcp")).toHaveLength(0);
+    });
+
+    it("should handle getRegistry returning null", () => {
+      vi.mocked(fs.existsSync).mockReturnValue(false);
+      mockGetRegistry.mockReturnValue(null);
+
+      discoverExtensions();
+      expect(getAllExtensions().filter((e) => e.category === "tool")).toHaveLength(0);
+    });
+
+    it("should handle getActiveMCPServers returning empty array", () => {
+      vi.mocked(fs.existsSync).mockReturnValue(false);
+      mockGetActiveMCPServers.mockReturnValue([]);
+
+      discoverExtensions();
+      expect(getAllExtensions().filter((e) => e.category === "mcp")).toHaveLength(0);
+    });
+
+    it("should combine discovered skill extensions", () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readdirSync).mockReturnValue(["skillA.md"] as any);
+
+      discoverExtensions();
+
+      const all = getAllExtensions();
+      // 1 skill from home dir + 1 skill from cwd dir
+      expect(all.filter((e) => e.category === "skill")).toHaveLength(2);
+    });
+
+    it("should set meta.path on discovered skills", () => {
+      vi.mocked(fs.existsSync).mockImplementation((p: any) => {
+        return String(p).includes("claude-killer") && String(p).includes("skills");
+      });
+      vi.mocked(fs.readdirSync)
+        .mockReturnValueOnce(["testSkill.md"] as any)
+        .mockReturnValueOnce([]);
+
+      discoverExtensions();
+
+      const skill = getAllExtensions().find((e) => e.id === "skill:testSkill");
+      expect(skill).toBeDefined();
+      expect(skill!.meta?.path).toContain("testSkill.md");
+    });
+  });
+
+  describe("getHubSummary - comprehensive", () => {
+    it("should return zero counts when empty", () => {
+      syncExtensions([]);
+      const summary = getHubSummary();
+      expect(summary.total).toBe(0);
+      expect(summary.enabled).toBe(0);
+      Object.values(summary.byCategory).forEach((cat) => {
+        expect(cat.total).toBe(0);
+        expect(cat.enabled).toBe(0);
+      });
+      Object.values(summary.byTrigger).forEach((count) => {
+        expect(count).toBe(0);
+      });
+    });
+
+    it("should count all categories and trigger modes", () => {
+      syncExtensions([
+        makeExt({ id: "skill:1", category: "skill", installed: true }),
+        makeExt({ id: "tool:1", category: "tool", installed: true }),
+        makeExt({ id: "mcp:1", category: "mcp", installed: true }),
+        makeExt({ id: "plugin:1", category: "plugin", installed: true }),
+      ]);
+      setTriggerMode("skill:1", "always");
+      setTriggerMode("tool:1", "on_file");
+      setTriggerMode("mcp:1", "on_task");
+      setTriggerMode("plugin:1", "disabled");
+
+      const summary = getHubSummary();
+      expect(summary.total).toBe(4);
+      expect(summary.enabled).toBe(3);
+      expect(summary.byCategory.skill).toEqual({ total: 1, enabled: 1 });
+      expect(summary.byCategory.tool).toEqual({ total: 1, enabled: 1 });
+      expect(summary.byCategory.mcp).toEqual({ total: 1, enabled: 1 });
+      expect(summary.byCategory.plugin).toEqual({ total: 1, enabled: 0 });
+      expect(summary.byTrigger).toEqual({ disabled: 1, on_file: 1, on_task: 1, always: 1 });
+    });
+
+    it("should handle multiple extensions per category", () => {
+      syncExtensions([
+        makeExt({ id: "skill:1", category: "skill", installed: true }),
+        makeExt({ id: "skill:2", category: "skill", installed: true }),
+        makeExt({ id: "skill:3", category: "skill", installed: true }),
+      ]);
+      setTriggerMode("skill:1", "always");
+      setTriggerMode("skill:2", "on_file");
+      setTriggerMode("skill:3", "disabled");
+
+      const summary = getHubSummary();
+      expect(summary.byCategory.skill).toEqual({ total: 3, enabled: 2 });
+      expect(summary.byTrigger.always).toBe(1);
+      expect(summary.byTrigger.on_file).toBe(1);
+      expect(summary.byTrigger.disabled).toBe(1);
     });
   });
 });

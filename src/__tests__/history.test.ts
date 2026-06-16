@@ -15,6 +15,8 @@ import {
   historySummary,
   estimateTokens,
   getSystemPrompt,
+  reloadProjectMemory,
+  optimizeContext,
 } from "../history.js";
 
 describe("Plan Mode", () => {
@@ -207,5 +209,361 @@ describe("History - Extended", () => {
     addUserMessage("before reset");
     resetHistory();
     expect(historyLength()).toBe(1);
+  });
+});
+
+describe("optimizeContext", () => {
+  beforeEach(() => {
+    resetHistory();
+  });
+
+  it("does nothing on short history", () => {
+    addUserMessage("short");
+    optimizeContext();
+    expect(historyLength()).toBe(2);
+  });
+
+  it("summarizes read tool results when flow advanced", () => {
+    addUserMessage("read file");
+    addRawAssistantMessage({
+      role: "assistant",
+      content: "",
+      tool_calls: [{ id: "tc1", type: "function", function: { name: "ler_arquivo", arguments: "{}" } }],
+    } as any);
+    addToolResult("tc1", "a".repeat(1000));
+    addUserMessage("next task");
+    optimizeContext();
+    const h = getHistory();
+    const toolMsg = h.find((m) => m.role === "tool");
+    expect(toolMsg).toBeDefined();
+    expect((toolMsg as any).content).toContain("OMITIDO");
+  });
+
+  it("summarizes error messages when later success", () => {
+    addUserMessage("run command");
+    addRawAssistantMessage({
+      role: "assistant",
+      content: "",
+      tool_calls: [{ id: "tc1", type: "function", function: { name: "executar_comando", arguments: "{}" } }],
+    } as any);
+    addToolResult("tc1", "[ERRO] something failed");
+    addRawAssistantMessage({
+      role: "assistant",
+      content: "",
+      tool_calls: [{ id: "tc2", type: "function", function: { name: "executar_comando", arguments: "{}" } }],
+    } as any);
+    addToolResult("tc2", "success output");
+    addUserMessage("ok");
+    optimizeContext();
+    const h = getHistory();
+    const toolMsgs = h.filter((m) => m.role === "tool");
+    const errored = toolMsgs.find((m) => (m as any).content?.includes("ANTERIOR"));
+    expect(errored).toBeDefined();
+  });
+});
+
+describe("getSystemPrompt", () => {
+  beforeEach(() => {
+    resetHistory();
+  });
+
+  it("returns a non-empty string", () => {
+    const prompt = getSystemPrompt();
+    expect(typeof prompt).toBe("string");
+    expect(prompt.length).toBeGreaterThan(0);
+  });
+
+  it("includes base instructions", () => {
+    const prompt = getSystemPrompt();
+    expect(prompt.length).toBeGreaterThan(100);
+  });
+});
+
+describe("reloadProjectMemory", () => {
+  beforeEach(() => {
+    resetHistory();
+  });
+
+  it("returns null or string without errors", () => {
+    const result = reloadProjectMemory();
+    expect(result === null || typeof result === "string").toBe(true);
+  });
+});
+
+describe("getToolName edge cases", () => {
+  beforeEach(() => {
+    resetHistory();
+  });
+
+  it("returns empty string when no assistant message has matching tool_call_id", () => {
+    addUserMessage("start");
+    addRawAssistantMessage({
+      role: "assistant",
+      content: "",
+      tool_calls: [{ id: "call_real", type: "function", function: { name: "ler_arquivo", arguments: "{}" } }],
+    } as any);
+    addToolResult("call_real", "result");
+    addUserMessage("next");
+    // Add a tool result referencing a tool_call_id that doesn't exist in any assistant message
+    addToolResult("call_nonexistent", "orphan result");
+    const h = getHistory();
+    // optimizeContext should not crash and should leave the orphan tool message intact
+    // since getToolName returns "" and isReadTool("") is false
+    const toolCountBefore = h.filter(m => m.role === "tool").length;
+    optimizeContext();
+    const h2 = getHistory();
+    const toolCountAfter = h2.filter(m => m.role === "tool").length;
+    // The orphan tool message should remain (no optimization applied)
+    expect(toolCountAfter).toBe(toolCountBefore);
+  });
+});
+
+describe("hasFlowAdvancedAfterIndex with aplicar_diff success", () => {
+  beforeEach(() => {
+    resetHistory();
+  });
+
+  it("returns true when a future aplicar_diff tool result contains [SUCESSO]", () => {
+    addUserMessage("read file");
+    addRawAssistantMessage({
+      role: "assistant",
+      content: "",
+      tool_calls: [{ id: "tc_read", type: "function", function: { name: "ler_arquivo", arguments: "{}" } }],
+    } as any);
+    addToolResult("tc_read", "a".repeat(1000));
+    addRawAssistantMessage({
+      role: "assistant",
+      content: "",
+      tool_calls: [{ id: "tc_write", type: "function", function: { name: "aplicar_diff", arguments: "{}" } }],
+    } as any);
+    addToolResult("tc_write", "[SUCESSO] Diff aplicado");
+    optimizeContext();
+    const h = getHistory();
+    const readTool = h.find(m => m.role === "tool" && (m as any).tool_call_id === "tc_read");
+    expect(readTool).toBeDefined();
+    expect((readTool as any).content).toContain("OMITIDO");
+  });
+});
+
+describe("hasErrorBeenOvercomeAfterIndex with same-tool success", () => {
+  beforeEach(() => {
+    resetHistory();
+  });
+
+  it("replaces error when same tool succeeds later", () => {
+    addUserMessage("run cmd");
+    addRawAssistantMessage({
+      role: "assistant",
+      content: "",
+      tool_calls: [{ id: "tc_fail", type: "function", function: { name: "executar_comando", arguments: "{}" } }],
+    } as any);
+    addToolResult("tc_fail", "[ERRO] Command failed");
+    addRawAssistantMessage({
+      role: "assistant",
+      content: "",
+      tool_calls: [{ id: "tc_ok", type: "function", function: { name: "executar_comando", arguments: "{}" } }],
+    } as any);
+    addToolResult("tc_ok", "success output");
+    optimizeContext();
+    const h = getHistory();
+    const failedTool = h.find(m => m.role === "tool" && (m as any).tool_call_id === "tc_fail");
+    expect(failedTool).toBeDefined();
+    expect((failedTool as any).content).toContain("ANTERIOR SUPERADO");
+  });
+});
+
+describe("optimizeContext with mixed messages", () => {
+  beforeEach(() => {
+    resetHistory();
+  });
+
+  it("optimizes read and error messages while leaving user/assistant untouched", () => {
+    addUserMessage("do something");
+    addRawAssistantMessage({
+      role: "assistant",
+      content: "",
+      tool_calls: [{ id: "tc1", type: "function", function: { name: "ler_arquivo", arguments: "{}" } }],
+    } as any);
+    addToolResult("tc1", "a".repeat(1000));
+    addRawAssistantMessage({
+      role: "assistant",
+      content: "",
+      tool_calls: [{ id: "tc2", type: "function", function: { name: "executar_comando", arguments: "{}" } }],
+    } as any);
+    addToolResult("tc2", "[ERRO] something broke");
+    addRawAssistantMessage({
+      role: "assistant",
+      content: "",
+      tool_calls: [{ id: "tc3", type: "function", function: { name: "executar_comando", arguments: "{}" } }],
+    } as any);
+    addToolResult("tc3", "fixed output");
+    addUserMessage("next task");
+    optimizeContext();
+    const h = getHistory();
+    const userMsgs = h.filter(m => m.role === "user");
+    expect(userMsgs.length).toBe(2);
+    expect(userMsgs[0].content).toBe("do something");
+    expect(userMsgs[1].content).toBe("next task");
+    const toolMsgs = h.filter(m => m.role === "tool");
+    const readResult = toolMsgs.find(m => (m as any).tool_call_id === "tc1");
+    expect((readResult as any).content).toContain("OMITIDO");
+    const errorResult = toolMsgs.find(m => (m as any).tool_call_id === "tc2");
+    expect((errorResult as any).content).toContain("ANTERIOR SUPERADO");
+  });
+});
+
+describe("hasFlowAdvancedAfterIndex false path (line 371)", () => {
+  beforeEach(() => {
+    resetHistory();
+  });
+
+  it("returns false when no future message advances flow", () => {
+    addUserMessage("start");
+    addRawAssistantMessage({
+      role: "assistant",
+      content: "",
+      tool_calls: [{ id: "tc_fail", type: "function", function: { name: "executar_comando", arguments: "{}" } }],
+    } as any);
+    addToolResult("tc_fail", "[ERRO] failed");
+    // No user message or aplicar_diff success after this - flow has NOT advanced
+    optimizeContext();
+    const h = getHistory();
+    const errorTool = h.find(m => m.role === "tool" && (m as any).tool_call_id === "tc_fail");
+    // Error should NOT be optimized because hasFlowAdvancedAfterIndex returns false
+    // AND hasErrorBeenOvercomeAfterIndex returns false (no same-tool success)
+    expect(errorTool).toBeDefined();
+    expect((errorTool as any).content).toBe("[ERRO] failed");
+  });
+});
+
+describe("hasErrorBeenOvercomeAfterIndex false path (line 387)", () => {
+  beforeEach(() => {
+    resetHistory();
+  });
+
+  it("returns false when no same-tool success exists after error", () => {
+    addUserMessage("start");
+    addRawAssistantMessage({
+      role: "assistant",
+      content: "",
+      tool_calls: [{ id: "tc_err", type: "function", function: { name: "executar_comando", arguments: "{}" } }],
+    } as any);
+    addToolResult("tc_err", "[ERRO] failed");
+    addRawAssistantMessage({
+      role: "assistant",
+      content: "",
+      tool_calls: [{ id: "tc_other", type: "function", function: { name: "ler_arquivo", arguments: "{}" } }],
+    } as any);
+    addToolResult("tc_other", "some read result");
+    // No user message and no executar_comando success after error
+    optimizeContext();
+    const h = getHistory();
+    const errorTool = h.find(m => m.role === "tool" && (m as any).tool_call_id === "tc_err");
+    expect(errorTool).toBeDefined();
+    expect((errorTool as any).content).toBe("[ERRO] failed");
+  });
+});
+
+describe("compactHistory with tool_calls (lines 311, 316-317)", () => {
+  beforeEach(() => {
+    resetHistory();
+  });
+
+  it("preserves valid tool messages and removes orphans during compaction", () => {
+    addUserMessage("msg0");
+    addRawAssistantMessage({
+      role: "assistant",
+      content: "",
+      tool_calls: [{ id: "tc_valid", type: "function", function: { name: "ler_arquivo", arguments: "{}" } }],
+    } as any);
+    addToolResult("tc_valid", "valid result");
+    addUserMessage("msg1");
+    addRawAssistantMessage({
+      role: "assistant",
+      content: "",
+      tool_calls: [{ id: "tc_orphan", type: "function", function: { name: "ler_arquivo", arguments: "{}" } }],
+    } as any);
+    addToolResult("tc_orphan", "orphan result that will be dropped");
+    // Add enough messages to trigger compaction
+    for (let i = 2; i < 15; i++) {
+      addUserMessage(`msg${i}`);
+    }
+    compactHistory();
+    const h = getHistory();
+    // tc_valid and tc_orphan assistant messages should be in the dropped portion
+    // Their tool results should be removed as orphans
+    const toolMsgs = h.filter(m => m.role === "tool");
+    // After compaction, orphan tool messages should be cleaned up
+    for (const tm of toolMsgs) {
+      const tcId = (tm as any).tool_call_id;
+      // Each remaining tool message should have a matching assistant tool_call
+      const hasMatch = h.some(m =>
+        m.role === "assistant" &&
+        Array.isArray((m as any).tool_calls) &&
+        (m as any).tool_calls.some((tc: any) => tc.id === tcId)
+      );
+      expect(hasMatch).toBe(true);
+    }
+  });
+
+  it("removes orphan tool messages when assistant with tool_calls is in recent but orphan tool's assistant was dropped (lines 311, 316-317)", () => {
+    // Build history so that after compaction:
+    // - recent contains: assistant(tc_valid), tool(tc_valid), tool(tc_orphan)
+    // - tc_orphan's matching assistant was dropped
+    addUserMessage("msg0");
+    addUserMessage("msg1");
+    addUserMessage("msg2");
+    addUserMessage("msg3");
+    addUserMessage("msg4");
+    // Now add assistant+tool that will be in recent
+    addRawAssistantMessage({
+      role: "assistant",
+      content: "",
+      tool_calls: [{ id: "tc_valid", type: "function", function: { name: "ler_arquivo", arguments: "{}" } }],
+    } as any);
+    addToolResult("tc_valid", "valid result content here");
+    // Add an orphan tool whose assistant was already dropped (never added)
+    addToolResult("tc_orphan", "orphan tool content here");
+    addUserMessage("msg5");
+
+    const result = compactHistory();
+    expect(result).not.toBeNull();
+    const h = getHistory();
+    const toolMsgs = h.filter(m => m.role === "tool");
+    // tc_orphan should be removed, tc_valid should remain
+    const orphanStillPresent = toolMsgs.some((m: any) => m.tool_call_id === "tc_orphan");
+    expect(orphanStillPresent).toBe(false);
+    const validStillPresent = toolMsgs.some((m: any) => m.tool_call_id === "tc_valid");
+    expect(validStillPresent).toBe(true);
+  });
+});
+
+describe("hasFlowAdvancedAfterIndex false path (line 371)", () => {
+  beforeEach(() => {
+    resetHistory();
+  });
+
+  it("returns false when no future user or aplicar_diff success exists after read tool", () => {
+    addUserMessage("read file");
+    addRawAssistantMessage({
+      role: "assistant",
+      content: "",
+      tool_calls: [{ id: "tc_read", type: "function", function: { name: "ler_arquivo", arguments: "{}" } }],
+    } as any);
+    addToolResult("tc_read", "a".repeat(1000));
+    // Add only assistant+tool that is NOT aplicar_diff and NOT a user message after
+    addRawAssistantMessage({
+      role: "assistant",
+      content: "",
+      tool_calls: [{ id: "tc_other", type: "function", function: { name: "executar_comando", arguments: "{}" } }],
+    } as any);
+    addToolResult("tc_other", "some output");
+
+    optimizeContext();
+    const h = getHistory();
+    const readTool = h.find(m => m.role === "tool" && (m as any).tool_call_id === "tc_read");
+    // hasFlowAdvancedAfterIndex returned false, so read tool content is NOT optimized
+    expect(readTool).toBeDefined();
+    expect((readTool as any).content).toBe("a".repeat(1000));
   });
 });

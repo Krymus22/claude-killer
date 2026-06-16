@@ -266,5 +266,137 @@ describe("extensions.ts (real module)", () => {
       const { shutdownMCPServers } = await loadModule();
       shutdownMCPServers();
     });
+
+    it("should handle multiple shutdowns", async () => {
+      const { shutdownMCPServers } = await loadModule();
+      shutdownMCPServers();
+      shutdownMCPServers();
+    });
+  });
+
+  describe("getMCPToolDefinitions", () => {
+    it("should return empty array when no servers active", async () => {
+      const { getMCPToolDefinitions } = await loadModule();
+      const defs = getMCPToolDefinitions();
+      expect(Array.isArray(defs)).toBe(true);
+      defs.forEach((def) => {
+        expect(def).toHaveProperty("name");
+        expect(def).toHaveProperty("description");
+        expect(def).toHaveProperty("parameters");
+      });
+    });
+  });
+
+  describe("getActiveMCPServers", () => {
+    it("should return empty array when no servers active", async () => {
+      const { getActiveMCPServers } = await loadModule();
+      const servers = getActiveMCPServers();
+      expect(Array.isArray(servers)).toBe(true);
+      expect(servers.length).toBe(0);
+    });
+  });
+
+  describe("initExtensionDirs", () => {
+    it("should create all directories", async () => {
+      const { initExtensionDirs } = await loadModule();
+      initExtensionDirs();
+      const base = path.join(tmpDir, ".claude-killer");
+      expect(fs.existsSync(path.join(base, "skills"))).toBe(true);
+      expect(fs.existsSync(path.join(base, "plugins"))).toBe(true);
+    });
+
+    it("should handle existing directories", async () => {
+      const { initExtensionDirs } = await loadModule();
+      const base = path.join(tmpDir, ".claude-killer");
+      fs.mkdirSync(path.join(base, "skills"), { recursive: true });
+      initExtensionDirs();
+      expect(fs.existsSync(path.join(base, "skills"))).toBe(true);
+    });
+  });
+
+  describe("loadAllExtensions edge cases", () => {
+    it("should handle empty skills directory", async () => {
+      const { initExtensionDirs, loadAllExtensions, getActiveSkills } = await loadModule();
+      initExtensionDirs();
+      await loadAllExtensions();
+      expect(getActiveSkills()).toBeDefined();
+    });
+
+    it("should handle skill with no prompt.md", async () => {
+      const { initExtensionDirs, loadAllExtensions, getActiveSkills } = await loadModule();
+      initExtensionDirs();
+      const skillsDir = path.join(tmpDir, ".claude-killer", "skills");
+      const skillDir = path.join(skillsDir, "no-prompt-skill");
+      fs.mkdirSync(skillDir, { recursive: true });
+      fs.writeFileSync(path.join(skillDir, "skill.json"), JSON.stringify({
+        name: "no-prompt",
+        description: "skill without prompt",
+      }));
+      await loadAllExtensions();
+      expect(getActiveSkills()).toBeDefined();
+    });
+
+    it("should handle skill with prompt.md", async () => {
+      const { initExtensionDirs, loadAllExtensions, getActiveSkills } = await loadModule();
+      initExtensionDirs();
+      const skillsDir = path.join(tmpDir, ".claude-killer", "skills");
+      const skillDir = path.join(skillsDir, "with-prompt");
+      fs.mkdirSync(skillDir, { recursive: true });
+      fs.writeFileSync(path.join(skillDir, "skill.json"), JSON.stringify({
+        name: "with-prompt",
+        description: "skill with prompt",
+      }));
+      fs.writeFileSync(path.join(skillDir, "prompt.md"), "# Skill Prompt\nDo this.");
+      await loadAllExtensions();
+      const skills = getActiveSkills();
+      expect(skills.length).toBeGreaterThanOrEqual(1);
+    });
+
+    it("should handle plugin with valid structure", async () => {
+      const { initExtensionDirs, loadAllExtensions, getActiveSkills } = await loadModule();
+      initExtensionDirs();
+      const pluginsDir = path.join(tmpDir, ".claude-killer", "plugins");
+      const pluginDir = path.join(pluginsDir, "valid-plugin");
+      fs.mkdirSync(path.join(pluginDir, "src"), { recursive: true });
+      fs.writeFileSync(path.join(pluginDir, "plugin.json"), JSON.stringify({
+        name: "valid-plugin",
+        version: "1.0.0",
+        skills: ["valid-plugin"],
+      }));
+      fs.writeFileSync(path.join(pluginDir, "src", "index.js"), "// noop");
+      await loadAllExtensions();
+      expect(getActiveSkills()).toBeDefined();
+    });
+
+    it("should handle multiple skills loading", async () => {
+      const { initExtensionDirs, loadAllExtensions, getActiveSkills } = await loadModule();
+      initExtensionDirs();
+      const skillsDir = path.join(tmpDir, ".claude-killer", "skills");
+      for (let i = 0; i < 5; i++) {
+        const skillDir = path.join(skillsDir, `skill-${i}`);
+        fs.mkdirSync(skillDir, { recursive: true });
+        fs.writeFileSync(path.join(skillDir, "skill.json"), JSON.stringify({
+          name: `skill-${i}`,
+          description: `Skill ${i}`,
+        }));
+        fs.writeFileSync(path.join(skillDir, "prompt.md"), `# Skill ${i}`);
+      }
+      await loadAllExtensions();
+      expect(getActiveSkills()).toBeDefined();
+    });
+  });
+
+  describe("callMCPTool edge cases", () => {
+    it("should handle tool name with multiple underscores", async () => {
+      const { callMCPTool } = await loadModule();
+      const result = await callMCPTool("server__sub__tool", {});
+      expect(result).toContain("[ERRO]");
+    });
+
+    it("should handle empty arguments", async () => {
+      const { callMCPTool } = await loadModule();
+      const result = await callMCPTool("test__tool", {});
+      expect(result).toContain("[ERRO]");
+    });
   });
 });

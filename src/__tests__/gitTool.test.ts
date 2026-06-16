@@ -6,7 +6,7 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { runShellSync } from "../shell.js";
-import { gitStatus, gitDiff, gitLog, gitCommit, gitBranch } from "../gitTool.js";
+import { gitStatus, gitDiff, gitLog, gitCommit, gitBranch, gitBlame, gitShow, gitStash, gitStashPop, gitCheckout, gitPull, gitPush } from "../gitTool.js";
 
 const TEST_DIR = path.join(process.cwd(), "__test_gitdir__");
 
@@ -98,5 +98,95 @@ describe("gitBranch", () => {
     const branches = await gitBranch(TEST_DIR);
     expect(branches).toBeDefined();
     expect(typeof branches).toBe("string");
+  });
+});
+
+describe("gitBlame", () => {
+  it("should return blame info", async () => {
+    const blame = await gitBlame("file1.txt", TEST_DIR);
+    expect(typeof blame).toBe("string");
+  });
+
+  it("should handle line range", async () => {
+    const blame = await gitBlame("file1.txt", TEST_DIR, 1, 1);
+    expect(typeof blame).toBe("string");
+  });
+});
+
+describe("gitShow", () => {
+  it("should show commit info", async () => {
+    const log = await gitLog(TEST_DIR, 1);
+    const hash = log.split(" ")[0];
+    if (hash) {
+      const show = await gitShow(hash, TEST_DIR);
+      expect(typeof show).toBe("string");
+    }
+  });
+});
+
+describe("gitStash", () => {
+  it("should stash changes", async () => {
+    fs.writeFileSync(path.join(TEST_DIR, "stash_test.txt"), "stash me\n", "utf8");
+    const result = await gitStash(TEST_DIR);
+    expect(typeof result).toBe("string");
+  });
+
+  it("should stash with message", async () => {
+    fs.writeFileSync(path.join(TEST_DIR, "stash_msg.txt"), "stash msg\n", "utf8");
+    const result = await gitStash(TEST_DIR, "test stash");
+    expect(typeof result).toBe("string");
+  });
+});
+
+describe("gitStashPop", () => {
+  it("should pop stash", async () => {
+    const result = await gitStashPop(TEST_DIR);
+    expect(typeof result).toBe("string");
+  });
+});
+
+describe("gitCheckout", () => {
+  it("should checkout a branch", async () => {
+    const result = await gitCheckout("master", TEST_DIR);
+    expect(typeof result).toBe("string");
+  });
+});
+
+describe("gitDiff", () => {
+  it("should handle staged diff", async () => {
+    fs.writeFileSync(path.join(TEST_DIR, "staged.txt"), "staged\n", "utf8");
+    git("add staged.txt");
+    const diff = await gitDiff(TEST_DIR, undefined, true);
+    expect(typeof diff).toBe("string");
+    git("reset HEAD staged.txt");
+    fs.unlinkSync(path.join(TEST_DIR, "staged.txt"));
+  });
+
+  it("should handle specific file diff", async () => {
+    fs.writeFileSync(path.join(TEST_DIR, "specific.txt"), "specific\n", "utf8");
+    const diff = await gitDiff(TEST_DIR, "specific.txt");
+    expect(typeof diff).toBe("string");
+    fs.unlinkSync(path.join(TEST_DIR, "specific.txt"));
+  });
+});
+
+describe("gitLog", () => {
+  it("should handle file filter", async () => {
+    const log = await gitLog(TEST_DIR, 5, "file1.txt");
+    expect(typeof log).toBe("string");
+  });
+});
+
+describe("gitStatus", () => {
+  it("should handle conflicted files", async () => {
+    const status = await gitStatus(TEST_DIR);
+    expect(status.conflicted).toBeDefined();
+    expect(Array.isArray(status.conflicted)).toBe(true);
+  });
+
+  it("should return ahead/behind counts", async () => {
+    const status = await gitStatus(TEST_DIR);
+    expect(typeof status.ahead).toBe("number");
+    expect(typeof status.behind).toBe("number");
   });
 });

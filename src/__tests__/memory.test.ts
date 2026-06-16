@@ -44,7 +44,12 @@ const TEMP_DIR = path.join(os.tmpdir(), `claude-killer-memory-test-${Date.now()}
 let testConfig: MemoryConfig;
 
 beforeAll(() => {
-  testConfig = getMemoryConfig(TEMP_DIR);
+  testConfig = {
+    globalDir: path.join(TEMP_DIR, "global"),
+    projectDir: path.join(TEMP_DIR, "project"),
+    historyDir: path.join(TEMP_DIR, "history"),
+    skillsDir: path.join(TEMP_DIR, "skills"),
+  };
   ensureMemoryDirs(testConfig);
 });
 

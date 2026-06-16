@@ -83,4 +83,68 @@ describe("FileWatcher", () => {
     expect(w1).toBe(w2);
     w1.close();
   });
+
+  it("should detect file deletion during poll", async () => {
+    fs.mkdirSync(TEST_DIR, { recursive: true });
+    const testFile = path.join(TEST_DIR, "poll_delete.txt");
+    fs.writeFileSync(testFile, "hello", "utf8");
+
+    const watcher = new FileWatcher();
+    const events: any[] = [];
+    watcher.addCallback((event) => events.push(event));
+    watcher.watch(testFile);
+    watcher.startPolling(50);
+
+    await new Promise((r) => setTimeout(r, 150));
+
+    fs.unlinkSync(testFile);
+
+    await new Promise((r) => setTimeout(r, 150));
+
+    watcher.close();
+    const deletionEvents = events.filter((e) => e.type === "deleted");
+    expect(deletionEvents.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("should detect file modification during poll", async () => {
+    fs.mkdirSync(TEST_DIR, { recursive: true });
+    const testFile = path.join(TEST_DIR, "poll_modify.txt");
+    fs.writeFileSync(testFile, "original", "utf8");
+
+    const watcher = new FileWatcher();
+    const events: any[] = [];
+    watcher.addCallback((event) => events.push(event));
+    watcher.watch(testFile);
+    watcher.startPolling(50);
+
+    await new Promise((r) => setTimeout(r, 150));
+
+    fs.writeFileSync(testFile, "modified", "utf8");
+
+    await new Promise((r) => setTimeout(r, 150));
+
+    watcher.close();
+    const modificationEvents = events.filter((e) => e.type === "modified");
+    expect(modificationEvents.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("should catch callback errors during emit", async () => {
+    fs.mkdirSync(TEST_DIR, { recursive: true });
+    const testFile = path.join(TEST_DIR, "error_emit.txt");
+    fs.writeFileSync(testFile, "initial", "utf8");
+
+    const watcher = new FileWatcher();
+    watcher.addCallback(() => { throw new Error("callback boom"); });
+    watcher.watch(testFile);
+    watcher.startPolling(50);
+
+    await new Promise((r) => setTimeout(r, 150));
+
+    fs.writeFileSync(testFile, "changed", "utf8");
+
+    await new Promise((r) => setTimeout(r, 150));
+
+    watcher.close();
+    expect(true).toBe(true);
+  });
 });

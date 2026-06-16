@@ -97,4 +97,41 @@ describe("Config", () => {
     expect(config.costPerKPrompt).toBe(0);
     expect(config.costPerKCompletion).toBe(0);
   });
+
+  it("calls process.exit when NVIDIA_API_KEY is missing", async () => {
+    delete process.env.NVIDIA_API_KEY;
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation((() => { throw new Error("exit called"); }) as any);
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    try {
+      await import("../config.js");
+    } catch (e: any) {
+      expect(e.message).toBe("exit called");
+    }
+
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining("NVIDIA_API_KEY")
+    );
+
+    exitSpy.mockRestore();
+    errorSpy.mockRestore();
+  });
+
+  it("calls process.exit when NVIDIA_API_KEY is empty string", async () => {
+    process.env.NVIDIA_API_KEY = "   ";
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation((() => { throw new Error("exit called"); }) as any);
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    try {
+      await import("../config.js");
+    } catch (e: any) {
+      expect(e.message).toBe("exit called");
+    }
+
+    expect(exitSpy).toHaveBeenCalledWith(1);
+
+    exitSpy.mockRestore();
+    errorSpy.mockRestore();
+  });
 });

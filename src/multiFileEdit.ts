@@ -84,6 +84,8 @@ function rollbackEdits(backups: Array<{ path: string; original: string }>): void
 /**
  * Edit multiple files atomically. If any edit fails, all changes are rolled back.
  */
+export { applyAllEdits };
+
 export function multiFileEdit(requests: FileEditRequest[]): MultiEditResult {
   log.toolCall("editar_multi_arquivos", { count: requests.length });
 

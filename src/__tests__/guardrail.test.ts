@@ -164,6 +164,13 @@ describe("guardrail.ts (real module)", () => {
       const result = await validateSyntax("Foo.java", java);
       expect(result).toHaveProperty("valid");
     });
+
+    it("should fail on invalid Java syntax", async () => {
+      const java = "public class BadClass { public static void main(String[] args) { { }";
+      const result = await validateSyntax("BadClass.java", java);
+      expect(result.valid).toBe(false);
+      expect(result.errorMessage).toContain("Java compilation error");
+    });
   });
 
   describe("validateSyntax — unknown extension", () => {

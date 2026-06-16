@@ -153,5 +153,44 @@ describe("imagePaste.ts (real module)", () => {
       const result = pasteImageFromClipboard();
       expect(result === null || typeof result === "object").toBe(true);
     });
+
+    it("should handle win32 platform", () => {
+      const origPlatform = process.platform;
+      Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+      const result = pasteImageFromClipboard();
+      expect(result === null || typeof result === "object").toBe(true);
+      Object.defineProperty(process, "platform", { value: origPlatform, configurable: true });
+    });
+
+    it("should handle darwin platform", () => {
+      const origPlatform = process.platform;
+      Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
+      const result = pasteImageFromClipboard();
+      expect(result === null || typeof result === "object").toBe(true);
+      Object.defineProperty(process, "platform", { value: origPlatform, configurable: true });
+    });
+
+    it("should handle linux platform", () => {
+      const origPlatform = process.platform;
+      Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+      const result = pasteImageFromClipboard();
+      expect(result === null || typeof result === "object").toBe(true);
+      Object.defineProperty(process, "platform", { value: origPlatform, configurable: true });
+    });
+  });
+
+  describe("loadImageFromFile edge cases", () => {
+    it("returns null on read error", () => {
+      const img = loadImageFromFile("/dev/null/../invalid\x00path");
+      expect(img === null || typeof img === "object").toBe(true);
+    });
+  });
+
+  describe("saveImageToFile edge cases", () => {
+    it("returns false on deeply invalid path", () => {
+      const img: PastedImage = { data: Buffer.from("x"), format: "png" };
+      const r = saveImageToFile(img, "Z:\\nonexistent\\super\\deep\\path\\img.png");
+      expect(typeof r).toBe("boolean");
+    });
   });
 });

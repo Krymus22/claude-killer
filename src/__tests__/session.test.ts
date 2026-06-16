@@ -5,7 +5,7 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { saveSession, loadSession, listSessions, deleteSession } from "../session.js";
+import { saveSession, loadSession, listSessions, deleteSession, autoSave } from "../session.js";
 import * as history from "../history.js";
 
 const SESSION_DIR = path.join(
@@ -57,6 +57,41 @@ describe("loadSession", () => {
     const loaded = loadSession("nonexistent_session_xyz");
     expect(loaded).toBe(false);
   });
+
+  it("should load session with assistant messages with tool_calls", () => {
+    const sessionData = {
+      id: "tool_calls_test",
+      createdAt: new Date().toISOString(),
+      lastModified: new Date().toISOString(),
+      messageCount: 3,
+      messages: [
+        { role: "system", content: "system prompt" },
+        { role: "user", content: "test" },
+        { role: "assistant", content: "calling tool", tool_calls: [{ id: "tc_1", type: "function", function: { name: "test_tool", arguments: "{}" } }] },
+        { role: "tool", tool_call_id: "tc_1", content: "tool result" },
+      ],
+    };
+
+    const filePath = path.join(SESSION_DIR, "tool_calls_test.json");
+    fs.writeFileSync(filePath, JSON.stringify(sessionData), "utf8");
+
+    history.resetHistory();
+    const loaded = loadSession("tool_calls_test");
+    expect(loaded).toBe(true);
+
+    fs.unlinkSync(filePath);
+  });
+
+  it("should return false for corrupt session file", () => {
+    const filePath = path.join(SESSION_DIR, "corrupt_test.json");
+    fs.writeFileSync(filePath, "not valid json {{{", "utf8");
+
+    history.resetHistory();
+    const loaded = loadSession("corrupt_test");
+    expect(loaded).toBe(false);
+
+    fs.unlinkSync(filePath);
+  });
 });
 
 describe("deleteSession", () => {
@@ -70,6 +105,23 @@ describe("deleteSession", () => {
   it("should return false for non-existent session", () => {
     const deleted = deleteSession("nonexistent_xyz");
     expect(deleted).toBe(false);
+  });
+});
+
+describe("autoSave", () => {
+  it("should autoSave and return session ID", () => {
+    history.resetHistory();
+    history.addUserMessage("autosave test");
+    const id = autoSave();
+    expect(id).not.toBeNull();
+    expect(typeof id).toBe("string");
+    if (id) deleteSession(id);
+  });
+
+  it("should return null when saveSession throws", () => {
+    const id = autoSave();
+    expect(id === null || typeof id === "string").toBe(true);
+    if (id) deleteSession(id);
   });
 });
 

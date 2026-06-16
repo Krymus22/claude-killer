@@ -227,6 +227,21 @@ describe("logger.ts (real module)", () => {
     });
   });
 
+  describe("debug with DEBUG=true", () => {
+    it("should call console.debug when config.debug is true", async () => {
+      vi.resetModules();
+      vi.doMock("../config.js", () => ({
+        config: { debug: true },
+      }));
+      const { debug: debugOn } = await import("../logger.js");
+      const spy = vi.spyOn(console, "debug").mockImplementation(() => {});
+      debugOn("debug message here");
+      expect(spy).toHaveBeenCalled();
+      spy.mockRestore();
+      vi.doUnmock("../config.js");
+    });
+  });
+
   describe("divider", () => {
     it("should log a divider line", () => {
       divider();

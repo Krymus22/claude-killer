@@ -1,5 +1,5 @@
-import { describe, it, expect } from "vitest";
-import { computeUnifiedDiff, renderColoredDiff } from "../diffPreview.js";
+import { describe, it, expect, vi } from "vitest";
+import { computeUnifiedDiff, renderColoredDiff, previewAndApprove } from "../diffPreview.js";
 
 describe("computeUnifiedDiff", () => {
   it("returns empty string when no changes", () => {
@@ -41,8 +41,18 @@ describe("computeUnifiedDiff", () => {
     const bigAfter = Array(300).fill("new line").join("\n");
     const diff = computeUnifiedDiff(bigBefore, bigAfter, "big.txt");
     expect(diff).toContain("@@");
-    // Should not exceed reasonable size
     expect(diff.length).toBeLessThan(50000);
+  });
+
+  it("handles multiline content", () => {
+    const diff = computeUnifiedDiff("a\nb\nc", "a\nx\nc", "multi.txt");
+    expect(diff).toContain("-");
+    expect(diff).toContain("+");
+  });
+
+  it("handles trailing newlines", () => {
+    const diff = computeUnifiedDiff("line1\n", "line1\nline2\n", "trailing.txt");
+    expect(diff).toContain("+line2");
   });
 });
 
@@ -50,16 +60,107 @@ describe("renderColoredDiff", () => {
   it("adds ANSI color codes", () => {
     const input = "--- a/test.txt\n+++ b/test.txt\n@@ -1 +1 @@\n-old\n+new";
     const colored = renderColoredDiff(input);
-    // Should contain ANSI escape codes
     expect(colored).toContain("\x1b[");
-    // Lines should still be present
     expect(colored).toContain("old");
     expect(colored).toContain("new");
   });
 
   it("handles empty diff", () => {
     const colored = renderColoredDiff("");
-    // Empty string still gets wrapped in ANSI codes (context line behavior)
     expect(typeof colored).toBe("string");
+  });
+
+  it("colors context lines grey", () => {
+    const input = " context line";
+    const colored = renderColoredDiff(input);
+    expect(colored).toContain("\x1b[");
+  });
+
+  it("handles hunk headers", () => {
+    const input = "@@ -1,3 +1,3 @@";
+    const colored = renderColoredDiff(input);
+    expect(colored).toContain("\x1b[");
+  });
+});
+
+describe("previewAndApprove", () => {
+  it("auto-approves when no changes", async () => {
+    const result = await previewAndApprove("/tmp/same.txt", "content", "content");
+    expect(result).toBe(true);
+  });
+
+  it("auto-approves in non-TTY mode", async () => {
+    const origIsTTY = process.stdin.isTTY;
+    Object.defineProperty(process.stdin, "isTTY", { value: false, configurable: true });
+    const result = await previewAndApprove("/tmp/test.txt", "old", "new");
+    expect(result).toBe(true);
+    Object.defineProperty(process.stdin, "isTTY", { value: origIsTTY, configurable: true });
+  });
+
+  it("auto-approves when diffPreview is false", async () => {
+    vi.resetModules();
+    vi.doMock("../config.js", () => ({
+      config: { diffPreview: false },
+    }));
+    const { previewAndApprove: paa } = await import("../diffPreview.js");
+    const result = await paa("/tmp/test.txt", "old content", "new content");
+    expect(result).toBe(true);
+    vi.doUnmock("../config.js");
+  });
+
+  it("auto-approves in TTY mode when user types 'y'", async () => {
+    vi.resetModules();
+    vi.doMock("../config.js", () => ({
+      config: { diffPreview: true },
+    }));
+    vi.doMock("node:readline", () => ({
+      default: {
+        createInterface: vi.fn().mockReturnValue({
+          question: vi.fn().mockImplementation((_prompt: string, cb: (a: string) => void) => {
+            cb("y");
+          }),
+          close: vi.fn(),
+        }),
+      },
+    }));
+    const { previewAndApprove: paa } = await import("../diffPreview.js");
+    const origIsTTY = process.stdin.isTTY;
+    Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
+    try {
+      const result = await paa("/tmp/tty_test.txt", "old content", "new content here");
+      expect(result).toBe(true);
+    } finally {
+      Object.defineProperty(process.stdin, "isTTY", { value: origIsTTY, configurable: true });
+      vi.doUnmock("../config.js");
+      vi.doUnmock("node:readline");
+    }
+  });
+
+  it("rejects in TTY mode when user types 'n'", async () => {
+    vi.resetModules();
+    vi.doMock("../config.js", () => ({
+      config: { diffPreview: true },
+    }));
+    vi.doMock("node:readline", () => ({
+      default: {
+        createInterface: vi.fn().mockReturnValue({
+          question: vi.fn().mockImplementation((_prompt: string, cb: (a: string) => void) => {
+            cb("n");
+          }),
+          close: vi.fn(),
+        }),
+      },
+    }));
+    const { previewAndApprove: paa } = await import("../diffPreview.js");
+    const origIsTTY = process.stdin.isTTY;
+    Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
+    try {
+      const result = await paa("/tmp/tty_reject.txt", "old content", "new content here");
+      expect(result).toBe(false);
+    } finally {
+      Object.defineProperty(process.stdin, "isTTY", { value: origIsTTY, configurable: true });
+      vi.doUnmock("../config.js");
+      vi.doUnmock("node:readline");
+    }
   });
 });

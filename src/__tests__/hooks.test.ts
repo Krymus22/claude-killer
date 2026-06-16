@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
   onPreToolCall,
   onPostToolCall,
@@ -209,6 +209,51 @@ describe("Hook System", () => {
       const id = registerDebugHook();
       expect(typeof id).toBe("string");
       expect(id.length).toBeGreaterThan(0);
+    });
+
+    it("writes to stderr when DEBUG=true and hook fires", async () => {
+      process.env.DEBUG = "true";
+      const id = registerDebugHook();
+      const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+
+      await executePostToolCallHooks("test_tool", {}, "result content");
+
+      expect(stderrSpy).toHaveBeenCalledWith(
+        expect.stringContaining("[HOOK:DEBUG]")
+      );
+      expect(stderrSpy).toHaveBeenCalledWith(
+        expect.stringContaining("test_tool")
+      );
+
+      stderrSpy.mockRestore();
+      delete process.env.DEBUG;
+    });
+
+    it("does not write to stderr when DEBUG is not true", async () => {
+      delete process.env.DEBUG;
+      const id = registerDebugHook();
+      const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+
+      await executePostToolCallHooks("test_tool", {}, "result content");
+
+      expect(stderrSpy).not.toHaveBeenCalled();
+
+      stderrSpy.mockRestore();
+    });
+
+    it("truncates long result in debug output", async () => {
+      process.env.DEBUG = "true";
+      const id = registerDebugHook();
+      const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+
+      const longResult = "x".repeat(300);
+      await executePostToolCallHooks("test_tool", {}, longResult);
+
+      const writtenArg = stderrSpy.mock.calls[0]?.[0] as string;
+      expect(writtenArg).toContain("...");
+
+      stderrSpy.mockRestore();
+      delete process.env.DEBUG;
     });
   });
 });

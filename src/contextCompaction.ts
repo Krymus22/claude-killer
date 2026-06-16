@@ -126,6 +126,8 @@ export function compactIntelligently(messages: any[]): { messages: any[]; applie
   return { messages: result, appliedStrategies };
 }
 
+export { strategies };
+
 export function smartCompact(maxTokens: number = 50000): { compacted: boolean; savedTokens: number } {
   const before = history.estimateTokens();
 

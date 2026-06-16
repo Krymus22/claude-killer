@@ -24,6 +24,33 @@ vi.mock("../guardrail.js", () => ({
   validateSyntax: vi.fn().mockResolvedValue({ valid: true }),
 }));
 
+const { mockExecSync, mockWriteFileSync, realWriteFileSync } = vi.hoisted(() => {
+  const mockExecSync = vi.fn();
+  const mockWriteFileSync = vi.fn();
+  let realWriteFileSync: any;
+  return { mockExecSync, mockWriteFileSync, get realWriteFileSync() { return realWriteFileSync; } };
+});
+
+vi.mock("node:child_process", () => ({
+  get execSync() { return mockExecSync; },
+}));
+
+vi.mock("node:fs", async () => {
+  const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+  // Store reference to real writeFileSync for use in tests
+  (globalThis as any).__realWriteFileSync = actual.writeFileSync;
+  mockWriteFileSync.mockImplementation((...args: any[]) => (actual.writeFileSync as any)(...args));
+  return {
+    ...actual,
+    get writeFileSync() { return mockWriteFileSync; },
+  };
+});
+
+// Helper to access the real writeFileSync stored during mock initialization
+function getRealWriteFileSync(): typeof fs.writeFileSync {
+  return (globalThis as any).__realWriteFileSync;
+}
+
 describe("parseDiffBlocks", () => {
   it("parses a single SEARCH/REPLACE block", () => {
     const diff = `<<<<<<< SEARCH
@@ -218,6 +245,28 @@ describe("lerArquivo", () => {
     const result = await lerArquivo({ caminho: "C:\\nonexistent\\path\\file.txt" });
     expect(result).toContain("[ERRO]");
   });
+
+  it("handles read error when file exists but cannot be read", async () => {
+    // Create a file, then make it a directory to cause EISDIR on read
+    const dirPath = path.join(testDir, "readerror_dir");
+    fs.mkdirSync(dirPath);
+    const result = await lerArquivo({ caminho: dirPath });
+    // This should either list the directory or return an error
+    expect(typeof result).toBe("string");
+  });
+
+  it("catches readSync error when file exists but readFileSync throws (lines 56-58)", async () => {
+    const filePath = path.join(testDir, "catch_test.txt");
+    fs.writeFileSync(filePath, "content");
+    const readSpy = vi.spyOn(fs, "readFileSync").mockImplementationOnce(() => {
+      throw new Error("sync read error");
+    });
+    const result = await lerArquivo({ caminho: filePath });
+    expect(result).toContain("[ERRO]");
+    expect(result).toContain("Falha ao ler");
+    expect(result).toContain("sync read error");
+    readSpy.mockRestore();
+  });
 });
 
 // ─── executarComando Tests ────────────────────────────────────────────────
@@ -225,15 +274,60 @@ describe("lerArquivo", () => {
 import { executarComando } from "../tools.js";
 
 describe("executarComando", () => {
+  beforeEach(() => {
+    mockExecSync.mockReset();
+  });
+
   it("executes a simple command", async () => {
+    mockExecSync.mockReturnValue("hello\n");
     const result = await executarComando({ comando: "echo hello" });
     expect(result).toContain("hello");
+    expect(mockExecSync).toHaveBeenCalledWith("echo hello", expect.objectContaining({
+      encoding: "utf8",
+      timeout: 30000,
+    }));
   });
 
   it("handles failing command", async () => {
+    const err = new Error("Command failed") as any;
+    err.stdout = "";
+    err.stderr = "error output";
+    err.message = "Command failed with exit code 1";
+    mockExecSync.mockImplementation(() => { throw err; });
     const result = await executarComando({ comando: "exit 1" });
     expect(result).toContain("[ERRO]");
     expect(result).toContain("Comando falhou");
+    expect(result).toContain("error output");
+  });
+
+  it("handles command that times out", async () => {
+    const err = new Error("spawnSync timeout") as any;
+    err.stdout = "partial output";
+    err.stderr = "timeout error";
+    err.message = "spawnSync timeout";
+    mockExecSync.mockImplementation(() => { throw err; });
+    const result = await executarComando({ comando: "sleep 60" });
+    expect(result).toContain("[ERRO]");
+    expect(result).toContain("partial output");
+    expect(result).toContain("timeout error");
+  });
+
+  it("handles process throw with stdout and stderr", async () => {
+    const err = new Error("process failed") as any;
+    err.stdout = "some stdout output";
+    err.stderr = "some stderr output";
+    mockExecSync.mockImplementation(() => { throw err; });
+    const result = await executarComando({ comando: "bad command" });
+    expect(result).toContain("[ERRO]");
+    expect(result).toContain("some stdout output");
+    expect(result).toContain("some stderr output");
+  });
+
+  it("handles process throw with only message (no stdout/stderr)", async () => {
+    mockExecSync.mockImplementation(() => { throw new Error("pure error"); });
+    const result = await executarComando({ comando: "bad command" });
+    expect(result).toContain("[ERRO]");
+    expect(result).toContain("pure error");
   });
 });
 
@@ -292,5 +386,92 @@ brand new file
     const result = await aplicarDiff({ caminho: filePath, bloco_diff: diff });
     expect(result.written).toBe(true);
     expect(result.toolMessage).toContain("SUCESSO");
+  });
+
+  it("returns blocked message when pre-write hook blocks", async () => {
+    const { executePreFileWriteHooks } = await import("../hooks.js");
+    (executePreFileWriteHooks as any).mockResolvedValueOnce({ block: true, reason: "forbidden by policy" });
+
+    const filePath = path.join(testDir, "blocked.ts");
+    fs.writeFileSync(filePath, "const x = 1;");
+    const diff = `<<<<<<< SEARCH
+const x = 1;
+=======
+const x = 2;
+>>>>>>> REPLACE`;
+    const result = await aplicarDiff({ caminho: filePath, bloco_diff: diff });
+    expect(result.written).toBe(false);
+    expect(result.toolMessage).toContain("BLOQUEADO");
+    expect(result.toolMessage).toContain("forbidden by policy");
+  });
+
+  it("returns error when fs.writeFileSync fails", async () => {
+    const filePath = path.join(testDir, "writefail.ts");
+    // Write the original file using the real fs
+    getRealWriteFileSync()(filePath, "const x = 1;");
+    // Now make writeFileSync throw for subsequent calls
+    mockWriteFileSync.mockImplementationOnce(() => { throw new Error("disk full"); });
+
+    const diff = `<<<<<<< SEARCH
+const x = 1;
+=======
+const x = 2;
+>>>>>>> REPLACE`;
+    const result = await aplicarDiff({ caminho: filePath, bloco_diff: diff });
+    expect(result.written).toBe(false);
+    expect(result.toolMessage).toContain("ERRO");
+    expect(result.toolMessage).toContain("Falha ao escrever");
+  });
+
+  it("returns advisory warning when post-write validation fails", async () => {
+    const { validateSyntax } = await import("../guardrail.js");
+    (validateSyntax as any).mockResolvedValueOnce({ valid: false, errorMessage: "TS2322: Type mismatch" });
+
+    const filePath = path.join(testDir, "validfail.ts");
+    fs.writeFileSync(filePath, "const x = 1;");
+    const diff = `<<<<<<< SEARCH
+const x = 1;
+=======
+const x = 2;
+>>>>>>> REPLACE`;
+    const result = await aplicarDiff({ caminho: filePath, bloco_diff: diff });
+    expect(result.written).toBe(true);
+    expect(result.toolMessage).toContain("AVISO_POS_ESCRITA");
+    expect(result.toolMessage).toContain("Type mismatch");
+  });
+
+  it("returns error when reading existing file fails", async () => {
+    // Create a file, then replace it with a directory so readFileSync fails
+    const filePath = path.join(testDir, "readfail.ts");
+    fs.writeFileSync(filePath, "const x = 1;");
+    // Replace file with directory
+    fs.unlinkSync(filePath);
+    fs.mkdirSync(filePath);
+    // NowFs.existsSync returns true but readSync will fail with EISDIR
+    const diff = `<<<<<<< SEARCH
+const x = 1;
+=======
+const x = 2;
+>>>>>>> REPLACE`;
+    const result = await aplicarDiff({ caminho: filePath, bloco_diff: diff });
+    expect(result.written).toBe(false);
+    expect(result.toolMessage).toContain("ERRO");
+    expect(result.toolMessage).toContain("Falha ao ler arquivo existente");
+  });
+
+  it("returns rejected message when user declines diff preview", async () => {
+    const { previewAndApprove } = await import("../diffPreview.js");
+    (previewAndApprove as any).mockResolvedValueOnce(false);
+
+    const filePath = path.join(testDir, "rejected.ts");
+    fs.writeFileSync(filePath, "const x = 1;");
+    const diff = `<<<<<<< SEARCH
+const x = 1;
+=======
+const x = 2;
+>>>>>>> REPLACE`;
+    const result = await aplicarDiff({ caminho: filePath, bloco_diff: diff });
+    expect(result.written).toBe(false);
+    expect(result.toolMessage).toContain("REJEITADO");
   });
 });

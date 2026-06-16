@@ -110,6 +110,21 @@ export function detectFramework(dir: string): string {
 
 // ─── Test Execution ─────────────────────────────────────────────────────────
 
+function extractExecError(err: unknown): { stdout: string; stderr: string; exitCode: number } {
+  if (err != null && typeof err === "object") {
+    const e = err as Record<string, unknown>;
+    return {
+      stdout: typeof e.stdout === "string" ? e.stdout : "",
+      stderr: typeof e.stderr === "string" ? e.stderr : "",
+      exitCode: typeof e.status === "number" ? e.status : 1,
+    };
+  }
+  if (err instanceof Error) {
+    return { stdout: "", stderr: err.message, exitCode: 1 };
+  }
+  return { stdout: "", stderr: "", exitCode: 1 };
+}
+
 function runCommand(cmd: string, cwd: string, timeout: number): { stdout: string; stderr: string; exitCode: number } {
   try {
     const stdout = execSync(cmd, {
@@ -121,12 +136,7 @@ function runCommand(cmd: string, cwd: string, timeout: number): { stdout: string
     });
     return { stdout, stderr: "", exitCode: 0 };
   } catch (err: unknown) {
-    const execErr = err as { stdout?: string; stderr?: string; status?: number; message?: string };
-    return {
-      stdout: execErr.stdout ?? "",
-      stderr: execErr.stderr ?? execErr.message ?? "",
-      exitCode: execErr.status ?? 1,
-    };
+    return extractExecError(err);
   }
 }
 
@@ -195,7 +205,7 @@ function runGoTest(dir: string, fileFilter?: string): TestResult {
 function parseVitestJson(output: string, exitCode: number, duration: number): TestResult {
   try {
     // Vitest JSON output starts with { and contains test results
-    const jsonMatch = output.match(/\{[\s\S]*"testResults"[\s\S]*\}/);
+    const jsonMatch = /\{[\s\S]*"testResults"[\s\S]*\}/.exec(output);
     if (!jsonMatch) {
       return parseVitestText(output, exitCode, duration);
     }
@@ -236,16 +246,16 @@ function parseVitestJson(output: string, exitCode: number, duration: number): Te
 
 function parseVitestText(output: string, exitCode: number, duration: number): TestResult {
   const failures: TestFailure[] = [];
-  const passMatch = output.match(/(\d+) passed/);
-  const failMatch = output.match(/(\d+) failed/);
-  const skipMatch = output.match(/(\d+) skipped/);
+  const passMatch = /(\d+) passed/.exec(output);
+  const failMatch = /(\d+) failed/.exec(output);
+  const skipMatch = /(\d+) skipped/.exec(output);
 
   // Parse individual failures
   const failBlocks = output.split(/(?:FAIL|✗|❌)\s+/);
   for (let i = 1; i < failBlocks.length; i++) {
-    const block = failBlocks[i]!;
-    const fileMatch = block.match(/^([^\n]+)/);
-    const msgMatch = block.match(/(?:Error|AssertionError|expect)\s*(.*?)(?:\n|$)/);
+    const block = failBlocks[i] ?? "";
+    const fileMatch = /^([^\n]+)/.exec(block);
+    const msgMatch = /(?:Error|AssertionError|expect)\s*(.*?)(?:\n|$)/.exec(block);
     failures.push({
       file: fileMatch?.[1]?.trim() ?? "unknown",
       name: "test",
@@ -256,9 +266,9 @@ function parseVitestText(output: string, exitCode: number, duration: number): Te
 
   return {
     framework: "vitest",
-    passed: parseInt(passMatch?.[1] ?? "0", 10),
-    failed: parseInt(failMatch?.[1] ?? "0", 10),
-    skipped: parseInt(skipMatch?.[1] ?? "0", 10),
+    passed: Number.parseInt(passMatch?.[1] ?? "0", 10),
+    failed: Number.parseInt(failMatch?.[1] ?? "0", 10),
+    skipped: Number.parseInt(skipMatch?.[1] ?? "0", 10),
     duration,
     failures,
     output,
@@ -268,7 +278,7 @@ function parseVitestText(output: string, exitCode: number, duration: number): Te
 
 function parseJestJson(output: string, exitCode: number, duration: number): TestResult {
   try {
-    const jsonMatch = output.match(/\{[\s\S]*"testResults"[\s\S]*\}/);
+    const jsonMatch = /\{[\s\S]*"testResults"[\s\S]*\}/.exec(output);
     if (!jsonMatch) {
       return parseGenericOutput(output, "jest", exitCode, duration);
     }
@@ -305,15 +315,15 @@ function parseJestJson(output: string, exitCode: number, duration: number): Test
 
 function parsePytestOutput(output: string, exitCode: number, duration: number): TestResult {
   const failures: TestFailure[] = [];
-  const passedMatch = output.match(/(\d+) passed/);
-  const failedMatch = output.match(/(\d+) failed/);
-  const skipMatch = output.match(/(\d+) skipped/);
+  const passedMatch = /(\d+) passed/.exec(output);
+  const failedMatch = /(\d+) failed/.exec(output);
+  const skipMatch = /(\d+) skipped/.exec(output);
 
   // Parse FAILED tests
   const failBlocks = output.split(/FAILED\s+/);
   for (let i = 1; i < failBlocks.length; i++) {
-    const block = failBlocks[i]!;
-    const fileMatch = block.match(/^([^\n:]+):/);
+    const block = failBlocks[i] ?? "";
+    const fileMatch = /^([^\n:]+):/.exec(block);
     failures.push({
       file: fileMatch?.[1]?.trim() ?? "unknown",
       name: "test",
@@ -324,7 +334,7 @@ function parsePytestOutput(output: string, exitCode: number, duration: number): 
   // Parse ERROR blocks
   const errorBlocks = output.split(/ERROR\s+/);
   for (let i = 1; i < errorBlocks.length; i++) {
-    const block = errorBlocks[i]!;
+    const block = errorBlocks[i] ?? "";
     failures.push({
       file: "unknown",
       name: "setup/teardown",
@@ -334,9 +344,9 @@ function parsePytestOutput(output: string, exitCode: number, duration: number): 
 
   return {
     framework: "pytest",
-    passed: parseInt(passedMatch?.[1] ?? "0", 10),
-    failed: parseInt(failedMatch?.[1] ?? "0", 10),
-    skipped: parseInt(skipMatch?.[1] ?? "0", 10),
+    passed: Number.parseInt(passedMatch?.[1] ?? "0", 10),
+    failed: Number.parseInt(failedMatch?.[1] ?? "0", 10),
+    skipped: Number.parseInt(skipMatch?.[1] ?? "0", 10),
     duration,
     failures,
     output,
@@ -346,18 +356,20 @@ function parsePytestOutput(output: string, exitCode: number, duration: number): 
 
 function parseCargoOutput(output: string, exitCode: number, duration: number): TestResult {
   const failures: TestFailure[] = [];
-  const passMatch = output.match(/(\d+) passed/);
-  const failMatch = output.match(/(\d+) failed/);
+  const passRegex = /(\d+) passed/;
+  const failRegex = /(\d+) failed/;
+  const passMatch = passRegex.exec(output);
+  const failMatch = failRegex.exec(output);
 
   // Parse "---- test_name stdout ----" blocks
   const testBlocks = output.split(/---- (\w+) stdout ----/);
   for (let i = 1; i < testBlocks.length; i += 2) {
-    const testName = testBlocks[i]!;
+    const testName = testBlocks[i];
     const block = testBlocks[i + 1] ?? "";
     if (block.includes("FAILED") || block.includes("panicked")) {
       failures.push({
         file: "unknown",
-        name: testName,
+        name: testName ?? "unknown",
         message: block.slice(0, 300).trim(),
       });
     }
@@ -365,8 +377,8 @@ function parseCargoOutput(output: string, exitCode: number, duration: number): T
 
   return {
     framework: "cargo",
-    passed: parseInt(passMatch?.[1] ?? "0", 10),
-    failed: parseInt(failMatch?.[1] ?? failures.length.toString(), 10) || failures.length,
+    passed: Number.parseInt(passMatch?.[1] ?? "0", 10),
+    failed: Number.parseInt(failMatch?.[1] ?? failures.length.toString(), 10) || failures.length,
     skipped: 0,
     duration,
     failures,
@@ -377,17 +389,17 @@ function parseCargoOutput(output: string, exitCode: number, duration: number): T
 
 function parseGoTestOutput(output: string, exitCode: number, duration: number): TestResult {
   const failures: TestFailure[] = [];
-  const passMatch = output.match(/ok\s+.*?(\d+)\.\d+s/);
-  const failMatch = output.match(/FAIL/);
+  const passRegex = /ok\s+.*?(\d+)\.\d+s/;
+  const passMatch = passRegex.exec(output);
 
   // Parse "--- FAIL: TestName (X.XXs)" blocks
   const failBlocks = output.split(/--- FAIL: (\w+)/);
   for (let i = 1; i < failBlocks.length; i += 2) {
-    const testName = failBlocks[i]!;
+    const testName = failBlocks[i];
     const block = failBlocks[i + 1] ?? "";
     failures.push({
       file: "unknown",
-      name: testName,
+      name: testName ?? "unknown",
       message: block.slice(0, 300).trim(),
     });
   }
@@ -406,13 +418,15 @@ function parseGoTestOutput(output: string, exitCode: number, duration: number): 
 
 function parseGenericOutput(output: string, framework: string, exitCode: number, duration: number): TestResult {
   const failures: TestFailure[] = [];
-  const passMatch = output.match(/(\d+) (?:passing|passed|ok)/);
-  const failMatch = output.match(/(\d+) (?:failing|failed|FAILED)/);
+  const passRegex = /(\d+) (?:passing|passed|ok)/;
+  const failRegex = /(\d+) (?:failing|failed|FAILED)/;
+  const passMatch = passRegex.exec(output);
+  const failMatch = failRegex.exec(output);
 
   return {
     framework,
-    passed: parseInt(passMatch?.[1] ?? "0", 10),
-    failed: parseInt(failMatch?.[1] ?? "0", 10),
+    passed: Number.parseInt(passMatch?.[1] ?? "0", 10),
+    failed: Number.parseInt(failMatch?.[1] ?? "0", 10),
     skipped: 0,
     duration,
     failures,
@@ -423,8 +437,10 @@ function parseGenericOutput(output: string, framework: string, exitCode: number,
 
 function extractLineNumber(text?: string): number | undefined {
   if (!text) return undefined;
-  const match = text.match(/(?:at|→|line)\s+(\d+)/i) ?? text.match(/:(\d+):\d+/);
-  return match ? parseInt(match[1]!, 10) : undefined;
+  const lineRegex = /(?:at|→|line)\s+(\d+)/i;
+  const colonRegex = /:(\d+):\d+/;
+  const match = lineRegex.exec(text) ?? colonRegex.exec(text);
+  return match ? Number.parseInt(match[1], 10) : undefined;
 }
 
 // ─── Main Entry Point ──────────────────────────────────────────────────────
@@ -466,7 +482,7 @@ export function suggestFixes(result: TestResult, sourceFiles?: Map<string, strin
 
   for (const failure of result.failures) {
     // Pattern: assertion error with expected/received
-    const assertMatch = failure.message.match(/expected\s+(.+?)\s+to\s+(?:equal|be)\s+(.+)/i);
+    const assertMatch = /expected\s+(.+?)\s+to\s+(?:equal|be)\s+(.+)/i.exec(failure.message);
     if (assertMatch) {
       suggestions.push({
         file: failure.file,
@@ -480,7 +496,7 @@ export function suggestFixes(result: TestResult, sourceFiles?: Map<string, strin
 
     // Pattern: undefined is not a function
     if (failure.message.includes("is not a function")) {
-      const funcMatch = failure.message.match(/(\w+)\s+is not a function/);
+      const funcMatch = /(\w+)\s+is not a function/.exec(failure.message);
       suggestions.push({
         file: failure.file,
         line: failure.line,
@@ -491,7 +507,7 @@ export function suggestFixes(result: TestResult, sourceFiles?: Map<string, strin
 
     // Pattern: Cannot find module
     if (failure.message.includes("Cannot find module") || failure.message.includes("Module not found")) {
-      const modMatch = failure.message.match(/(?:Cannot find module|Module not found)['"]+([^'"]+)/);
+      const modMatch = /(?:Cannot find module|Module not found)['"]+([^'"]+)/.exec(failure.message);
       suggestions.push({
         file: failure.file,
         description: `Missing module: ${modMatch?.[1] ?? "unknown"}. Run npm install or check import path.`,
@@ -580,18 +596,20 @@ export async function runTestsWithAutoFix(options: AutoFixOptions): Promise<{
 // ─── Formatting ────────────────────────────────────────────────────────────
 
 export function formatTestResult(result: TestResult): string {
+  const duration = (result.duration / 1000).toFixed(1);
+  const status = result.success ? "✓ PASS" : "✗ FAIL";
   const lines: string[] = [
     `Framework: ${result.framework}`,
-    `Duration: ${(result.duration / 1000).toFixed(1)}s`,
+    `Duration: ${duration}s`,
     `Passed: ${result.passed} | Failed: ${result.failed} | Skipped: ${result.skipped}`,
-    `Status: ${result.success ? "✓ PASS" : "✗ FAIL"}`,
+    `Status: ${status}`,
   ];
 
   if (result.failures.length > 0) {
     lines.push("", "Failures:");
     for (const f of result.failures) {
-      lines.push(`  ${f.file}${f.line ? `:${f.line}` : ""} — ${f.name}`);
-      lines.push(`    ${f.message.slice(0, 150)}`);
+      const lineNum = f.line ? `:${f.line}` : "";
+      lines.push(`  ${f.file}${lineNum} — ${f.name}`, `    ${f.message.slice(0, 150)}`);
     }
   }
 
@@ -603,7 +621,8 @@ export function formatFixSuggestions(suggestions: FixSuggestion[]): string {
 
   const lines = ["Fix Suggestions:"];
   for (const s of suggestions) {
-    lines.push(`  ${s.file}${s.line ? `:${s.line}` : ""} — ${s.description}`);
+    const location = s.line ? `:${s.line}` : "";
+    lines.push(`  ${s.file}${location} — ${s.description}`);
   }
   return lines.join("\n");
 }

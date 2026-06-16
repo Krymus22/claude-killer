@@ -48,7 +48,16 @@ import {
   type FileChange,
   type SessionTrace,
 } from "./memory.js";
-import { runTests, formatTestResult, suggestFixes, formatFixSuggestions, detectFramework } from "./testRunner.js";
+import { runTests, formatTestResult, suggestFixes, formatFixSuggestions } from "./testRunner.js";
+import {
+  getRegistry,
+  getDetector,
+  getExecutor,
+  getSuggester,
+  initializeTools,
+  type Tool,
+} from "./externalTools.js";
+import { executeTrigger, type TriggerContext } from "./extensionCenter.js";
 
 type ToolCall = OpenAI.Chat.Completions.ChatCompletionMessageToolCall;
 type ToolResult = { resultStr: string; usedHeal: boolean };
@@ -76,15 +85,105 @@ function parseArgs(raw: string): Record<string, unknown> {
 function asString(val: unknown, fallback = ""): string {
   if (typeof val === "string") return val;
   if (val == null) return fallback;
+  if (typeof val === "number" || typeof val === "boolean" || typeof val === "symbol") return String(val);
   if (typeof val === "object") return JSON.stringify(val);
-  return String(val as string | number | boolean);
+  return fallback;
 }
 
 function getMergedTools(): OpenAI.Chat.Completions.ChatCompletionTool[] {
   const mcpTools = getMCPToolDefinitions();
-  return mcpTools.length > 0
-    ? [...TOOL_DEFINITIONS, ...mcpTools]
-    : TOOL_DEFINITIONS;
+  const externalTools = getExternalToolDefinitions();
+  
+  const allTools = [...TOOL_DEFINITIONS, ...externalTools];
+  
+  if (mcpTools.length > 0) {
+    allTools.push(...mcpTools);
+  }
+  
+  return allTools;
+}
+
+function getExternalToolDefinitions(): OpenAI.Chat.Completions.ChatCompletionTool[] {
+  return [
+    {
+      type: "function",
+      function: {
+        name: "executar_tool",
+        description: "Execute an external tool (Rojo, Wally, pytest, cargo, npm, etc). Use this to run external CLI tools for building, testing, linting, or any other development task.",
+        parameters: {
+          type: "object",
+          properties: {
+            tool: { type: "string", description: "Tool name (e.g., 'rojo_build', 'pytest_run', 'cargo_test')" },
+            args: { type: "object", description: "Tool arguments" },
+            dir: { type: "string", description: "Working directory" }
+          },
+          required: ["tool"]
+        }
+      }
+    },
+    {
+      type: "function",
+      function: {
+        name: "listar_tools",
+        description: "List all available external tools, optionally filtered by category",
+        parameters: {
+          type: "object",
+          properties: {
+            category: { type: "string", description: "Filter by category: roblox, python, node, rust, go, docker" }
+          }
+        }
+      }
+    },
+    {
+      type: "function",
+      function: {
+        name: "adicionar_tool",
+        description: "Add a new external tool to the system. Use this to extend Claude-Killer with new CLI tools.",
+        parameters: {
+          type: "object",
+          properties: {
+            name: { type: "string", description: "Tool name" },
+            description: { type: "string", description: "Tool description" },
+            command: { type: "string", description: "CLI command to execute" },
+            args: { type: "array", items: { type: "string" }, description: "Default arguments" },
+            flags: { type: "array", items: { type: "object" }, description: "Tool flags" },
+            check_command: { type: "string", description: "Command to check if tool is installed" },
+            when_to_use: { type: "array", items: { type: "string" }, description: "Intent patterns" },
+            examples: { type: "array", items: { type: "string" }, description: "Example commands" }
+          },
+          required: ["name", "description", "command"]
+        }
+      }
+    },
+    {
+      type: "function",
+      function: {
+        name: "sugerir_tool",
+        description: "Suggest which tool to use based on a message or intent",
+        parameters: {
+          type: "object",
+          properties: {
+            message: { type: "string", description: "Message or intent to analyze" }
+          },
+          required: ["message"]
+        }
+      }
+    },
+    {
+      type: "function",
+      function: {
+        name: "detectar_tools",
+        description: "Detect which tools are available based on intent and project context",
+        parameters: {
+          type: "object",
+          properties: {
+            message: { type: "string", description: "User message to analyze" },
+            dir: { type: "string", description: "Project directory" }
+          }
+        }
+      }
+    }
+  ];
 }
 
 function alreadyInHistory(toolCallId: string): boolean {
@@ -223,7 +322,7 @@ const toolHandlers: Record<string, ToolHandler> = {
       status.untracked.length > 0 ? `Untracked: ${status.untracked.join(", ")}` : "",
       status.conflicted.length > 0 ? `Conflicted: ${status.conflicted.join(", ")}` : "",
     ].filter(Boolean).join("\n");
-    return { resultStr: output || "Clean working tree.", usedHeal: false };
+    return { resultStr: output ?? "Clean working tree.", usedHeal: false };
   },
 
   "git_diff": async (args) => {
@@ -232,7 +331,7 @@ const toolHandlers: Record<string, ToolHandler> = {
       args.file as string | undefined,
       args.staged as boolean | undefined
     );
-    return { resultStr: result || "No changes.", usedHeal: false };
+    return { resultStr: result ?? "No changes.", usedHeal: false };
   },
 
   "git_log": async (args) => {
@@ -301,7 +400,7 @@ const toolHandlers: Record<string, ToolHandler> = {
   "carregar_sessao": async (args) => {
     const ok = loadSession(asString(args.id));
     return {
-      resultStr: ok ? `[SUCESSO] Sessão carregada: ${args.id}` : `[ERRO] Sessão não encontrada: ${args.id}`,
+      resultStr: ok ? `[SUCESSO] Sessão carregada: ${String(args.id)}` : `[ERRO] Sessão não encontrada: ${String(args.id)}`,
       usedHeal: false,
     };
   },
@@ -356,6 +455,117 @@ const toolHandlers: Record<string, ToolHandler> = {
     const result = await runTests(dir);
     const suggestions = suggestFixes(result);
     return { resultStr: formatFixSuggestions(suggestions), usedHeal: false };
+  },
+
+  // ─── External Tools ────────────────────────────────────────────────────
+
+  "executar_tool": async (args) => {
+    const toolName = asString(args.tool);
+    const toolArgs = (args.args as Record<string, any>) ?? {};
+    const cwd = args.dir ? asString(args.dir) : undefined;
+    
+    const executor = getExecutor();
+    const result = await executor.execute(toolName, toolArgs, { cwd });
+    
+    const output = [
+      result.success ? "✅ Sucesso" : "❌ Falha",
+      result.output,
+      result.errors?.length ? `Erros:\n${result.errors.join("\n")}` : "",
+      result.suggestions?.length ? `Sugestões:\n${result.suggestions.join("\n")}` : "",
+      result.duration ? `Duração: ${result.duration}ms` : ""
+    ].filter(Boolean).join("\n");
+    
+    return { resultStr: output, usedHeal: false };
+  },
+
+  "listar_tools": async (args) => {
+    const registry = getRegistry();
+    const category = args.category ? asString(args.category) : undefined;
+    
+    const tools = category ? registry.getByCategory(category as any) : registry.getAll();
+    const installed = tools.filter(t => registry.isInstalled(t.name));
+    const notInstalled = tools.filter(t => !registry.isInstalled(t.name));
+    
+    const output = [
+      `📊 Total: ${tools.length} tools`,
+      `✅ Instaladas: ${installed.length}`,
+      `❌ Não instaladas: ${notInstalled.length}`,
+      "",
+      "Tools instaladas:",
+      ...installed.map(t => `  • ${t.name} (${t.category}) - ${t.description}`),
+      "",
+      "Tools não instaladas:",
+      ...notInstalled.map(t => `  • ${t.name} (${t.category}) - ${t.description}`)
+    ].filter(Boolean).join("\n");
+    
+    return { resultStr: output, usedHeal: false };
+  },
+
+  "adicionar_tool": async (args) => {
+    const registry = getRegistry();
+    
+    const newTool: Tool = {
+      name: asString(args.name),
+      description: asString(args.description),
+      category: "custom",
+      command: asString(args.command),
+      args: (args.args as string[]) ?? [],
+      flags: (args.flags as any[]) ?? [],
+      detection: {
+        method: "binary",
+        check: asString(args.check_command, `${asString(args.command)} --version`)
+      },
+      context: {
+        whenToUse: (args.when_to_use as string[]) ?? [],
+        examples: (args.examples as string[]) ?? []
+      },
+      outputParser: "raw"
+    };
+    
+    const result = registry.addTool(newTool);
+    return { resultStr: result.message, usedHeal: false };
+  },
+
+  "sugerir_tool": async (args) => {
+    const suggester = getSuggester();
+    const message = asString(args.message);
+    
+    const suggestions = suggester.suggest(message);
+    
+    if (suggestions.length === 0) {
+      return { resultStr: "Nenhuma tool sugerida para esta mensagem.", usedHeal: false };
+    }
+    
+    const output = [
+      "🔍 Tools sugeridas:",
+      ...suggestions.slice(0, 5).map((s, i) => 
+        `${i + 1}. ${s.tool.name} (${s.tool.category}) - Confiança: ${(s.confidence * 100).toFixed(0)}%\n   Motivo: ${s.reason}`
+      )
+    ].join("\n");
+    
+    return { resultStr: output, usedHeal: false };
+  },
+
+  "detectar_tools": async (args) => {
+    const detector = getDetector();
+    const message = args.message ? asString(args.message) : "";
+    const dir = args.dir ? asString(args.dir) : undefined;
+    
+    const detection = detector.detect(message, dir);
+    
+    const output = [
+      "🔍 Detecção de Tools:",
+      "",
+      "Por intenção:",
+      detection.intent ? `  • ${detection.intent.tool}` : "  • Nenhuma",
+      "",
+      "Por contexto do projeto:",
+      detection.context.length > 0 
+        ? detection.context.map(t => `  • ${t.name} (${t.category})`).join("\n")
+        : "  • Nenhuma"
+    ].join("\n");
+    
+    return { resultStr: output, usedHeal: false };
   },
 };
 
@@ -412,6 +622,10 @@ async function dispatchToolCall(
 const READ_ONLY_TOOLS = new Set([
   "ler_arquivo", "ler_arquivo_avancado", "buscar_arquivos", "buscar_texto",
   "git_status", "git_log", "git_diff",
+]);
+
+const FILE_TOOLS = new Set([
+  "aplicar_diff", "editar_arquivo", "multi_edit",
 ]);
 
 async function executeReadOnlyCallsInParallel(toolCalls: ToolCall[]): Promise<void> {
@@ -477,11 +691,29 @@ async function processToolCalls(toolCalls: ToolCall[]): Promise<void> {
 
   if (writeCalls.length > 0) {
     await executeToolCallsSequentially(writeCalls);
+    fireOnFileTrigger(writeCalls);
   } else if (readOnlyCalls.length <= 1) {
     await executeToolCallsSequentially(readOnlyCalls);
   }
 
-  // Auto-heal: if a test/lint tool failed, inject a system message so the model can retry
+  checkAutoHeal(toolCalls);
+}
+
+function fireOnFileTrigger(writeCalls: ToolCall[]): void {
+  const fileTools = writeCalls.filter((tc) => FILE_TOOLS.has(tc.function.name));
+  if (fileTools.length === 0) return;
+  const triggerCtx: TriggerContext = { cwd: process.cwd() };
+  for (const tc of fileTools) {
+    const args = parseArgs(tc.function.arguments);
+    triggerCtx.filePath = asString(args.path ?? args.caminho);
+    triggerCtx.toolName = tc.function.name;
+  }
+  executeTrigger("on_file", triggerCtx).catch((err) => {
+    log.warn(`On-file trigger failed: ${(err as Error).message}`);
+  });
+}
+
+function checkAutoHeal(toolCalls: ToolCall[]): void {
   const testCalls = toolCalls.filter((tc) => TEST_TOOLS.has(tc.function.name));
   for (const tc of testCalls) {
     const historyArr = history.getHistory();
@@ -557,11 +789,22 @@ async function sendAndProcess(
   const { message, finish_reason } = choice;
   history.addRawAssistantMessage(message);
 
+  // ── Trigger: always (every iteration) ────────────────────────────────
+  const triggerCtx: TriggerContext = { cwd: process.cwd() };
+  executeTrigger("always", triggerCtx).catch((err) => {
+    log.warn(`Always trigger failed: ${(err as Error).message}`);
+  });
+
   if (finish_reason === "tool_calls" && message.tool_calls?.length) {
     log.debug(`Model requested ${message.tool_calls.length} tool call(s)`);
     await processToolCalls(message.tool_calls);
     return sendAndProcess(depth + 1, onStreamStart, onToken, onThinking, onUsage);
   }
+
+  // ── Trigger: on_task (task complete) ─────────────────────────────────
+  executeTrigger("on_task", triggerCtx).catch((err) => {
+    log.warn(`On-task trigger failed: ${(err as Error).message}`);
+  });
 
   return message.content ?? "(resposta vazia)";
 }
@@ -580,6 +823,16 @@ export async function runAgentLoop(
   sessionFileChanges = [];
   sessionToolsUsed = [];
   lastCheckpointTokens = 0;
+
+  // Initialize external tools system
+  await initializeTools();
+  
+  // Detect tools from project context
+  const detector = getDetector();
+  const contextTools = detector.detectFromContext();
+  if (contextTools.length > 0) {
+    log.debug(`Detected ${contextTools.length} tools from project context`);
+  }
 
   // Inject memory into context
   const memory = injectMemory(memoryConfig);

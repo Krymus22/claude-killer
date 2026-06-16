@@ -20,11 +20,13 @@ import * as todo from "../todo.js";
 
 import { config } from "../config.js";
 import { shutdownMCPServers, getActiveSkills, getActiveMCPServers } from "../extensions.js";
+import { discoverExtensions } from "../extensionCenter.js";
 import { colors } from "./theme.js";
 import { ChatDisplay, ChatMessage } from "./ChatDisplay.js";
 import { StatusBar } from "./StatusBar.js";
 import { TodoPanel, TodoItem } from "./TodoPanel.js";
 import { ThinkingIndicator } from "./ThinkingIndicator.js";
+import { ExtensionHub } from "./ExtensionHub.js";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -34,10 +36,13 @@ type AppStatus = "idle" | "thinking" | "streaming";
 
 const SLASH_COMMANDS: Array<{ cmd: string; desc: string }> = [
   { cmd: "/help", desc: "Show help" },
+  { cmd: "/hub", desc: "Extension Hub (control center)" },
   { cmd: "/reset", desc: "Clear history" },
   { cmd: "/history", desc: "History summary" },
   { cmd: "/skills", desc: "List skills" },
   { cmd: "/plugins", desc: "List MCP servers" },
+  { cmd: "/tools", desc: "List external tools" },
+  { cmd: "/toolinfo", desc: "Show tool details" },
   { cmd: "/caveman", desc: "Toggle caveman mode" },
   { cmd: "/memory", desc: "Show project memory" },
   { cmd: "/todos", desc: "Show todo list" },
@@ -48,7 +53,10 @@ const SLASH_COMMANDS: Array<{ cmd: string; desc: string }> = [
   { cmd: "/exit", desc: "Exit" },
 ];
 
-type CommandResult = { handled: boolean; message?: string; exit?: boolean };
+type CommandResult = { handled: boolean; message?: string; exit?: boolean; openHub?: boolean };
+
+// Module-level flag for hub command (set by handler, consumed by App)
+let pendingHubOpen = false;
 
 function handleExitCommand(): CommandResult {
   shutdownMCPServers();
@@ -161,16 +169,109 @@ function handleDistillCommand(): CommandResult {
   return { handled: true, message: "Executando /distill — extraindo workflow skills..." };
 }
 
+function handleHubCommand(): CommandResult {
+  pendingHubOpen = true;
+  return { handled: true };
+}
+
+function handleToolsCommand(arg: string | null): CommandResult {
+  const { getRegistry } = require("../externalTools.js");
+  const registry = getRegistry();
+  
+  const category = arg;
+  const tools = category ? registry.getByCategory(category) : registry.getAll();
+  
+  if (tools.length === 0) {
+    return { handled: true, message: category ? `Nenhuma tool na categoria "${category}".` : "Nenhuma tool disponível." };
+  }
+  
+  const installed = tools.filter((t: any) => registry.isInstalled(t.name));
+  const notInstalled = tools.filter((t: any) => !registry.isInstalled(t.name));
+  
+  const lines: string[] = [
+    `📊 Tools: ${tools.length} total (${installed.length} ✅ / ${notInstalled.length} ❌)`,
+    ""
+  ];
+  
+  if (installed.length > 0) {
+    lines.push("✅ Instaladas:");
+    installed.forEach((t: any) => {
+      lines.push(`  • ${t.name} (${t.category}) — ${t.description.slice(0, 50)}`);
+    });
+    lines.push("");
+  }
+  
+  if (notInstalled.length > 0) {
+    lines.push("❌ Não instaladas:");
+    notInstalled.forEach((t: any) => {
+      lines.push(`  • ${t.name} (${t.category}) — ${t.description.slice(0, 50)}`);
+    });
+  }
+  
+  return { handled: true, message: lines.join("\n") };
+}
+
+function handleToolInfoCommand(arg: string | null): CommandResult {
+  if (!arg) {
+    return { handled: true, message: "Uso: /toolinfo <nome_da_tool>" };
+  }
+  
+  const { getRegistry } = require("../externalTools.js");
+  const registry = getRegistry();
+  const tool = registry.get(arg);
+  
+  if (!tool) {
+    return { handled: true, message: `Tool "${arg}" não encontrada.` };
+  }
+  
+  const installed = registry.isInstalled(tool.name);
+  
+  const lines: string[] = [
+    `🔧 ${tool.name}`,
+    `   Descrição: ${tool.description}`,
+    `   Categoria: ${tool.category}`,
+    `   Comando: ${tool.command} ${tool.args.join(" ")}`,
+    `   Status: ${installed ? "✅ Instalada" : "❌ Não instalada"}`,
+    "",
+    "   Quando usar:"
+  ];
+  
+  tool.context.whenToUse.forEach((pattern: string) => {
+    lines.push(`     • ${pattern}`);
+  });
+  
+  if (tool.context.examples.length > 0) {
+    lines.push("", "   Exemplos:");
+    tool.context.examples.forEach((example: string) => {
+      lines.push(`     $ ${example}`);
+    });
+  }
+  
+  if (tool.flags.length > 0) {
+    lines.push("", "   Flags:");
+    tool.flags.forEach((flag: any) => {
+      const required = flag.required ? " (obrigatório)" : "";
+      const defaultVal = flag.default ? ` (padrão: ${flag.default})` : "";
+      lines.push(`     --${flag.name.slice(2)} <${flag.type}>${required}${defaultVal}`);
+    });
+  }
+  
+  return { handled: true, message: lines.join("\n") };
+}
+
 const COMMAND_HANDLERS: Record<string, (arg: string | null) => CommandResult> = {
   "/exit": () => handleExitCommand(),
   "/quit": () => handleExitCommand(),
   "/q": () => handleExitCommand(),
   "/help": () => handleHelpCommand(),
   "/?": () => handleHelpCommand(),
+  "/hub": () => handleHubCommand(),
   "/reset": () => handleResetCommand(),
   "/history": () => handleHistoryCommand(),
   "/skills": () => handleSkillsCommand(),
   "/plugins": () => handlePluginsCommand(),
+  "/tools": (arg) => handleToolsCommand(arg),
+  "/toolinfo": (arg) => handleToolInfoCommand(arg),
   "/caveman": (arg) => handleCavemanCommand(arg),
   "/memory": () => handleMemoryCommand(),
   "/todos": () => handleTodosCommand(),
@@ -272,6 +373,7 @@ export function App() {
   } | null>(null);
   const [systemMessages, setSystemMessages] = useState<string[]>([]);
   const [acIndex, setAcIndex] = useState(0);
+  const [showHub, setShowHub] = useState(false);
 
   const isProcessing = useRef(false);
 
@@ -282,6 +384,11 @@ export function App() {
     const lower = input.toLowerCase();
     return SLASH_COMMANDS.filter((s) => s.cmd.startsWith(lower));
   }, [input, showAutocomplete]);
+
+  // ── Discover extensions on mount ────────────────────────────────────
+  useMemo(() => {
+    discoverExtensions();
+  }, []);
 
   // ── Update todos from shared state ─────────────────────────────────────
   const syncTodos = useCallback(() => {
@@ -416,8 +523,24 @@ export function App() {
     setAcIndex(0);
   }, []);
 
-  // ── Keyboard navigation for autocomplete ───────────────────────────────
+  // ── Keyboard navigation for autocomplete + global shortcuts ───────────
   useInput((inputChar, key) => {
+    // Ctrl+E opens Extension Hub
+    if (key.ctrl && inputChar === "e") {
+      setShowHub((prev) => !prev);
+      return;
+    }
+
+    // Check pending hub open from slash command
+    if (pendingHubOpen) {
+      pendingHubOpen = false;
+      setShowHub(true);
+      return;
+    }
+
+    // If hub is open, don't process other keys here
+    if (showHub) return;
+
     if (!showAutocomplete || acMatches.length === 0) return;
 
     if (key.upArrow) {
@@ -438,9 +561,16 @@ export function App() {
         <Text color={colors.primary} bold>{"═".repeat(50)}</Text>
         <Text color={colors.primary} bold> Claude-Killer · Ink TUI</Text>
         <Text color={colors.muted}> Model: {config.model}</Text>
-        <Text color={colors.muted}> Type /help for commands · ↑↓ to navigate</Text>
+        <Text color={colors.muted}> Type /help for commands · Ctrl+E for Hub · ↑↓ to navigate</Text>
         <Text color={colors.primary} bold>{"═".repeat(50)}</Text>
       </Box>
+
+      {/* Extension Hub overlay */}
+      {showHub && (
+        <Box marginBottom={1}>
+          <ExtensionHub onClose={() => setShowHub(false)} />
+        </Box>
+      )}
 
       {/* System messages */}
       {systemMessages.map((msg, i) => (

@@ -41,8 +41,10 @@ export interface ParseResult {
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let TreeSitterParser: any = null;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 let TreeSitterLanguage: any = null;
 let parserInitialized = false;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 const languageModules = new Map<string, any>();
 
 const WASM_DIR = path.join(
@@ -81,17 +83,15 @@ async function initParser(): Promise<void> {
 
   try {
     const webTreeSitter = await import("web-tree-sitter");
-    // web-tree-sitter@0.20.x: default export IS the Parser class
     TreeSitterParser = webTreeSitter.default ?? webTreeSitter;
     if (typeof TreeSitterParser.init === "function") {
       await TreeSitterParser.init();
     }
-    // Language is a static property on Parser class
     TreeSitterLanguage = TreeSitterParser.Language ?? null;
     parserInitialized = true;
     log.debug("Tree-sitter WASM parser initialized");
   } catch (err) {
-    log.warn(`Failed to initialize tree-sitter: ${(err as Error).message}`);
+    log.warn(`Failed to initialize tree-sitter: ${err instanceof Error ? err.message : String(err)}`);
   }
 }
 
@@ -116,7 +116,7 @@ async function getLanguage(grammarName: string): Promise<any> {
     languageModules.set(grammarName, lang);
     return lang;
   } catch (err) {
-    log.warn(`Failed to load grammar ${grammarName}: ${(err as Error).message}`);
+    log.warn(`Failed to load grammar ${grammarName}: ${err instanceof Error ? err.message : String(err)}`);
     return null;
   }
 }
@@ -127,6 +127,145 @@ function detectLanguage(filePath: string): string {
 }
 
 // ─── Symbol Extraction ──────────────────────────────────────────────────────
+
+const FUNCTION_NODE_TYPES = new Set([
+  "function_declaration", "function", "function_definition", "function_item",
+]);
+const CLASS_NODE_TYPES = new Set([
+  "class_declaration", "class", "class_definition", "struct_item",
+]);
+const TYPE_NODE_TYPES = new Set([
+  "interface_declaration", "type_alias_declaration", "type_declaration",
+  "enum_item", "trait_item",
+]);
+const METHOD_NODE_TYPES = new Set(["method_definition", "method_declaration"]);
+const VARIABLE_NODE_TYPES = new Set(["variable_declaration", "lexical_declaration"]);
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function extractSymbolFromNode(
+  node: any,
+  nodeType: string,
+  startLine: number,
+  endLine: number,
+  startCol: number,
+  lines: string[]
+): Symbol | null {
+  const line = lines[startLine - 1] ?? "";
+  const exported = line.includes("export ");
+
+  if (FUNCTION_NODE_TYPES.has(nodeType)) {
+    return buildFunctionSymbol(node, nodeType, startLine, endLine, startCol, lines, exported);
+  }
+  if (CLASS_NODE_TYPES.has(nodeType)) {
+    return buildClassSymbol(node, nodeType, startLine, endLine, startCol, exported);
+  }
+  if (TYPE_NODE_TYPES.has(nodeType)) {
+    return buildTypeSymbol(node, nodeType, startLine, endLine, startCol, exported);
+  }
+  if (METHOD_NODE_TYPES.has(nodeType)) {
+    return buildMethodSymbol(node, startLine, endLine, startCol, lines, exported);
+  }
+  if (VARIABLE_NODE_TYPES.has(nodeType)) {
+    const name = extractVariableName(node);
+    return name ? { name, type: "variable", line: startLine, endLine, col: startCol, exported } : null;
+  }
+  if (nodeType === "export_statement") {
+    const child = node.child(1);
+    return child
+      ? extractSymbolFromNode(child, child.type, startLine, endLine, startCol, lines)
+      : null;
+  }
+  if (nodeType === "decorated_definition") {
+    return extractDecoratedSymbol(node, startLine, endLine, startCol, lines);
+  }
+  return null;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function buildFunctionSymbol(
+  node: any,
+  nodeType: string,
+  startLine: number,
+  endLine: number,
+  startCol: number,
+  lines: string[],
+  exported: boolean
+): Symbol {
+  const name = getChildText(node, "identifier") ?? "anonymous";
+  const sig = extractSignature(lines, startLine - 1);
+  const line = lines[startLine - 1] ?? "";
+
+  let isExported = exported;
+  if (nodeType === "function_definition") {
+    isExported = line.includes("def ") && !line.startsWith("_");
+  } else if (nodeType === "function_item") {
+    isExported = line.includes("pub ");
+  }
+
+  return { name, type: "function", line: startLine, endLine, col: startCol, signature: sig, exported: isExported };
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function buildClassSymbol(
+  node: any,
+  nodeType: string,
+  startLine: number,
+  endLine: number,
+  startCol: number,
+  exported: boolean
+): Symbol {
+  const name = getChildText(node, "type_identifier") ?? getChildText(node, "identifier") ?? "anonymous";
+  const isExported = nodeType === "class_definition" ? !name.startsWith("_") : exported;
+  return { name, type: "class", line: startLine, endLine, col: startCol, exported: isExported };
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function buildTypeSymbol(
+  node: any,
+  nodeType: string,
+  startLine: number,
+  endLine: number,
+  startCol: number,
+  exported: boolean
+): Symbol {
+  const name = getChildText(node, "type_identifier") ?? "anonymous";
+  const typeMap: Record<string, Symbol["type"]> = {
+    interface_declaration: "interface",
+    type_alias_declaration: "type",
+    type_declaration: "type",
+    enum_item: "type",
+    trait_item: "interface",
+  };
+  return { name, type: typeMap[nodeType] ?? "type", line: startLine, endLine, col: startCol, exported };
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function buildMethodSymbol(
+  node: any,
+  startLine: number,
+  endLine: number,
+  startCol: number,
+  lines: string[],
+  exported: boolean
+): Symbol {
+  const name = getChildText(node, "property_identifier") ?? getChildText(node, "identifier") ?? "anonymous";
+  const sig = extractSignature(lines, startLine - 1);
+  return { name, type: "method", line: startLine, endLine, col: startCol, signature: sig, exported };
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function extractDecoratedSymbol(
+  node: any,
+  startLine: number,
+  endLine: number,
+  startCol: number,
+  lines: string[]
+): Symbol | null {
+  const def = findChildByType(node, "function_definition") ?? findChildByType(node, "class_definition");
+  return def
+    ? extractSymbolFromNode(def, def.type, def.startPosition.row + 1, def.endPosition.row + 1, def.startPosition.column, lines)
+    : null;
+}
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function extractSymbols(tree: any, sourceCode: string, langName: string): Symbol[] {
@@ -142,14 +281,10 @@ function extractSymbols(tree: any, sourceCode: string, langName: string): Symbol
     const endLine = node.endPosition.row + 1;
     const startCol = node.startPosition.column;
 
-    // Extract symbol based on node type
     const symbol = extractSymbolFromNode(node, nodeType, startLine, endLine, startCol, lines);
     if (symbol) {
       symbols.push(symbol);
-      // Don't recurse into children of matched top-level symbols
-      // but DO continue walking siblings (don't return early)
     } else {
-      // Recurse into children only for unmatched nodes
       for (let i = 0; i < node.childCount; i++) {
         const child = node.child(i);
         if (child) walk(child);
@@ -157,163 +292,35 @@ function extractSymbols(tree: any, sourceCode: string, langName: string): Symbol
     }
   }
 
-  function extractSymbolFromNode(
-    node: any,
-    nodeType: string,
-    startLine: number,
-    endLine: number,
-    startCol: number,
-    lines: string[]
-  ): Symbol | null {
-    const line = lines[startLine - 1] ?? "";
-    const exported = line.includes("export ");
-
-    switch (nodeType) {
-      case "function_declaration":
-      case "function": {
-        const name = getChildText(node, "identifier") ?? "anonymous";
-        const sig = extractSignature(lines, startLine - 1);
-        return { name, type: "function", line: startLine, endLine, col: startCol, signature: sig, exported };
-      }
-      case "class_declaration":
-      case "class": {
-        const name = getChildText(node, "type_identifier") ?? getChildText(node, "identifier") ?? "anonymous";
-        return { name, type: "class", line: startLine, endLine, col: startCol, exported };
-      }
-      case "interface_declaration": {
-        const name = getChildText(node, "type_identifier") ?? "anonymous";
-        return { name, type: "interface", line: startLine, endLine, col: startCol, exported };
-      }
-      case "type_alias_declaration": {
-        const name = getChildText(node, "type_identifier") ?? "anonymous";
-        return { name, type: "type", line: startLine, endLine, col: startCol, exported };
-      }
-      case "method_definition":
-      case "method_declaration": {
-        const name = getChildText(node, "property_identifier") ?? getChildText(node, "identifier") ?? "anonymous";
-        const sig = extractSignature(lines, startLine - 1);
-        return { name, type: "method", line: startLine, endLine, col: startCol, signature: sig, exported };
-      }
-      case "variable_declaration":
-      case "lexical_declaration": {
-        const name = extractVariableName(node);
-        if (name) {
-          return { name, type: "variable", line: startLine, endLine, col: startCol, exported };
-        }
-        break;
-      }
-      case "export_statement": {
-        // Handle export default, export const, etc.
-        const child = node.child(1);
-        if (child) {
-          return extractSymbolFromNode(child, child.type, startLine, endLine, startCol, lines);
-        }
-        break;
-      }
-      case "function_definition": {
-        // Python
-        const name = getChildText(node, "identifier") ?? "anonymous";
-        const sig = extractSignature(lines, startLine - 1);
-        return { name, type: "function", line: startLine, endLine, col: startCol, signature: sig, exported: line.includes("def ") && !line.startsWith("_") };
-      }
-      case "class_definition": {
-        // Python
-        const name = getChildText(node, "identifier") ?? "anonymous";
-        return { name, type: "class", line: startLine, endLine, col: startCol, exported: !name.startsWith("_") };
-      }
-      case "decorated_definition": {
-        // Python decorated functions/classes
-        const def = findChildByType(node, "function_definition") ?? findChildByType(node, "class_definition");
-        if (def) {
-          return extractSymbolFromNode(def, def.type, def.startPosition.row + 1, def.endPosition.row + 1, def.startPosition.column, lines);
-        }
-        break;
-      }
-      case "function_item": {
-        // Rust
-        const name = getChildText(node, "identifier") ?? "anonymous";
-        const sig = extractSignature(lines, startLine - 1);
-        const isPub = line.includes("pub ");
-        return { name, type: "function", line: startLine, endLine, col: startCol, signature: sig, exported: isPub };
-      }
-      case "impl_item": {
-        // Rust impl block - extract methods
-        break;
-      }
-      case "struct_item": {
-        // Rust
-        const name = getChildText(node, "type_identifier") ?? "anonymous";
-        return { name, type: "class", line: startLine, endLine, col: startCol, exported: line.includes("pub ") };
-      }
-      case "enum_item": {
-        // Rust
-        const name = getChildText(node, "type_identifier") ?? "anonymous";
-        return { name, type: "type", line: startLine, endLine, col: startCol, exported: line.includes("pub ") };
-      }
-      case "trait_item": {
-        // Rust
-        const name = getChildText(node, "type_identifier") ?? "anonymous";
-        return { name, type: "interface", line: startLine, endLine, col: startCol, exported: line.includes("pub ") };
-      }
-      case "function_declaration": {
-        // Go
-        const name = getChildText(node, "identifier") ?? "anonymous";
-        const sig = extractSignature(lines, startLine - 1);
-        return { name, type: "function", line: startLine, endLine, col: startCol, signature: sig, exported: exported };
-      }
-      case "method_declaration": {
-        // Go
-        const name = getChildText(node, "field_identifier") ?? getChildText(node, "identifier") ?? "anonymous";
-        const sig = extractSignature(lines, startLine - 1);
-        return { name, type: "method", line: startLine, endLine, col: startCol, signature: sig, exported };
-      }
-      case "type_declaration": {
-        // Go type
-        const name = getChildText(node, "type_identifier") ?? "anonymous";
-        return { name, type: "type", line: startLine, endLine, col: startCol, exported };
-      }
-      case "method_declaration": {
-        // Java
-        const name = getChildText(node, "identifier") ?? "anonymous";
-        const sig = extractSignature(lines, startLine - 1);
-        return { name, type: "method", line: startLine, endLine, col: startCol, signature: sig, exported };
-      }
-      case "class_declaration": {
-        // Java
-        const name = getChildText(node, "identifier") ?? "anonymous";
-        return { name, type: "class", line: startLine, endLine, col: startCol, exported };
-      }
-    }
-
-    return null;
-  }
-
   walk(root);
   return symbols;
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function getChildText(node: any, childType: string): string | null {
   if (!node) return null;
   for (let i = 0; i < node.childCount; i++) {
     const child = node.child(i);
-    if (child && child.type === childType) {
+    if (child?.type === childType) {
       return child.text;
     }
   }
   return null;
 }
 
-function findChildByType(node: any, childType: string): any | null {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function findChildByType(node: any, childType: string): any {
   if (!node) return null;
   for (let i = 0; i < node.childCount; i++) {
     const child = node.child(i);
-    if (child && child.type === childType) {
+    if (child?.type === childType) {
       return child;
     }
   }
   return null;
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function extractVariableName(node: any): string | null {
   if (!node) return null;
   for (let i = 0; i < node.childCount; i++) {
@@ -327,8 +334,10 @@ function extractVariableName(node: any): string | null {
 
 function extractSignature(lines: string[], lineIndex: number): string {
   const line = lines[lineIndex] ?? "";
-  // Extract up to the opening brace or end of declaration
-  const match = line.match(/^(\s*(?:export\s+)?(?:async\s+)?(?:function|def|fn|func|pub\s+fn|pub\s+async\s+fn|private\s+)?\s*\w+\s*\([^)]*\)(?:\s*:\s*\S+)?)/);
+  if (!/function|def|fn|func/.test(line)) {
+    return line.trim().slice(0, 120);
+  }
+  const match = /^(\s*(?:\S+\s+)*\w+\s*\([^)]*\)(?:\s*:\s*\S+)?)/.exec(line);
   return match?.[1]?.trim() ?? line.trim().slice(0, 120);
 }
 
@@ -346,15 +355,15 @@ function extractImports(tree: any, sourceCode: string, langName: string): Import
     const nodeType = node.type;
     const startLine = node.startPosition.row + 1;
 
-    if (nodeType === "import_statement" || nodeType === "import" || nodeType === "import_from_statement") {
-      const importInfo = parseImportNode(node, startLine, lines, langName);
-      if (importInfo) imports.push(importInfo);
-    } else if (nodeType === "import_declaration") {
-      // Java/Rust
+    if (
+      nodeType === "import_statement" ||
+      nodeType === "import" ||
+      nodeType === "import_from_statement" ||
+      nodeType === "import_declaration"
+    ) {
       const importInfo = parseImportNode(node, startLine, lines, langName);
       if (importInfo) imports.push(importInfo);
     } else if (nodeType === "require_statement") {
-      // CommonJS
       const importInfo = parseRequireNode(node, startLine, lines);
       if (importInfo) imports.push(importInfo);
     }
@@ -372,20 +381,20 @@ function extractImports(tree: any, sourceCode: string, langName: string): Import
     lang: string
   ): ImportInfo | null {
     const text = node.text;
-    const moduleMatch = text.match(/(?:from\s+|require\s*\(\s*|import\s+)(?:["'`])([^"'`]+)(?:["'`])/);
+    const moduleMatch = /(?:from\s+|require\s*\(\s*|import\s+)(?:["'`])([^"'`]+)(?:["'`])/.exec(text);
     const module = moduleMatch?.[1] ?? "";
 
-    const isDefault = text.includes("import default") || text.match(/import\s+\w+\s+from/);
+    const isDefault = text.includes("import default") || /import\s+\w+\s+from/.exec(text);
     const isTypeOnly = text.includes("type ") && text.includes("import");
 
-    // Extract imported symbols
     const symbols: string[] = [];
-    const symbolMatch = text.match(/\{([^}]+)\}/);
+    const symbolMatch = /\{([^}]+)\}/.exec(text);
     if (symbolMatch) {
-      symbols.push(...symbolMatch[1].split(",").map((s: string) => s.trim().split(/\s+as\s+/)[0]!.trim()));
+      const parts = symbolMatch[1]?.split(",") ?? [];
+      symbols.push(...parts.map(s => s.trim().split(/\s+as\s+/)[0]?.trim() ?? ""));
     } else {
-      const defaultMatch = text.match(/import\s+(\w+)/);
-      if (defaultMatch) symbols.push(defaultMatch[1]!);
+      const defaultMatch = /import\s+(\w+)/.exec(text);
+      if (defaultMatch) symbols.push(defaultMatch[1] ?? "unknown");
     }
 
     return { module, symbols, isDefault: !!isDefault, isTypeOnly, line };
@@ -397,9 +406,9 @@ function extractImports(tree: any, sourceCode: string, langName: string): Import
     lines: string[]
   ): ImportInfo | null {
     const text = node.text;
-    const match = text.match(/require\s*\(\s*["'`]([^"'`]+)["'`]/);
+    const match = /require\s*\(\s*["'`]([^"'`]+)["'`]/.exec(text);
     if (!match) return null;
-    return { module: match[1]!, symbols: [], isDefault: true, isTypeOnly: false, line };
+    return { module: match[1] ?? "", symbols: [], isDefault: true, isTypeOnly: false, line };
   }
 
   walk(root);
@@ -411,7 +420,6 @@ function extractImports(tree: any, sourceCode: string, langName: string): Import
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function extractExports(tree: any, sourceCode: string): string[] {
   const exports: string[] = [];
-  const lines = sourceCode.split("\n");
   const root = tree.rootNode;
 
   function walk(node: any): void {
@@ -420,19 +428,17 @@ function extractExports(tree: any, sourceCode: string): string[] {
     const nodeType = node.type;
     if (nodeType === "export_statement" || nodeType === "export") {
       const text = node.text;
-      // export { name1, name2 }
-      const namedMatch = text.match(/\{([^}]+)\}/);
+      const namedMatch = /\{([^}]+)\}/.exec(text);
       if (namedMatch) {
-        exports.push(...namedMatch[1].split(",").map((s: string) => s.trim().split(/\s+as\s+/)[0]!.trim()));
+        const parts = namedMatch[1]?.split(",") ?? [];
+        exports.push(...parts.map(s => s.trim().split(/\s+as\s+/)[0]?.trim() ?? ""));
       }
-      // export default
       if (text.includes("default")) {
         exports.push("default");
       }
-      // export const/function/class name
-      const nameMatch = text.match(/export\s+(?:const|let|var|function|class|async\s+function)\s+(\w+)/);
+      const nameMatch = /export\s+(?:const|let|var|function|class|async\s+function)\s+(\w+)/.exec(text);
       if (nameMatch) {
-        exports.push(nameMatch[1]!);
+        exports.push(nameMatch[1] ?? "unknown");
       }
     }
 
@@ -477,9 +483,31 @@ export async function parseSource(
 
     return { language: langName, symbols, imports, exports, lineCount };
   } catch (err) {
-    log.warn(`Tree-sitter parse failed: ${(err as Error).message}`);
+    log.warn(`Tree-sitter parse failed: ${err instanceof Error ? err.message : String(err)}`);
     return fallbackParse(sourceCode, language);
   }
+}
+
+async function parseDirectory(dirPath: string): Promise<ParseResult> {
+  const files = fs.readdirSync(dirPath).filter((f) => /\.(ts|tsx|js|jsx|py|rs|go|java)$/i.test(f));
+  const allSymbols: Symbol[] = [];
+  const allImports: ImportInfo[] = [];
+  const allExports: string[] = [];
+
+  for (const file of files.slice(0, 50)) {
+    const result = await parseFile(path.join(dirPath, file));
+    allSymbols.push(...result.symbols.map((s) => ({ ...s, docstring: `${file}:${s.line}` })));
+    allImports.push(...result.imports);
+    allExports.push(...result.exports);
+  }
+
+  return {
+    language: "directory",
+    symbols: allSymbols,
+    imports: allImports,
+    exports: allExports,
+    lineCount: 0,
+  };
 }
 
 export async function parseFile(filePath: string): Promise<ParseResult> {
@@ -488,34 +516,15 @@ export async function parseFile(filePath: string): Promise<ParseResult> {
       return { language: "unknown", symbols: [], imports: [], exports: [], lineCount: 0 };
     }
 
-    const stat = fs.statSync(filePath);
-    if (stat.isDirectory()) {
-      const files = fs.readdirSync(filePath).filter((f) => /\.(ts|tsx|js|jsx|py|rs|go|java)$/i.test(f));
-      const allSymbols: Symbol[] = [];
-      const allImports: ImportInfo[] = [];
-      const allExports: string[] = [];
-
-      for (const file of files.slice(0, 50)) {
-        const result = await parseFile(path.join(filePath, file));
-        allSymbols.push(...result.symbols.map((s) => ({ ...s, docstring: `${file}:${s.line}` })));
-        allImports.push(...result.imports);
-        allExports.push(...result.exports);
-      }
-
-      return {
-        language: "directory",
-        symbols: allSymbols,
-        imports: allImports,
-        exports: allExports,
-        lineCount: 0,
-      };
+    if (fs.statSync(filePath).isDirectory()) {
+      return parseDirectory(filePath);
     }
 
     const sourceCode = fs.readFileSync(filePath, "utf8");
     const langName = detectLanguage(filePath);
     return await parseSource(sourceCode, langName);
   } catch (err) {
-    log.warn(`Failed to parse file ${filePath}: ${(err as Error).message}`);
+    log.warn(`Failed to parse file ${filePath}: ${err instanceof Error ? err.message : String(err)}`);
     return { language: "unknown", symbols: [], imports: [], exports: [], lineCount: 0 };
   }
 }
@@ -530,14 +539,13 @@ export function findDependencies(parseResult: ParseResult): ImportInfo[] {
 
 // ─── Fallback (regex-based) ─────────────────────────────────────────────────
 
-function fallbackParse(sourceCode: string, language?: string): ParseResult {
-  const lines = sourceCode.split("\n");
-  const langName = language ?? "typescript";
-  const symbols: Symbol[] = [];
-  const imports: ImportInfo[] = [];
-  const exports: string[] = [];
+interface LangConfig {
+  symbolPatterns: RegExp[];
+  importPattern: RegExp;
+  exportPattern: RegExp;
+}
 
-  // TypeScript/JavaScript patterns
+function getLangConfig(langName: string): LangConfig {
   const tsPatterns: RegExp[] = [
     /^(?:export\s+)?(?:async\s+)?function\s+(\w+)/,
     /^(?:export\s+)?class\s+(\w+)/,
@@ -546,91 +554,94 @@ function fallbackParse(sourceCode: string, language?: string): ParseResult {
     /^(?:export\s+)?(?:const|let|var)\s+(\w+)\s*[=:]/,
   ];
 
-  // Python patterns
-  const pyPatterns: RegExp[] = [
-    /^(?:async\s+)?def\s+(\w+)/,
-    /^class\s+(\w+)/,
-  ];
-
-  // Rust patterns
-  const rustPatterns: RegExp[] = [
-    /^(?:pub\s+)?(?:async\s+)?fn\s+(\w+)/,
-    /^(?:pub\s+)?struct\s+(\w+)/,
-    /^(?:pub\s+)?enum\s+(\w+)/,
-    /^(?:pub\s+)?trait\s+(\w+)/,
-  ];
-
-  // Go patterns
-  const goPatterns: RegExp[] = [
-    /^func\s+(?:\(\w+\s+\*?\w+\)\s+)?(\w+)/,
-    /^type\s+(\w+)\s+struct/,
-    /^type\s+(\w+)\s+interface/,
-  ];
-
-  // Java patterns
-  const javaPatterns: RegExp[] = [
-    /^(?:public|private|protected)?\s*(?:static\s+)?(?:class|interface)\s+(\w+)/,
-    /^(?:public|private|protected)?\s*(?:static\s+)?(?:final\s+)?(?:\w+(?:<[^>]+>)?)\s+(\w+)\s*\(/,
-  ];
-
-  let symbolPatterns: RegExp[];
-  let importPattern: RegExp;
-  let exportPattern: RegExp;
-
   switch (langName) {
     case "tree-sitter-python":
     case "python":
-      symbolPatterns = pyPatterns;
-      importPattern = /^(?:from\s+(\S+)\s+)?import\s+(.+)/;
-      exportPattern = /^__all__\s*=/;
-      break;
+      return {
+        symbolPatterns: [
+          /^(?:async\s+)?def\s+(\w+)/,
+          /^class\s+(\w+)/,
+        ],
+        importPattern: /^(?:from\s+(\S+)\s+)?import\s+(.+)/,
+        exportPattern: /^__all__\s*=/,
+      };
     case "tree-sitter-rust":
     case "rust":
-      symbolPatterns = rustPatterns;
-      importPattern = /^use\s+([\w:]+)\s*;/;
-      exportPattern = /^pub\s+(?:fn|struct|enum|trait)\s+(\w+)/;
-      break;
+      return {
+        symbolPatterns: [
+          /^(?:pub\s+)?(?:async\s+)?fn\s+(\w+)/,
+          /^(?:pub\s+)?struct\s+(\w+)/,
+          /^(?:pub\s+)?enum\s+(\w+)/,
+          /^(?:pub\s+)?trait\s+(\w+)/,
+        ],
+        importPattern: /^use\s+([\w:]+)\s*;/,
+        exportPattern: /^pub\s+(?:fn|struct|enum|trait)\s+(\w+)/,
+      };
     case "tree-sitter-go":
     case "go":
-      symbolPatterns = goPatterns;
-      importPattern = /^import\s+(?:"([^"]+)"|(\w+)\s+"([^"]+)")/;
-      exportPattern = /^func\s+([A-Z]\w+)/;
-      break;
+      return {
+        symbolPatterns: [
+          /^func\s+(?:\(\w+\s+\*?\w+\)\s+)?(\w+)/,
+          /^type\s+(\w+)\s+struct/,
+          /^type\s+(\w+)\s+interface/,
+        ],
+        importPattern: /^import\s+(?:"([^"]+)"|(\w+)\s+"([^"]+)")/,
+        exportPattern: /^func\s+([A-Z]\w+)/,
+      };
     case "tree-sitter-java":
     case "java":
-      symbolPatterns = javaPatterns;
-      importPattern = /^import\s+(?:static\s+)?([\w.]+)\s*;/;
-      exportPattern = /^public\s+(?:class|interface)\s+(\w+)/;
-      break;
+      return {
+        symbolPatterns: [
+          /^(?:public|private|protected)?\s*(?:static\s+)?(?:class|interface)\s+(\w+)/,
+          /^(?:public|private|protected)?\s*(?:static\s+)?(?:final\s+)?(?:\w+(?:<[^>]+>)?)\s+(\w+)\s*\(/,
+        ],
+        importPattern: /^import\s+(?:static\s+)?([\w.]+)\s*;/,
+        exportPattern: /^public\s+(?:class|interface)\s+(\w+)/,
+      };
     default:
-      symbolPatterns = tsPatterns;
-      importPattern = /(?:import|from|require)\s+.*?["'`]([^"'`]+)["'`]/;
-      exportPattern = /export\s+(?:default\s+)?(?:function|class|const|let|var|interface|type)\s+(\w+)/;
+      return {
+        symbolPatterns: tsPatterns,
+        importPattern: /(?:import|from|require)\s+.*?["'`]([^"'`]+)["'`]/,
+        exportPattern: /export\s+(?:default\s+)?(?:function|class|const|let|var|interface|type)\s+(\w+)/,
+      };
   }
+}
+
+function classifySymbolType(line: string): Symbol["type"] {
+  if (line.includes("class")) return "class";
+  if (line.includes("interface")) return "interface";
+  if (line.includes("type ")) return "type";
+  if (line.includes("struct")) return "class";
+  if (line.includes("enum")) return "type";
+  if (line.includes("trait")) return "interface";
+  if (line.includes("=")) return "variable";
+  return "function";
+}
+
+function fallbackParse(sourceCode: string, language?: string): ParseResult {
+  const lines = sourceCode.split("\n");
+  const langName = language ?? "typescript";
+  const symbols: Symbol[] = [];
+  const imports: ImportInfo[] = [];
+  const exports: string[] = [];
+
+  const config = getLangConfig(langName);
 
   for (let i = 0; i < lines.length; i++) {
-    const line = lines[i]!;
+    const line = lines[i] ?? "";
 
-    for (const pattern of symbolPatterns) {
+    for (const pattern of config.symbolPatterns) {
       const match = pattern.exec(line);
       if (match) {
-        const name = match[1]!;
-        let type: Symbol["type"] = "function";
-        if (line.includes("class")) type = "class";
-        else if (line.includes("interface")) type = "interface";
-        else if (line.includes("type ")) type = "type";
-        else if (line.includes("struct")) type = "class";
-        else if (line.includes("enum")) type = "type";
-        else if (line.includes("trait")) type = "interface";
-        else if (line.includes("=")) type = "variable";
-
+        const name = match[1] ?? "unknown";
+        const type = classifySymbolType(line);
         const isExported = line.includes("export") || line.includes("pub ") || (!name.startsWith("_") && langName.includes("python"));
         symbols.push({ name, type, line: i + 1, exported: isExported });
         break;
       }
     }
 
-    const importMatch = importPattern.exec(line);
+    const importMatch = config.importPattern.exec(line);
     if (importMatch) {
       const module = importMatch[1] ?? importMatch[2] ?? importMatch[3] ?? "";
       imports.push({
@@ -642,9 +653,9 @@ function fallbackParse(sourceCode: string, language?: string): ParseResult {
       });
     }
 
-    const exportMatch = exportPattern.exec(line);
+    const exportMatch = config.exportPattern.exec(line);
     if (exportMatch) {
-      exports.push(exportMatch[1]!);
+      exports.push(exportMatch[1] ?? "unknown");
     }
   }
 

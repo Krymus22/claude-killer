@@ -394,6 +394,85 @@ export function App() {
     setTodos([...current]);
   }, []);
 
+  // ── Streaming helpers (extracted to reduce handleSubmit complexity) ───
+  const runStreaming = useCallback(async (fullInput: string) => {
+    let streamContent = "";
+    let streamStarted = false;
+
+    const response = await runAgentLoop(
+      fullInput,
+      () => {
+        streamStarted = true;
+        setStatus("streaming");
+        setMessages((prev) => {
+          const updated = [...prev];
+          const last = updated.at(-1);
+          if (last?.role === "assistant" && last?.isStreaming) {
+            return updated;
+          }
+          return [...updated, { role: "assistant", content: "", isStreaming: true }];
+        });
+      },
+      (token: string) => {
+        streamContent += token;
+        setMessages((prev) => {
+          const updated = [...prev];
+          for (let i = updated.length - 1; i >= 0; i--) {
+            if (updated[i].role === "assistant" && updated[i].isStreaming) {
+              updated[i] = { ...updated[i], content: streamContent };
+              break;
+            }
+          }
+          return [...updated];
+        });
+      },
+      () => {
+        setStatus("thinking");
+      },
+      (usage) => {
+        setLastUsage(usage);
+      }
+    );
+
+    return { response, streamStarted };
+  }, []);
+
+  const finalizeMessage = useCallback((response: string, streamStarted: boolean) => {
+    setMessages((prev) => {
+      const updated = [...prev];
+      for (let i = updated.length - 1; i >= 0; i--) {
+        if (updated[i].role === "assistant" && updated[i].isStreaming) {
+          updated[i] = { role: "assistant", content: response, isStreaming: false };
+          break;
+        }
+      }
+      if (!streamStarted) {
+        updated.push({ role: "assistant", content: response, isStreaming: false });
+      }
+      return [...updated];
+    });
+  }, []);
+
+  const handleSlashCommandFlow = useCallback((trimmed: string): boolean => {
+    const result = handleSlashCommand(trimmed);
+    if (result.exit) {
+      exit();
+      return true;
+    }
+    if (result.handled) {
+      if (result.openHub) {
+        setShowHub(true);
+      }
+      if (result.message) {
+        setSystemMessages((prev) => [...prev, result.message!]);
+      }
+      isProcessing.current = false;
+      setStatus("idle");
+      return true;
+    }
+    return false;
+  }, [exit]);
+
   // ── Submit handler ─────────────────────────────────────────────────────
   const handleSubmit = useCallback(
     async (value: string) => {
@@ -420,23 +499,8 @@ export function App() {
 
       // Handle slash commands
       if (trimmed.startsWith("/")) {
-        const result = handleSlashCommand(trimmed);
-        if (result.exit) {
-          exit();
-          return;
-        }
-        if (result.handled) {
-          if (result.openHub) {
-            setShowHub(true);
-          }
-          if (result.message) {
-            setSystemMessages((prev) => [...prev, result.message!]);
-          }
-          isProcessing.current = false;
-          setStatus("idle");
-          return;
-        }
-        // Unknown command — fall through to agent
+        const exitCalled = handleSlashCommandFlow(trimmed);
+        if (exitCalled) return;
       }
 
       // Add user message to display
@@ -453,58 +517,8 @@ export function App() {
       const fullInput = expanded + planSuffix;
 
       try {
-        let streamContent = "";
-        let streamStarted = false;
-
-        const response = await runAgentLoop(
-          fullInput,
-          () => {
-            streamStarted = true;
-            setStatus("streaming");
-            setMessages((prev) => {
-              const updated = [...prev];
-              const last = updated.at(-1);
-              if (last?.role === "assistant" && last?.isStreaming) {
-                return updated;
-              }
-              return [...updated, { role: "assistant", content: "", isStreaming: true }];
-            });
-          },
-          (token: string) => {
-            streamContent += token;
-            setMessages((prev) => {
-              const updated = [...prev];
-              for (let i = updated.length - 1; i >= 0; i--) {
-                if (updated[i].role === "assistant" && updated[i].isStreaming) {
-                  updated[i] = { ...updated[i], content: streamContent };
-                  break;
-                }
-              }
-              return [...updated];
-            });
-          },
-          () => {
-            setStatus("thinking");
-          },
-          (usage) => {
-            setLastUsage(usage);
-          }
-        );
-
-        setMessages((prev) => {
-          const updated = [...prev];
-          for (let i = updated.length - 1; i >= 0; i--) {
-            if (updated[i].role === "assistant" && updated[i].isStreaming) {
-              updated[i] = { role: "assistant", content: response, isStreaming: false };
-              break;
-            }
-          }
-          if (!streamStarted) {
-            updated.push({ role: "assistant", content: response, isStreaming: false });
-          }
-          return [...updated];
-        });
-
+        const { response, streamStarted } = await runStreaming(fullInput);
+        finalizeMessage(response, streamStarted);
         syncTodos();
       } catch (err) {
         setSystemMessages((prev) => [...prev, `Erro: ${(err as Error).message}`]);

@@ -488,7 +488,21 @@ function discoverFeatures(entries: Omit<ExtensionEntry, "enabled" | "triggerMode
     },
   ];
 
-  for (const f of features) {
+  // Honesty system features (10 anti-sycophancy / anti-hallucination layers)
+  const honestyFeatures = [
+    { id: "feature:devils_advocate", name: "Devil's Advocate", description: "Sub-agente adversarial revisa codigo antes de finalizar", installed: true, meta: { module: "honestySystem" } },
+    { id: "feature:diff_reality_check", name: "Diff Reality Check", description: "Verifica se arquivo editado contem o que a IA disse que adicionou", installed: true, meta: { module: "honestySystem" } },
+    { id: "feature:read_back_verify", name: "Read-Back Verify", description: "Forca IA a ler arquivo de volta apos editar", installed: true, meta: { module: "honestySystem" } },
+    { id: "feature:hallucination_detector", name: "Hallucination Detector", description: "Verifica se simbolos usados realmente existem", installed: true, meta: { module: "honestySystem" } },
+    { id: "feature:evidence_requirement", name: "Evidence Requirement", description: "Claims sem tool call de evidencia sao flagadas", installed: true, meta: { module: "honestySystem" } },
+    { id: "feature:user_claim_verify", name: "User Claim Verify", description: "Verifica automaticamente claims factuais do usuario", installed: true, meta: { module: "honestySystem" } },
+    { id: "feature:confidence_mapping", name: "Confidence Mapping", description: "IA classifica confianca (1-10) antes de agir", installed: true, meta: { module: "honestySystem" } },
+    { id: "feature:anonymous_review", name: "Anonymous Review", description: "Sub-agente neutro revisa codigo as cegas", installed: true, meta: { module: "honestySystem" } },
+    { id: "feature:contradiction_tracker", name: "Contradiction Tracker", description: "Rastreia claims e alerta se nova claim contradiz anterior", installed: true, meta: { module: "honestySystem" } },
+    { id: "feature:prove_it_mode", name: "Prove It Mode", description: "Toda claim factual deve ter tool call que a comprova", installed: true, meta: { module: "honestySystem" } },
+  ];
+
+  for (const f of [...features, ...honestyFeatures]) {
     entries.push({ ...f, category: "feature" });
   }
 }

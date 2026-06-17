@@ -252,7 +252,28 @@ function passGate(): GateResult {
 function blockGate(cfg: QualityGateConfig, errors: string[]): GateResult {
   consecutiveBlocks++;
   totalBlocks++;
-  const errorLog = errors.join("\n\n");
+
+  // IDEIA 20: Self-healing - parse raw errors into structured format
+  // before injecting into context. Structured errors are easier for the
+  // model to act on than raw text walls.
+  let structuredErrors = "";
+  try {
+    // Self-healing is synchronous-safe here since parseErrors is sync
+    const { parseErrors, formatStructuredErrors } = require("./selfHealing.js");
+    const allParsed: any[] = [];
+    for (const rawError of errors) {
+      const parsed = parseErrors(rawError);
+      if (parsed.length > 0) allParsed.push(...parsed);
+    }
+    if (allParsed.length > 0) {
+      structuredErrors = formatStructuredErrors(allParsed);
+    }
+  } catch {
+    // selfHealing module not available - use raw errors
+  }
+
+  const errorContent = structuredErrors || errors.join("\n\n");
+  const errorLog = errorContent;
   lastErrorLog = errorLog;
 
   const msg =

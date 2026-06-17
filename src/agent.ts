@@ -722,6 +722,36 @@ const toolHandlers: Record<string, ToolHandler> = {
     }
   },
 
+  "criar_plano": async (args) => {
+    const passos = args.passos as string[] | undefined;
+    if (!passos || !Array.isArray(passos) || passos.length === 0) {
+      return { resultStr: "[ERRO] 'passos' é obrigatório e deve ser um array não vazio.", usedHeal: false };
+    }
+    const { createPlan, formatPlan } = await import("./planExecutor.js");
+    createPlan(passos);
+    return {
+      resultStr: `[SUCESSO] Plano criado com ${passos.length} passo(s).\n\n${formatPlan()}`,
+      usedHeal: false,
+    };
+  },
+
+  "marcar_passo": async (args) => {
+    const indice = args.indice as number | undefined;
+    const feito = args.feito as boolean | undefined;
+    if (indice === undefined || feito === undefined) {
+      return { resultStr: "[ERRO] 'indice' e 'feito' são obrigatórios.", usedHeal: false };
+    }
+    const { markStep, formatPlan } = await import("./planExecutor.js");
+    const ok = markStep(indice, feito);
+    if (!ok) {
+      return { resultStr: `[ERRO] Não foi possível marcar o passo ${indice}. Plano não existe ou índice inválido.`, usedHeal: false };
+    }
+    return {
+      resultStr: `[SUCESSO] Passo ${indice} marcado como ${feito ? "concluído" : "reaberto"}.\n\n${formatPlan()}`,
+      usedHeal: false,
+    };
+  },
+
   "ler_estado": async () => {
     const summary = getTaskStateSummary();
     return {
@@ -828,9 +858,12 @@ async function dispatchToolCall(
     result.resultStr += ctxInjection;
   }
 
+  // Safe version of resultStr for null-safe checks (mocks may return undefined)
+  const resultStrSafe = result.resultStr ?? "";
+
   // -- IDEIA 7: After successful file edits, suggest generating a test ---
   // Skip Luau/Roblox and other unsupported extensions explicitly.
-  if (WRITE_FILE_TOOLS.has(name) && !result.resultStr.startsWith("[ERRO") && !result.resultStr.startsWith("[BLOQUEADO")) {
+  if (WRITE_FILE_TOOLS.has(name) && !resultStrSafe.startsWith("[ERRO") && !resultStrSafe.startsWith("[BLOQUEADO")) {
     const editedPath = asString(finalArgs.caminho ?? finalArgs.path ?? finalArgs.filePath ?? "");
     if (editedPath) {
       const testSuggestion = generateTestSuggestionForFile(editedPath);
@@ -838,6 +871,29 @@ async function dispatchToolCall(
         result.resultStr += testSuggestion;
       }
     }
+  }
+
+  // -- IDEIA 14: Record failures for failure memory ---
+  // When a write/edit tool fails, record the error so the AI sees it
+  // before the next edit attempt (avoids repeating the same mistake).
+  if (resultStrSafe.startsWith("[ERRO") || resultStrSafe.startsWith("[BLOQUEADO")) {
+    try {
+      const { recordFailure } = await import("./failureMemory.js");
+      const filePath = asString(finalArgs.caminho ?? finalArgs.path ?? finalArgs.filePath ?? "");
+      recordFailure(name, resultStrSafe.slice(0, 200), filePath || undefined);
+    } catch { /* failureMemory not available */ }
+  }
+
+  // -- IDEIA 14: Inject failure memory before edit tool calls ---
+  // So the AI sees recent mistakes before attempting another edit.
+  if (WRITE_FILE_TOOLS.has(name)) {
+    try {
+      const { getRecentFailures } = await import("./failureMemory.js");
+      const failures = getRecentFailures();
+      if (failures) {
+        result.resultStr = `${failures}\n\n${result.resultStr}`;
+      }
+    } catch { /* failureMemory not available */ }
   }
 
   return result;
@@ -1131,6 +1187,81 @@ async function handleStopReason(message: { content?: string | null }): Promise<b
   // Strict quality gate - may inject errors and force a recursion
   const gateBlocked = await runStrictGateIfActive();
   if (gateBlocked) return true;
+
+  // IDEIA 11: Plan-then-execute - block finish if plan has incomplete steps
+  try {
+    const { hasIncompletePlan, formatPlan } = await import("./planExecutor.js");
+    if (hasIncompletePlan()) {
+      log.warn(`[PLAN] Blocking finish - plan has incomplete steps`);
+      history.addSystemMessage(`${formatPlan()}\n\nNÃO finalize até completar TODOS os passos do plano. Continue trabalhando.`);
+      return true;
+    }
+  } catch { /* planExecutor not available */ }
+
+  // IDEIA 12 + Honesty: Devil's Advocate + Anonymous Review (pre-finish, parallel)
+  try {
+    const { isHonestyFeatureEnabled, runDevilsAdvocate, runAnonymousReview } = await import("./honestySystem.js");
+    const editedFiles = [...turnTouchedFiles].map((f) => ({ path: f, content: "" }));
+    // Only run if files were touched AND features are enabled
+    if (editedFiles.length > 0) {
+      const agentClaims = message.content ?? "";
+      const devilsOn = await isHonestyFeatureEnabled("feature:devils_advocate");
+      const reviewOn = await isHonestyFeatureEnabled("feature:anonymous_review");
+
+      if (devilsOn || reviewOn) {
+        // Read file contents for review
+        const fs = await import("node:fs");
+        for (const f of editedFiles) {
+          try { f.content = fs.readFileSync(f.path, "utf8"); } catch { /* skip */ }
+        }
+
+        // Run both in parallel if both enabled
+        const promises: Promise<any>[] = [];
+        if (devilsOn) promises.push(runDevilsAdvocate(editedFiles, agentClaims));
+        if (reviewOn) promises.push(runAnonymousReview(editedFiles));
+        const results = await Promise.all(promises);
+
+        // Check if Devil's Advocate found high-severity issues
+        if (devilsOn) {
+          const daResult = results[0] as any;
+          if (daResult?.severity === "high" && daResult.issues.length > 0) {
+            const msg = `[DEVIL'S ADVOCATE] Problemas críticos encontrados:\n${daResult.issues.map((i: string) => `  - ${i}`).join("\n")}\n\nCorrija antes de finalizar.`;
+            history.addSystemMessage(msg);
+            return true;  // Block finish
+          }
+        }
+      }
+    }
+  } catch { /* honestySystem not available */ }
+
+  // IDEIA 26: Goal verifier - independent check if task is actually done
+  try {
+    const { verifyGoalCompletion, formatGoalVerification } = await import("./goalVerifier.js");
+    if (turnTouchedFiles.size > 0) {
+      const userRequestRaw = history.getHistory().find((m) => m.role === "user")?.content;
+      const userRequest = typeof userRequestRaw === "string" ? userRequestRaw : "";
+      const result = await verifyGoalCompletion(
+        userRequest,
+        [...turnTouchedFiles],
+        message.content ?? ""
+      );
+      if (!result.done && result.verified) {
+        log.warn(`[GOAL_VERIFIER] Task NOT done - blocking finish`);
+        history.addSystemMessage(formatGoalVerification(result));
+        return true;  // Block finish, force AI to continue
+      }
+    }
+  } catch { /* goalVerifier not available */ }
+
+  // IDEIA 14: Inject failure memory before finishing (for next turn's awareness)
+  try {
+    const { getRecentFailures, clearFailures } = await import("./failureMemory.js");
+    const failures = getRecentFailures();
+    if (failures) {
+      log.debug(`[FAILURE_MEMORY] ${failures.length} recent failures noted`);
+      // Don't inject - just log. Failures are injected before EDIT calls, not at finish.
+    }
+  } catch { /* failureMemory not available */ }
 
   // Update TASK_STATE.md
   updateTaskStateOnStop(message);

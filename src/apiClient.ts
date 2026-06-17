@@ -664,6 +664,48 @@ export const TOOL_DEFINITIONS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
   {
     type: "function",
     function: {
+      name: "criar_plano",
+      description:
+        "Cria um plano de execução numerado ANTES de fazer qualquer edição. " +
+        "OBRIGATÓRIO para tarefas complexas (2+ passos, multi-arquivo, refactoring). " +
+        "Cada passo deve ser uma ação específica e atômica. " +
+        "O plano aparece na TUI com checkboxes visuais. " +
+        "Você NÃO pode finalizar (finish_reason) até todos os passos estarem DONE. " +
+        "Use marcar_passo para atualizar o status de cada passo conforme progride.",
+      parameters: {
+        type: "object",
+        properties: {
+          passos: {
+            type: "array",
+            items: { type: "string" },
+            description: "Lista de passos do plano. Ex: ['Ler InventoryService.luau', 'Adicionar validação nil', 'Rodar testes']",
+          },
+        },
+        required: ["passos"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "marcar_passo",
+      description:
+        "Marca um passo do plano como concluído (done=true) ou reaberto (done=false). " +
+        "Use o índice (0-based) do passo no plano criado por criar_plano. " +
+        "Chame após completar cada passo para manter a TUI atualizada.",
+      parameters: {
+        type: "object",
+        properties: {
+          indice: { type: "number", description: "Índice do passo (0-based)" },
+          feito: { type: "boolean", description: "true = concluído, false = reaberto" },
+        },
+        required: ["indice", "feito"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "ler_estado",
       description:
         "Lê o conteúdo atual do TASK_STATE.md e retorna como string formatada. " +

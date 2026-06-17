@@ -210,7 +210,35 @@ export async function editFile(
 
   log.toolResult("editar_arquivo", true, `${result.replacements} replacements`);
 
-  // Run post-edit hooks (NEW - externalized via mode.hooks.postEdit)
+  // -- IDEIA 12 Honesty: Mark file as edited (for Read-Back Verification) --
+  try {
+    const { markFileAsEdited } = await import("./honestySystem.js");
+    markFileAsEdited(resolved);
+  } catch { /* honestySystem not available */ }
+
+  // -- IDEIA 12 Honesty: Diff Reality Check --
+  // Read file back and verify keywords the AI mentioned are actually present.
+  try {
+    const { diffRealityCheck } = await import("./honestySystem.js");
+    const diffCheck = await diffRealityCheck(resolved, result.content);
+    if (!diffCheck.matches && diffCheck.message) {
+      log.warn(`[HONESTY:DiffCheck] ${diffCheck.message}`);
+      // Append warning to success message so AI sees it
+      // (Don't block the write - just inform)
+    }
+  } catch { /* honestySystem not available */ }
+
+  // -- IDEIA 12 Honesty: Hallucination Detector --
+  // Check if symbols used in the code actually exist.
+  try {
+    const { detectHallucinations } = await import("./honestySystem.js");
+    const hallucinationCheck = await detectHallucinations(resolved, result.content);
+    if (hallucinationCheck.hallucinatedSymbols.length > 0 && hallucinationCheck.message) {
+      log.warn(`[HONESTY:Hallucination] ${hallucinationCheck.message}`);
+    }
+  } catch { /* honestySystem not available */ }
+
+  // Run post-edit hooks (externalized via mode.hooks.postEdit)
   // Typical use: auto-format the file that was just written (terraform fmt, black, etc)
   let hookResults = "";
   try {

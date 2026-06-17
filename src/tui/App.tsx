@@ -32,6 +32,7 @@ import {
   suggestMode,
   confirmAndSaveMode,
 } from "../modes.js";
+import { getLocalizedSlashCommands, getCommandI18n } from "../i18n.js";
 import { colors } from "./theme.js";
 import { icons } from "./icons.js";
 import { ChatDisplay, ChatMessage } from "./ChatDisplay.js";
@@ -46,27 +47,18 @@ type AppStatus = "idle" | "thinking" | "streaming";
 
 // --- Slash command definitions ----------------------------------------------
 
-const SLASH_COMMANDS: Array<{ cmd: string; desc: string }> = [
-  { cmd: "/help", desc: "Show help" },
-  { cmd: "/hub", desc: "Extension Hub (control center)" },
-  { cmd: "/mode", desc: "List/switch/create project modes (roblox, custom, ...)" },
-  { cmd: "/reset", desc: "Clear history" },
-  { cmd: "/history", desc: "History summary" },
-  { cmd: "/skills", desc: "List skills" },
-  { cmd: "/plugins", desc: "List MCP servers" },
-  { cmd: "/tools", desc: "List external tools" },
-  { cmd: "/toolinfo", desc: "Show tool details" },
-  { cmd: "/effort", desc: "Set effort level (low/medium/high/max)" },
-  { cmd: "/pool", desc: "Show API key pool status" },
-  { cmd: "/caveman", desc: "Toggle caveman mode" },
-  { cmd: "/memory", desc: "Show project memory" },
-  { cmd: "/todos", desc: "Show todo list" },
-  { cmd: "/plan", desc: "Toggle plan mode" },
-  { cmd: "/compact", desc: "Compact context" },
-  { cmd: "/dream", desc: "Review & compress memory" },
-  { cmd: "/distill", desc: "Extract workflow skills" },
-  { cmd: "/exit", desc: "Exit" },
-];
+// --- Slash command definitions (localized via i18n) --------------------------
+
+// Re-computed lazily; refreshed on each render to pick up language changes.
+function getSlashCommands(): Array<{ cmd: string; desc: string; subcommands?: string[] }> {
+  return getLocalizedSlashCommands();
+}
+
+// Backward-compat: used by /help text and tests
+const SLASH_COMMANDS: Array<{ cmd: string; desc: string }> = getSlashCommands().map((c) => ({
+  cmd: c.cmd,
+  desc: c.desc,
+}));
 
 type CommandResult = { handled: boolean; message?: string; exit?: boolean; openHub?: boolean };
 
@@ -474,6 +466,8 @@ function expandAtMentions(input: string): string {
 
 // --- Autocomplete Component -------------------------------------------------
 
+const AUTOCOMPLETE_PAGE_SIZE = 8;  // max items visible at once
+
 interface AutocompleteProps {
   query: string;
   selectedIndex: number;
@@ -481,27 +475,79 @@ interface AutocompleteProps {
 }
 
 function Autocomplete({ query, selectedIndex, onSelect }: Readonly<AutocompleteProps>) {
+  // Determine if we're in "command" mode (typing /xxx) or "subcommand" mode (/xxx + space + yyy)
+  // Use query (not trimmed) for space detection - trailing space matters
+  const trimmed = query.trim();
+  const hasSpace = query.includes(" ");
+
+  // Get matches: either commands or subcommands of the selected command
   const matches = useMemo(() => {
-    if (!query.startsWith("/")) return [];
-    const lower = query.toLowerCase();
-    return SLASH_COMMANDS.filter((s) => s.cmd.startsWith(lower));
-  }, [query]);
+    if (!trimmed.startsWith("/")) return [];
+
+    if (!hasSpace) {
+      // Command mode: show all commands matching the prefix
+      const lower = trimmed.toLowerCase();
+      return getSlashCommands()
+        .filter((s) => s.cmd.startsWith(lower))
+        .map((s) => ({ label: s.cmd, desc: s.desc, isSubcommand: false }));
+    }
+
+    // Subcommand mode: parse "/cmd subprefix" from original query (preserves trailing space)
+    const spaceIdx = query.indexOf(" ");
+    const cmdPart = query.slice(0, spaceIdx).toLowerCase();
+    const subPart = query.slice(spaceIdx + 1).trim().toLowerCase();
+
+    const cmd = getSlashCommands().find((s) => s.cmd === cmdPart);
+    if (!cmd || !cmd.subcommands || cmd.subcommands.length === 0) return [];
+
+    return cmd.subcommands
+      .filter((sub) => sub.startsWith(subPart))
+      .map((sub) => ({ label: sub, desc: "", isSubcommand: true }));
+  }, [query, trimmed, hasSpace]);
 
   if (matches.length === 0) return null;
 
+  // Pagination: show only AUTOCOMPLETE_PAGE_SIZE items, with the selected one in view
+  const total = matches.length;
+  let startIdx = 0;
+  if (total > AUTOCOMPLETE_PAGE_SIZE) {
+    // Keep selected item visible - center it if possible
+    const halfPage = Math.floor(AUTOCOMPLETE_PAGE_SIZE / 2);
+    if (selectedIndex < halfPage) {
+      startIdx = 0;
+    } else if (selectedIndex > total - halfPage - 1) {
+      startIdx = total - AUTOCOMPLETE_PAGE_SIZE;
+    } else {
+      startIdx = selectedIndex - halfPage;
+    }
+  }
+  const endIdx = Math.min(startIdx + AUTOCOMPLETE_PAGE_SIZE, total);
+  const visibleMatches = matches.slice(startIdx, endIdx);
+
   return (
     <Box flexDirection="column" borderStyle="round" borderColor={colors.muted} paddingLeft={1} paddingRight={1}>
-      {matches.map((m, i) => (
-        <Box key={m.cmd}>
-          <Text color={i === selectedIndex ? colors.primary : colors.muted} bold={i === selectedIndex}>
-            {i === selectedIndex ? "> " : "  "}
-          </Text>
-          <Text color={i === selectedIndex ? colors.primary : colors.white} bold={i === selectedIndex}>
-            {m.cmd.padEnd(14)}
-          </Text>
-          <Text color={colors.muted}>{m.desc}</Text>
-        </Box>
-      ))}
+      {visibleMatches.map((m, i) => {
+        const actualIdx = startIdx + i;
+        const isSelected = actualIdx === selectedIndex;
+        return (
+          <Box key={`${m.label}-${actualIdx}`}>
+            <Text color={isSelected ? colors.primary : colors.muted} bold={isSelected}>
+              {isSelected ? "> " : "  "}
+            </Text>
+            <Text color={isSelected ? colors.primary : colors.white} bold={isSelected}>
+              {m.isSubcommand ? "  " + m.label : m.label.padEnd(14)}
+            </Text>
+            {!m.isSubcommand && (
+              <Text color={colors.muted}> {m.desc}</Text>
+            )}
+          </Box>
+        );
+      })}
+      {total > AUTOCOMPLETE_PAGE_SIZE && (
+        <Text color={colors.muted} dimColor>
+          {" "}(mostrando {startIdx + 1}-{endIdx} de {total} - use ↑↓ para navegar)
+        </Text>
+      )}
     </Box>
   );
 }
@@ -530,12 +576,44 @@ export function App() {
   const isProcessing = useRef(false);
 
   // -- Autocomplete state -------------------------------------------------
-  const showAutocomplete = input.startsWith("/") && input.length > 0 && !input.includes(" ");
+  // Show autocomplete while typing /xxx OR after a space (for subcommands like /effort low|medium|high|max).
+  // Hide only when input doesn't start with / or when there's a second space (subcommand already complete).
+  // Note: use input (not trimmed) for hasSpace detection - trailing space matters!
+  //   "/effort"    -> no space, command mode
+  //   "/effort "   -> 1 space, subcommand mode (user just pressed space)
+  //   "/effort low"-> 1 space, subcommand mode with partial input
+  //   "/effort low extra" -> 2+ tokens, hide autocomplete
+  const trimmed = input.trim();
+  const hasSpace = input.includes(" ");
+  const hasSecondSpace = hasSpace && trimmed.split(" ").filter(Boolean).length > 2;
+  const showAutocomplete = input.startsWith("/") && input.length > 0 && !hasSecondSpace;
+
   const acMatches = useMemo(() => {
     if (!showAutocomplete) return [];
-    const lower = input.toLowerCase();
-    return SLASH_COMMANDS.filter((s) => s.cmd.startsWith(lower));
-  }, [input, showAutocomplete]);
+    if (!trimmed.startsWith("/")) return [];
+
+    if (!hasSpace) {
+      // Command mode: match command prefix
+      const lower = trimmed.toLowerCase();
+      return getSlashCommands()
+        .filter((s) => s.cmd.startsWith(lower))
+        .map((s) => ({ label: s.cmd, desc: s.desc }));
+    }
+
+    // Subcommand mode: /cmd subprefix
+    // Use original input (not trimmed) to detect the space position correctly
+    // when user types "/effort " (trailing space, trimmed would lose it)
+    const spaceIdx = input.indexOf(" ");
+    const cmdPart = input.slice(0, spaceIdx).toLowerCase();
+    const subPart = input.slice(spaceIdx + 1).trim().toLowerCase();  // trim subPart for matching
+
+    const cmd = getSlashCommands().find((s) => s.cmd === cmdPart);
+    if (!cmd || !cmd.subcommands || cmd.subcommands.length === 0) return [];
+
+    return cmd.subcommands
+      .filter((sub) => sub.startsWith(subPart))
+      .map((sub) => ({ label: sub, desc: "" }));
+  }, [input, showAutocomplete, trimmed, hasSpace]);
 
   // -- Discover extensions on mount ------------------------------------
   useMemo(() => {
@@ -657,19 +735,32 @@ export function App() {
   // -- Submit handler -----------------------------------------------------
   const handleSubmit = useCallback(
     async (value: string) => {
-      const trimmed = value.trim();
-      if (!trimmed || isProcessing.current) {
+      let trimmedValue = value.trim();
+      if (!trimmedValue || isProcessing.current) {
         setInput("");
         return;
       }
 
-      // If autocomplete is showing and user hits Enter, use selected command
+      // If autocomplete is showing and user hits Enter, use selected match.
+      // - For commands (/effort): complete the command + add space for subcommand typing
+      // - For subcommands (low/medium/high/max): complete the full input and submit
       if (showAutocomplete && acMatches.length > 0) {
         const selected = acMatches[acIndex];
         if (selected) {
-          setInput(selected.cmd + " ");
-          setAcIndex(0);
-          return;
+          if (hasSpace) {
+            // Subcommand selected - build the full command + subcommand and continue to execute
+            const spaceIdx = trimmedValue.indexOf(" ");
+            const cmdPart = trimmedValue.slice(0, spaceIdx);
+            trimmedValue = `${cmdPart} ${selected.label}`;
+            setInput(trimmedValue);
+            setAcIndex(0);
+            // Fall through to actual command execution below
+          } else {
+            // Command selected - add space so user can type subcommand
+            setInput(selected.label + " ");
+            setAcIndex(0);
+            return;
+          }
         }
       }
 
@@ -679,17 +770,17 @@ export function App() {
       setStatus("thinking");
 
       // Handle slash commands
-      if (trimmed.startsWith("/")) {
-        const exitCalled = handleSlashCommandFlow(trimmed);
+      if (trimmedValue.startsWith("/")) {
+        const exitCalled = handleSlashCommandFlow(trimmedValue);
         if (exitCalled) return;
       }
 
       // Add user message to display
-      const userMsg: ChatMessage = { role: "user", content: trimmed };
+      const userMsg: ChatMessage = { role: "user", content: trimmedValue };
       setMessages((prev) => [...prev, userMsg]);
 
       // Expand @-mentions
-      const expanded = expandAtMentions(trimmed);
+      const expanded = expandAtMentions(trimmedValue);
 
       // Plan mode suffix
       const planSuffix = history.isPlanMode()
@@ -710,7 +801,7 @@ export function App() {
         syncTodos();
       }
     },
-    [exit, syncTodos, showAutocomplete, acMatches, acIndex]
+    [exit, syncTodos, showAutocomplete, acMatches, acIndex, hasSpace]
   );
 
   // -- Input change handler -----------------------------------------------

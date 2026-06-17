@@ -1,5 +1,9 @@
 /**
  * ChatDisplay.tsx - Renders the conversation history with styled messages.
+ *
+ * All messages use a single leading space (" ") for consistent left margin
+ * alignment. Without this, the assistant content starts at column 1 while
+ * the user content starts at column 2, making the conversation look jagged.
  */
 
 import React from "react";
@@ -39,11 +43,11 @@ export function ChatDisplay({ messages, maxVisible = 50 }: Readonly<ChatDisplayP
           );
         }
 
-        // assistant
+        // assistant - note the leading space in content for alignment
         return (
           <Box key={`${msg.role}-${i}`} flexDirection="column">
             <Text color={colors.secondary} bold> Claude-Killer:</Text>
-            <Text color={colors.white}>{msg.content}</Text>
+            <Text color={colors.white}> {msg.content}</Text>
             {msg.isStreaming ? null : <Text></Text>}
           </Box>
         );

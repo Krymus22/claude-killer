@@ -1,7 +1,7 @@
 {
   "name": "claude-killer",
   "version": "1.0.0",
-  "description": "Claude-Killer — CLI agent powered by Kimi K2.6 via NVIDIA NIM API for local code analysis and editing",
+  "description": "Claude-Killer - CLI agent powered by Kimi K2.6 via NVIDIA NIM API for local code analysis and editing",
   "type": "module",
   "main": "dist/index.js",
   "bin": {

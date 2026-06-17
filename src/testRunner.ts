@@ -57,7 +57,7 @@ const DETECTORS: FrameworkDetector[] = [
       if (!fs.existsSync(pkgPath)) return false;
       try {
         const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
-        return !!(pkg.devDependencies?.vitest || pkg.dependencies?.vitest);
+        return !!(pkg.devDependencies?.vitest ?? pkg.dependencies?.vitest);
       } catch { return false; }
     },
   },
@@ -69,7 +69,7 @@ const DETECTORS: FrameworkDetector[] = [
       if (!fs.existsSync(pkgPath)) return false;
       try {
         const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
-        return !!(pkg.devDependencies?.jest || pkg.dependencies?.jest);
+        return !!(pkg.devDependencies?.jest ?? pkg.dependencies?.jest);
       } catch { return false; }
     },
   },

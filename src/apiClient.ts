@@ -11,6 +11,7 @@ import OpenAI from "openai";
 import https from "node:https";
 import { config } from "./config.js";
 import * as log from "./logger.js";
+import { initApiKeyPool, acquireKeyForStreaming, getPoolSize } from "./apiKeyPool.js";
 
 // ─── OpenAI Client (pointed at NVIDIA NIM) ──────────────────────────────────
 
@@ -550,6 +551,119 @@ export const TOOL_DEFINITIONS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
       },
     },
   },
+  {
+    type: "function",
+    function: {
+      name: "desfazer_edicao",
+      description:
+        "Desfaz a última edição aplicada via aplicar_diff / editar_arquivo no arquivo informado. " +
+        "Restaura o conteúdo do backup mais recente salvo automaticamente antes da edição. " +
+        "Cada chamada remove O backup mais recente da pilha — chamadas sucessivas desfezem edições mais antigas. " +
+        "Backups expiram após 5 minutos. " +
+        "Use quando uma edição introduzir um erro e você quiser voltar ao estado anterior.",
+      parameters: {
+        type: "object",
+        properties: {
+          caminho: { type: "string", description: "Caminho absoluto do arquivo a restaurar." },
+        },
+        required: ["caminho"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "listar_backups",
+      description:
+        "Lista os backups de rollback disponíveis. Se 'caminho' for fornecido, filtra apenas os backups daquele arquivo. " +
+        "Use para inspecionar o histórico de edições antes de desfazer.",
+      parameters: {
+        type: "object",
+        properties: {
+          caminho: { type: "string", description: "Caminho absoluto opcional para filtrar backups de um arquivo específico." },
+        },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "atualizar_estado",
+      description:
+        "Atualiza o arquivo TASK_STATE.md com o estado estruturado da tarefa. " +
+        "Use para manter registro do que já foi feito, do que falta, das decisões tomadas e dos bugs encontrados. " +
+        "O arquivo é lido automaticamente após compaction para que o modelo recupere o contexto. " +
+        "Todos os campos são opcionais — apenas os fornecidos serão atualizados.",
+      parameters: {
+        type: "object",
+        properties: {
+          title: { type: "string", description: "Título curto da tarefa atual." },
+          done: { type: "array", items: { type: "string" }, description: "Lista de itens concluídos (substitui a atual)." },
+          todo: { type: "array", items: { type: "string" }, description: "Lista de itens pendentes (substitui a atual)." },
+          decisions: { type: "array", items: { type: "string" }, description: "Decisões tomadas (com justificativa breve)." },
+          bugs: { type: "array", items: { type: "string" }, description: "Bugs encontrados (com arquivo:linha se possível)." },
+          dependencies: { type: "array", items: { type: "string" }, description: "Dependências ou bloqueadores." },
+          notes: { type: "string", description: "Notas livres." },
+        },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "marcar_feito",
+      description:
+        "Move um item de 'todo' para 'done' no TASK_STATE.md. " +
+        "Forneça uma substring que identifique o item — o primeiro 'todo' que contiver a substring será movido.",
+      parameters: {
+        type: "object",
+        properties: {
+          item: { type: "string", description: "Substring do item em 'todo' a ser marcado como feito." },
+        },
+        required: ["item"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "ler_estado",
+      description:
+        "Lê o conteúdo atual do TASK_STATE.md e retorna como string formatada. " +
+        "Use após context compaction para recuperar o estado da tarefa.",
+      parameters: { type: "object", properties: {} },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "explorar_subagente",
+      description:
+        "Spawna um sub-agente em-processo com contexto LIMPO para explorar o codebase e retornar apenas um resumo. " +
+        "Use para tarefas como 'entenda como o auth funciona', 'encontre todos os lugares que chamam X', 'mapeie o fluxo de Y'. " +
+        "O sub-agente tem apenas tools de leitura (ler_arquivo, buscar_texto, buscar_arquivos, parse_ast) e faz até 8 chamadas. " +
+        "Retorna resumo de 500-2000 tokens. DISPONÍVEL APENAS com effort=high ou max (consome tokens da mesma API key).",
+      parameters: {
+        type: "object",
+        properties: {
+          questao: { type: "string", description: "Pergunta específica que o sub-agente deve responder." },
+          cwd: { type: "string", description: "Diretório base para a exploração (default: cwd atual)." },
+          max_tool_calls: { type: "number", description: "Máximo de tool calls do sub-agente (default: 8)." },
+        },
+        required: ["questao"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "status_pool",
+      description:
+        "Mostra o status do pool de API keys (multi-key): quantas chaves ativas, chamadas por chave, erros 429, latência média. " +
+        "Use para diagnosticar problemas de rate limit ou verificar se o pool está funcionando.",
+      parameters: { type: "object", properties: {} },
+    },
+  },
 ];
 
 // ─── Main Chat Function ───────────────────────────────────────────────────────
@@ -570,6 +684,24 @@ const TRANSIENT_NETWORK_CODES = new Set([
   "ECONNRESET", "ETIMEDOUT", "ENOTFOUND",
   "EPIPE", "ECONNREFUSED", "EAI_AGAIN",
 ]);
+
+// Exported for use by sub-agents (so they can use the same retry heuristics)
+export const SUB_AGENT_MAX_CHAT_RETRIES = 2;  // outer-level chat() retries per call
+export const SUB_AGENT_MAX_NETWORK_RETRIES = MAX_NETWORK_RETRIES;
+export const SUB_AGENT_TRANSIENT_NETWORK_CODES = TRANSIENT_NETWORK_CODES;
+
+/** Returns true if the error is a transient network error that warrants a retry. */
+export function isTransientNetworkErrorPublic(err: unknown): boolean {
+  const anyErr = err as any;
+  const errCode = anyErr?.code ?? anyErr?.cause?.code;
+  return typeof errCode === "string" && TRANSIENT_NETWORK_CODES.has(errCode);
+}
+
+/** Returns true if the error is a 429 (rate limit). */
+export function is429ErrorPublic(err: unknown): boolean {
+  const status = (err as any)?.status ?? (err as any)?.response?.status;
+  return status === 429;
+}
 
 type ToolCallAccumulator = Record<number, {
   id: string;
@@ -605,13 +737,19 @@ function createStreamState(): StreamState {
 
 function createStreamRequest(
   messages: Message[],
-  tools?: OpenAI.Chat.Completions.ChatCompletionTool[]
+  tools?: OpenAI.Chat.Completions.ChatCompletionTool[],
+  clientOverride?: OpenAI
 ) {
-  return client.chat.completions.create({
+  const c = clientOverride ?? client;
+  return c.chat.completions.create({
     model: config.model,
     messages,
     tools: tools ?? TOOL_DEFINITIONS,
     tool_choice: "auto",
+    // IDEIA 6: NVIDIA NIM (OpenAI-compatible) supports parallel tool calls.
+    // Setting this explicitly tells the model it CAN batch multiple read-only
+    // tools in a single response, which we parallelize in processToolCalls.
+    parallel_tool_calls: true,
     stream: true,
     max_tokens: 16384,
     chat_template_kwargs: { thinking_mode: "enabled" },
@@ -684,7 +822,7 @@ function processStreamChunk(
 
   const delta = choice.delta ?? {};
 
-  const reasoning = delta.reasoning_content || ("reasoning" in delta ? delta.reasoning : undefined);
+  const reasoning = delta.reasoning_content ?? ("reasoning" in delta ? delta.reasoning : undefined);
   if (reasoning) {
     processReasoningChunk(state, onThinking);
     return;
@@ -817,14 +955,12 @@ function handleStreamError(
 }
 
 function isTransientNetworkError(err: unknown): boolean {
-  const anyErr = err as any;
-  const errCode = anyErr?.code || anyErr?.cause?.code;
-  return typeof errCode === "string" && TRANSIENT_NETWORK_CODES.has(errCode);
+  return isTransientNetworkErrorPublic(err);
 }
 
 function getErrCode(err: unknown): string {
   const anyErr = err as any;
-  return anyErr?.code || anyErr?.cause?.code || "unknown";
+  return anyErr?.code ?? anyErr?.cause?.code ?? "unknown";
 }
 
 async function handle429Error(
@@ -894,39 +1030,101 @@ export async function chat(
   onThinking?: () => void,
   tools?: OpenAI.Chat.Completions.ChatCompletionTool[]
 ): Promise<ChatResponse> {
-  let attempt = 0;
+  // IDEIA: Multi-key pool — if NVIDIA_API_KEYS is configured, use the pool
+  // instead of the single-key mutex+rateLimiter. Each call picks a free key,
+  // allowing sub-agents to run truly in parallel without contending.
+  const poolActive = getPoolSize() > 0 || initApiKeyPool();
 
+  if (poolActive) {
+    try {
+      return await chatWithPool(messages, tools, onStreamStart, onToken, onThinking);
+    } catch (err) {
+      // Pool acquisition failed entirely — fall back to single-key mode
+      log.warn(`[POOL] Falling back to single-key mode: ${(err as Error).message}`);
+    }
+  }
+  return chatSingleKey(messages, tools, onStreamStart, onToken, onThinking);
+}
+
+/** Pool-mode chat: pick a free key from the pool, run the request, release. */
+async function chatWithPool(
+  messages: Message[],
+  tools: OpenAI.Chat.Completions.ChatCompletionTool[] | undefined,
+  onStreamStart: (() => void) | undefined,
+  onToken: ((token: string) => void) | undefined,
+  onThinking: (() => void) | undefined
+): Promise<ChatResponse> {
+  let attempt = 0;
+  for (;;) {
+    const poolHandle = await acquireKeyForStreaming();
+    const start = Date.now();
+    let httpStatus: number | null = null;
+    // Definite assignment: assigned in BOTH try (true) and catch (false) paths
+    // before the finally block reads it.
+    let releaseSuccess!: boolean;
+    try {
+      log.debug(`Sending ${messages.length} messages to ${config.model} (pool mode)` +
+        (attempt > 0 ? ` (retry ${attempt}/${MAX_429_RETRIES})` : ""));
+      const rawStream = await createStreamRequest(messages, tools, poolHandle.client);
+      const state = createStreamState();
+      await consumeStream(rawStream, state, onStreamStart, onToken, onThinking);
+      const response = buildChatResponse(state);
+      releaseSuccess = true;
+      log.debug(
+        `Response: stop_reason=${response.choices[0]?.finish_reason}, ` +
+          `tokens=${response.usage?.total_tokens ?? "?"}`
+      );
+      return response;
+    } catch (err: unknown) {
+      releaseSuccess = false;
+      httpStatus = (err as any)?.status ?? null;
+      logApiDiagnostics(err, attempt);
+      // handleStreamError already sleeps internally (handle429Error / handleTransientNetworkError)
+      // so we just continue without an additional sleep.
+      const retryResult = await handleStreamError(err, attempt);
+      if (retryResult?.retried && attempt < MAX_429_RETRIES + MAX_NETWORK_RETRIES) {
+        attempt = retryResult.newAttempt;
+        continue;
+      }
+      throw err;
+    } finally {
+      poolHandle.release(releaseSuccess, httpStatus, Date.now() - start);
+    }
+  }
+}
+
+/** Single-key chat path — uses global mutex + rateLimiter (backwards compat). */
+async function chatSingleKey(
+  messages: Message[],
+  tools: OpenAI.Chat.Completions.ChatCompletionTool[] | undefined,
+  onStreamStart: (() => void) | undefined,
+  onToken: ((token: string) => void) | undefined,
+  onThinking: (() => void) | undefined
+): Promise<ChatResponse> {
+  let attempt = 0;
   for (;;) {
     await mutex.lock();
-
     try {
       await rateLimiter.acquire();
-
       log.debug(`Sending ${messages.length} messages to ${config.model}` +
         (attempt > 0 ? ` (retry ${attempt}/${MAX_429_RETRIES})` : ""));
-
       const rawStream = await createStreamRequest(messages, tools);
       const state = createStreamState();
       await consumeStream(rawStream, state, onStreamStart, onToken, onThinking);
-
       const response = buildChatResponse(state);
       log.debug(
         `Response: stop_reason=${response.choices[0]?.finish_reason}, ` +
           `tokens=${response.usage?.total_tokens ?? "?"}`
       );
       return response;
-
     } catch (err: unknown) {
       logApiDiagnostics(err, attempt);
-
       const retryResult = await handleStreamError(err, attempt);
       if (retryResult?.retried) {
         attempt = retryResult.newAttempt;
         continue;
       }
-
       throw err;
-
     } finally {
       mutex.unlock();
     }

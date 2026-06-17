@@ -24,15 +24,17 @@ vi.mock("../guardrail.js", () => ({
   validateSyntax: vi.fn().mockResolvedValue({ valid: true }),
 }));
 
-const { mockExecSync, mockWriteFileSync, realWriteFileSync } = vi.hoisted(() => {
+const { mockExecSync, mockWriteFileSync, realWriteFileSync, mockSpawn } = vi.hoisted(() => {
   const mockExecSync = vi.fn();
   const mockWriteFileSync = vi.fn();
   let realWriteFileSync: any;
-  return { mockExecSync, mockWriteFileSync, get realWriteFileSync() { return realWriteFileSync; } };
+  const mockSpawn = vi.fn();
+  return { mockExecSync, mockWriteFileSync, get realWriteFileSync() { return realWriteFileSync; }, mockSpawn };
 });
 
 vi.mock("node:child_process", () => ({
   get execSync() { return mockExecSync; },
+  get spawn() { return mockSpawn; },
 }));
 
 vi.mock("node:fs", async () => {
@@ -272,62 +274,77 @@ describe("lerArquivo", () => {
 // ─── executarComando Tests ────────────────────────────────────────────────
 
 import { executarComando } from "../tools.js";
+import { EventEmitter } from "node:events";
+
+/** Build a fake spawn() child process that emits stdout/stderr + close. */
+function makeFakeChild(opts: {
+  stdout?: string;
+  stderr?: string;
+  exitCode?: number;
+  error?: Error;
+  closeDelayMs?: number;
+}): { child: EventEmitter; stdout: NodeJS.EventEmitter; stderr: NodeJS.EventEmitter } {
+  const child = new EventEmitter() as EventEmitter & { kill?: () => void; stdin?: { write: () => void } };
+  const stdout = new EventEmitter() as NodeJS.EventEmitter & { emit: any };
+  const stderr = new EventEmitter() as NodeJS.EventEmitter & { emit: any };
+  (child as any).stdout = stdout;
+  (child as any).stderr = stderr;
+  (child as any).stdin = { write: () => true };
+  (child as any).kill = () => { /* no-op */ };
+
+  const delay = opts.closeDelayMs ?? 5;
+  setTimeout(() => {
+    if (opts.error) {
+      child.emit("error", opts.error);
+      return;
+    }
+    if (opts.stdout) stdout.emit("data", Buffer.from(opts.stdout, "utf8"));
+    if (opts.stderr) stderr.emit("data", Buffer.from(opts.stderr, "utf8"));
+    child.emit("close", opts.exitCode ?? 0);
+  }, delay);
+
+  return { child: child as any, stdout: stdout as any, stderr: stderr as any };
+}
 
 describe("executarComando", () => {
   beforeEach(() => {
     mockExecSync.mockReset();
+    mockSpawn.mockReset();
   });
 
   it("executes a simple command", async () => {
-    mockExecSync.mockReturnValue("hello\n");
+    mockSpawn.mockImplementation(() => makeFakeChild({ stdout: "hello\n", exitCode: 0 }).child);
     const result = await executarComando({ comando: "echo hello" });
     expect(result).toContain("hello");
-    expect(mockExecSync).toHaveBeenCalledWith("echo hello", expect.objectContaining({
-      encoding: "utf8",
-      timeout: 30000,
+    expect(mockSpawn).toHaveBeenCalledWith("echo hello", expect.objectContaining({
+      shell: expect.any(String),
     }));
   });
 
-  it("handles failing command", async () => {
-    const err = new Error("Command failed") as any;
-    err.stdout = "";
-    err.stderr = "error output";
-    err.message = "Command failed with exit code 1";
-    mockExecSync.mockImplementation(() => { throw err; });
+  it("handles failing command (exit non-zero)", async () => {
+    mockSpawn.mockImplementation(() => makeFakeChild({
+      stdout: "",
+      stderr: "error output",
+      exitCode: 1,
+    }).child);
     const result = await executarComando({ comando: "exit 1" });
     expect(result).toContain("[ERRO]");
-    expect(result).toContain("Comando falhou");
     expect(result).toContain("error output");
   });
 
-  it("handles command that times out", async () => {
-    const err = new Error("spawnSync timeout") as any;
-    err.stdout = "partial output";
-    err.stderr = "timeout error";
-    err.message = "spawnSync timeout";
-    mockExecSync.mockImplementation(() => { throw err; });
-    const result = await executarComando({ comando: "sleep 60" });
-    expect(result).toContain("[ERRO]");
-    expect(result).toContain("partial output");
-    expect(result).toContain("timeout error");
-  });
-
-  it("handles process throw with stdout and stderr", async () => {
-    const err = new Error("process failed") as any;
-    err.stdout = "some stdout output";
-    err.stderr = "some stderr output";
-    mockExecSync.mockImplementation(() => { throw err; });
+  it("handles spawn error event", async () => {
+    mockSpawn.mockImplementation(() => makeFakeChild({
+      error: new Error("ENOENT"),
+    }).child);
     const result = await executarComando({ comando: "bad command" });
     expect(result).toContain("[ERRO]");
-    expect(result).toContain("some stdout output");
-    expect(result).toContain("some stderr output");
+    expect(result).toContain("ENOENT");
   });
 
-  it("handles process throw with only message (no stdout/stderr)", async () => {
-    mockExecSync.mockImplementation(() => { throw new Error("pure error"); });
-    const result = await executarComando({ comando: "bad command" });
-    expect(result).toContain("[ERRO]");
-    expect(result).toContain("pure error");
+  it("returns OK message when command produces no output", async () => {
+    mockSpawn.mockImplementation(() => makeFakeChild({ stdout: "", stderr: "", exitCode: 0 }).child);
+    const result = await executarComando({ comando: "true" });
+    expect(result).toContain("[OK]");
   });
 });
 
@@ -409,8 +426,16 @@ const x = 2;
     const filePath = path.join(testDir, "writefail.ts");
     // Write the original file using the real fs
     getRealWriteFileSync()(filePath, "const x = 1;");
-    // Now make writeFileSync throw for subsequent calls
-    mockWriteFileSync.mockImplementationOnce(() => { throw new Error("disk full"); });
+    // Now make writeFileSync throw for any call touching the test file path.
+    // (saveBackup also calls writeFileSync, so we need to throw for ALL subsequent calls,
+    // not just the first one.)
+    mockWriteFileSync.mockImplementation((p: string) => {
+      if (typeof p === "string" && p.includes("writefail.ts")) {
+        throw new Error("disk full");
+      }
+      // allow backup writes to .rollback/ to succeed
+      return (getRealWriteFileSync() as any)(...arguments);
+    });
 
     const diff = `<<<<<<< SEARCH
 const x = 1;
@@ -421,6 +446,9 @@ const x = 2;
     expect(result.written).toBe(false);
     expect(result.toolMessage).toContain("ERRO");
     expect(result.toolMessage).toContain("Falha ao escrever");
+    // Restore default implementation for subsequent tests
+    mockWriteFileSync.mockReset();
+    mockWriteFileSync.mockImplementation((...args: any[]) => (getRealWriteFileSync() as any)(...args));
   });
 
   it("returns advisory warning when post-write validation fails", async () => {

@@ -78,6 +78,12 @@ const GRAMMAR_TO_EXT: Record<string, string> = {
   "tree-sitter-java": ".java",
 };
 
+/** Detect whether an import statement is a default import. */
+function isDefaultImport(text: string): boolean {
+  if (text.includes("import default")) return true;
+  return /import\s+\w+\s+from/.test(text);
+}
+
 async function initParser(): Promise<void> {
   if (parserInitialized) return;
 
@@ -384,7 +390,7 @@ function extractImports(tree: any, sourceCode: string, langName: string): Import
     const moduleMatch = /(?:from\s+|require\s*\(\s*|import\s+)(?:["'`])([^"'`]+)(?:["'`])/.exec(text);
     const module = moduleMatch?.[1] ?? "";
 
-    const isDefault = text.includes("import default") || /import\s+\w+\s+from/.exec(text);
+    const isDefault = isDefaultImport(text);
     const isTypeOnly = text.includes("type ") && text.includes("import");
 
     const symbols: string[] = [];

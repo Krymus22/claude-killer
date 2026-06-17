@@ -42,17 +42,43 @@ function optionalFloat(key: string, fallback: number): number {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+// ─── Validate: at least one key source must be set ─────────────────────────
+
+const hasSingleKey = process.env.NVIDIA_API_KEY?.trim();
+const hasMultiKeys = process.env.NVIDIA_API_KEYS?.trim();
+const hasKeysFile = process.env.NVIDIA_API_KEYS_FILE?.trim();
+
+if (!hasSingleKey && !hasMultiKeys && !hasKeysFile) {
+  console.error(
+    `\n❌  Missing NVIDIA API key configuration.\n` +
+    `   Set ONE of:\n` +
+    `     NVIDIA_API_KEY=nvapi-xxx        (single key, 40 RPM, 1 concurrent)\n` +
+    `     NVIDIA_API_KEYS=nvapi-x1,nvapi-x2,nvapi-x3   (multi-key pool, N x 40 RPM)\n` +
+    `     NVIDIA_API_KEYS_FILE=/path/to/keys.txt       (one key per line)\n`
+  );
+  process.exit(1);
+}
+
 // ─── Exported Config ────────────────────────────────────────────────────────
 
 export const config = {
-  /** NVIDIA NIM API key (required). */
-  nvidiaApiKey: requireEnv("NVIDIA_API_KEY"),
+  /** NVIDIA NIM API key (required if NVIDIA_API_KEYS not set). */
+  nvidiaApiKey: process.env.NVIDIA_API_KEY ?? "",
+
+  /**
+   * Multi-key pool (optional). Comma-separated list of NVIDIA API keys
+   * for parallel requests. Each key gets its own 40 RPM / 1 concurrent quota.
+   * Set NVIDIA_API_KEYS or NVIDIA_API_KEYS_FILE to enable multi-key mode.
+   * Falls back to NVIDIA_API_KEY (single-key) if not set.
+   */
+  nvidiaApiKeys: process.env.NVIDIA_API_KEYS ?? "",
+  nvidiaApiKeysFile: process.env.NVIDIA_API_KEYS_FILE ?? "",
 
   /** Base URL for the NVIDIA NIM OpenAI-compatible endpoint. */
   nvidiaBaseUrl: "https://integrate.api.nvidia.com/v1",
 
   /** Model identifier for the model on NVIDIA NIM. */
-  model: process.env.MODEL || "moonshotai/kimi-k2.6",
+  model: process.env.MODEL ?? "moonshotai/kimi-k2.6",
 
   /**
    * Maximum requests per minute the CLI is allowed to send.

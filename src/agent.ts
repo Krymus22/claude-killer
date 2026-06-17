@@ -19,7 +19,6 @@
 import OpenAI from "openai";
 import { chat, TOOL_DEFINITIONS } from "./apiClient.js";
 import * as history from "./history.js";
-import { lerArquivo, aplicarDiff, executarComando } from "./tools.js";
 import { executePreToolCallHooks, executePostToolCallHooks } from "./hooks.js";
 import { getMCPToolDefinitions, callMCPTool } from "./extensions.js";
 import * as log from "./logger.js";
@@ -58,6 +57,26 @@ import {
   type Tool,
 } from "./externalTools.js";
 import { executeTrigger, type TriggerContext } from "./extensionCenter.js";
+import { think, THINK_TOOL_DEFINITION } from "./thinkTool.js";
+import { checkReadBeforeWrite, recordRead } from "./readBeforeWrite.js";
+import { validateToolCall, formatValidationErrors } from "./toolSchemaValidation.js";
+import { desfazerEdicao, listarBackups, aplicarDiff, executarComando, lerArquivo } from "./tools.js";
+import { pokaYokeCheck, EXPANDED_TOOL_DESCRIPTIONS } from "./pokaYoke.js";
+import { runQualityGate, resetGateState, isStrictModeEnabled } from "./strictQualityGate.js";
+import { getContextInjection, resetContextInjection } from "./contextInjector.js";
+import { shouldSelfValidate, injectSelfValidationPrompt, resetSelfValidation } from "./selfValidation.js";
+import { getEffortLevel, setEffortLevel } from "./effortLevels.js";
+import { runSubAgent } from "./subAgents.js";
+import { generateTestSuggestionForFile, resetAutoTestSuggestions } from "./autoTestGenerator.js";
+import { formatPoolStats, getPoolSize } from "./apiKeyPool.js";
+import {
+  initTaskStateFromUserMessage,
+  updateTaskState,
+  readTaskState,
+  getTaskStateSummary,
+  appendTaskStateItem,
+  type TaskState,
+} from "./taskState.js";
 
 type ToolCall = OpenAI.Chat.Completions.ChatCompletionMessageToolCall;
 type ToolResult = { resultStr: string; usedHeal: boolean };
@@ -71,6 +90,12 @@ let sessionFileChanges: FileChange[] = [];
 let sessionToolsUsed: string[] = [];
 let sessionStartTime = "";
 let lastCheckpointTokens = 0;
+/** Paths touched by write tools in the current turn — used by the strict quality gate */
+let turnTouchedFiles: Set<string> = new Set();
+/** Counter of stop_reason hits in the current turn (for quality gate loop) */
+let turnStopHits = 0;
+/** Max stops per turn (safety) */
+const MAX_STOPS_PER_TURN = 12;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -93,13 +118,24 @@ function asString(val: unknown, fallback = ""): string {
 function getMergedTools(): OpenAI.Chat.Completions.ChatCompletionTool[] {
   const mcpTools = getMCPToolDefinitions();
   const externalTools = getExternalToolDefinitions();
-  
+
   const allTools = [...TOOL_DEFINITIONS, ...externalTools];
-  
+  allTools.push(THINK_TOOL_DEFINITION);
+
   if (mcpTools.length > 0) {
     allTools.push(...mcpTools);
   }
-  
+
+  // 3.8 Poka-Yoke: append expanded descriptions (with examples + edge cases)
+  // to the tool definitions so the model has concrete guidance.
+  for (const tool of allTools) {
+    const name = tool.function.name;
+    const extra = EXPANDED_TOOL_DESCRIPTIONS[name];
+    if (extra) {
+      tool.function.description = (tool.function.description ?? "") + extra;
+    }
+  }
+
   return allTools;
 }
 
@@ -567,9 +603,118 @@ const toolHandlers: Record<string, ToolHandler> = {
     
     return { resultStr: output, usedHeal: false };
   },
+
+  // ─── Think Tool (3.1) ────────────────────────────────────────────────────
+  "pensar": async (args) => {
+    const result = await think({
+      pensamento: asString(args.pensamento),
+      categoria: asString(args.categoria, "general"),
+    });
+    // Update task state based on thinking category
+    if (args.categoria === "planning" && asString(args.pensamento).length > 20) {
+      // Heuristic: capture planning thoughts as a decision
+      const snippet = asString(args.pensamento).slice(0, 200).replaceAll("\n", " ");
+      appendTaskStateItem("decisions", `[plan] ${snippet}`);
+    }
+    return { resultStr: result.message, usedHeal: false };
+  },
+
+  // ─── Rollback Tools (3.3) ────────────────────────────────────────────────
+  "desfazer_edicao": async (args) => {
+    const result = desfazerEdicao({ caminho: asString(args.caminho ?? args.path) });
+    return { resultStr: result, usedHeal: false };
+  },
+
+  "listar_backups": async (args) => {
+    const result = listarBackups({ caminho: args.caminho ? asString(args.caminho) : undefined });
+    return { resultStr: result, usedHeal: false };
+  },
+
+  // ─── Task State Tools (3.7) ──────────────────────────────────────────────
+  "atualizar_estado": async (args) => {
+    const patch: Partial<TaskState> = {};
+    if (args.title) patch.title = asString(args.title);
+    if (Array.isArray(args.done)) patch.done = args.done as string[];
+    if (Array.isArray(args.todo)) patch.todo = args.todo as string[];
+    if (Array.isArray(args.decisions)) patch.decisions = args.decisions as string[];
+    if (Array.isArray(args.bugs)) patch.bugs = args.bugs as string[];
+    if (Array.isArray(args.dependencies)) patch.dependencies = args.dependencies as string[];
+    if (args.notes) patch.notes = asString(args.notes);
+    const updated = updateTaskState(patch);
+    return {
+      resultStr: `[SUCESSO] TASK_STATE.md atualizado em ${updated.updatedAt}.\n` +
+        `Done: ${updated.done.length} | Todo: ${updated.todo.length} | Decisions: ${updated.decisions.length} | Bugs: ${updated.bugs.length}`,
+      usedHeal: false,
+    };
+  },
+
+  "marcar_feito": async (args) => {
+    const item = asString(args.item);
+    if (!item) {
+      return { resultStr: "[ERRO] 'item' é obrigatório (substring do item em todo).", usedHeal: false };
+    }
+    const { markTaskItemDone } = await import("./taskState.js");
+    const updated = markTaskItemDone(item);
+    return {
+      resultStr: `[SUCESSO] Item movido para 'done': "${item}".\nTodo restante: ${updated.todo.length}`,
+      usedHeal: false,
+    };
+  },
+
+  "ler_estado": async () => {
+    const summary = getTaskStateSummary();
+    return {
+      resultStr: summary ?? "[INFO] Nenhum TASK_STATE.md encontrado. Use atualizar_estado para criar.",
+      usedHeal: false,
+    };
+  },
+
+  // ─── IDEIA 5: Sub-agent for isolated exploration ────────────────────────
+  "explorar_subagente": async (args) => {
+    const question = asString(args.questao ?? args.question);
+    if (!question) {
+      return { resultStr: "[ERRO] 'questao' é obrigatória (pergunta para o sub-agente explorar).", usedHeal: false };
+    }
+    const cwd = args.cwd ? asString(args.cwd) : undefined;
+    const maxCalls = args.max_tool_calls as number | undefined;
+    const result = await runSubAgent({ question, cwd, maxToolCalls: maxCalls });
+    if (result === null) {
+      return {
+        resultStr: "[INFO] Sub-agente não executou (effort level muito baixo ou falhou). Use effort=high ou max para habilitar.",
+        usedHeal: false,
+      };
+    }
+    return { resultStr: result, usedHeal: false };
+  },
+
+  // ─── Multi-key pool status (IDEIA Fase 1) ──────────────────────────────
+  "status_pool": async () => {
+    if (getPoolSize() === 0) {
+      return {
+        resultStr: "[POOL] Modo single-key (apenas NVIDIA_API_KEY configurada). Para ativar multi-key, defina NVIDIA_API_KEYS (comma-separated).",
+        usedHeal: false,
+      };
+    }
+    return { resultStr: formatPoolStats(), usedHeal: false };
+  },
 };
 
 // ─── Tool Dispatcher ──────────────────────────────────────────────────────────
+
+/**
+ * Map tool name → JSON Schema (used for argument validation).
+ * Built once at startup from TOOL_DEFINITIONS + THINK_TOOL_DEFINITION + MCP tools.
+ */
+function getToolSchemaMap(): Map<string, Record<string, unknown>> {
+  const map = new Map<string, Record<string, unknown>>();
+  const all = getMergedTools();
+  for (const t of all) {
+    if (t?.function?.name && t?.function?.parameters) {
+      map.set(t.function.name, t.function.parameters as Record<string, unknown>);
+    }
+  }
+  return map;
+}
 
 async function dispatchToolCall(
   toolCall: ToolCall,
@@ -579,34 +724,33 @@ async function dispatchToolCall(
   const startTime = Date.now();
 
   const rawArgs = parseArgs(toolCall.function.arguments);
-  const preResult = await executePreToolCallHooks(name, rawArgs);
-  if (preResult.skip) {
+  const finalArgs = await resolvePreCallHooks(name, rawArgs);
+  if (finalArgs === null) {
+    // Pre-hook skipped — the override is already in resultOverride
+    const preResult = await executePreToolCallHooks(name, rawArgs);
     return { resultStr: preResult.resultOverride ?? `[HOOK] Tool "${name}" skipped by pre-hook.`, usedHeal: false };
   }
-  const finalArgs = preResult.modifiedArgs ?? rawArgs;
 
+  // ── Run gate chain: schema → poka-yoke → read-before-write ────────────
+  const gateBlock = runDispatchGates(name, finalArgs);
+  if (gateBlock) return { resultStr: gateBlock, usedHeal: false };
+
+  // ── Track reads + touched files ───────────────────────────────────────
+  trackFileAccess(name, finalArgs);
+
+  // ── Cache check ───────────────────────────────────────────────────────
   const cached = shouldCacheResult(name) ? readOnlyCache.get(name, finalArgs) : null;
   if (cached !== null) {
     recordToolCall(name, Date.now() - startTime, true);
     return { resultStr: cached, usedHeal: false };
   }
 
-  const handler = toolHandlers[name];
-  let result: ToolResult;
-  if (handler) {
-    result = await handler(finalArgs, toolCall, healRetry);
-  } else if (name.includes("__")) {
-    result = { resultStr: await callMCPTool(name, finalArgs), usedHeal: false };
-  } else {
-    const unknown = `[ERRO] Ferramenta desconhecida: "${name}"`;
-    log.error(unknown);
-    result = { resultStr: unknown, usedHeal: false };
-  }
+  // ── Execute handler ───────────────────────────────────────────────────
+  const result = await executeHandler(name, finalArgs, toolCall, healRetry);
 
   if (shouldCacheResult(name)) {
     readOnlyCache.set(name, finalArgs, result.resultStr);
   }
-
   recordToolCall(name, Date.now() - startTime, true);
 
   const postResult = await executePostToolCallHooks(name, finalArgs, result.resultStr);
@@ -614,18 +758,105 @@ async function dispatchToolCall(
     result.resultStr = postResult.modifiedResult;
   }
 
+  // ── IDEIA 1: Auto-inject TASK_STATE context before next decision ──────
+  // Anthropic's Fable 5 reads its own notes before each decision; we
+  // replicate this by appending a compact state snapshot to write/command
+  // tool results so the model re-aligns with its plan.
+  const ctxInjection = getContextInjection(name);
+  if (ctxInjection) {
+    result.resultStr += ctxInjection;
+  }
+
+  // ── IDEIA 7: After successful file edits, suggest generating a test ───
+  // Skip Luau/Roblox and other unsupported extensions explicitly.
+  if (WRITE_FILE_TOOLS.has(name) && !result.resultStr.startsWith("[ERRO") && !result.resultStr.startsWith("[BLOQUEADO")) {
+    const editedPath = asString(finalArgs.caminho ?? finalArgs.path ?? finalArgs.filePath ?? "");
+    if (editedPath) {
+      const testSuggestion = generateTestSuggestionForFile(editedPath);
+      if (testSuggestion) {
+        result.resultStr += testSuggestion;
+      }
+    }
+  }
+
   return result;
+}
+
+/** Returns the (possibly modified) args, or null if the pre-hook skipped the call. */
+async function resolvePreCallHooks(name: string, rawArgs: Record<string, unknown>): Promise<Record<string, unknown> | null> {
+  const preResult = await executePreToolCallHooks(name, rawArgs);
+  if (preResult.skip) return null;
+  return preResult.modifiedArgs ?? rawArgs;
+}
+
+/** Run schema validation, poka-yoke, and read-before-write gates. Returns an error string if blocked, else null. */
+function runDispatchGates(name: string, args: Record<string, unknown>): string | null {
+  const schemaBlock = runSchemaGate(name, args);
+  if (schemaBlock) return schemaBlock;
+
+  const pyResult = pokaYokeCheck(name, args);
+  if (!pyResult.ok) return pyResult.error ?? "[POKA-YOKE] Blocked.";
+
+  const rbwResult = checkReadBeforeWrite(name, args);
+  if (!rbwResult.allowed) return rbwResult.message ?? "[BLOCKED] Read-before-write check failed.";
+
+  return null;
+}
+
+function runSchemaGate(name: string, args: Record<string, unknown>): string | null {
+  const schema = getToolSchemaMap().get(name);
+  if (!schema) return null;
+  const vr = validateToolCall(name, args, schema as unknown as Parameters<typeof validateToolCall>[2]);
+  if (!vr.valid) {
+    log.warn(`[SCHEMA] Blocked ${name}: ${vr.errors.length} error(s)`);
+    return formatValidationErrors(name, vr.errors);
+  }
+  return null;
+}
+
+/** Track read accesses and touched files for read-before-write + strict quality gate. */
+function trackFileAccess(name: string, args: Record<string, unknown>): void {
+  const filePath = asString(args.caminho ?? args.path ?? args.filePath ?? "");
+  if (!filePath) return;
+  if (READ_ONLY_TOOLS.has(name)) {
+    recordRead(name, filePath);
+  }
+  if (WRITE_FILE_TOOLS.has(name)) {
+    const resolved = pokaYokeCheck(name, args).resolvedPath ?? filePath;
+    turnTouchedFiles.add(resolved);
+  }
+}
+
+async function executeHandler(name: string, args: Record<string, unknown>, toolCall: ToolCall, healRetry: number): Promise<ToolResult> {
+  const handler = toolHandlers[name];
+  if (handler) return handler(args, toolCall, healRetry);
+  if (name.includes("__")) return { resultStr: await callMCPTool(name, args), usedHeal: false };
+  const unknown = `[ERRO] Ferramenta desconhecida: "${name}"`;
+  log.error(unknown);
+  return { resultStr: unknown, usedHeal: false };
 }
 
 // ─── Tool Call Processing ─────────────────────────────────────────────────────
 
 const READ_ONLY_TOOLS = new Set([
   "ler_arquivo", "ler_arquivo_avancado", "buscar_arquivos", "buscar_texto",
-  "git_status", "git_log", "git_diff",
+  "git_status", "git_log", "git_diff", "parse_ast",
+  // IDEIA 5: explorar_subagente is read-only (only reads code, never edits)
+  // and benefits from parallel execution with other read-only tools.
+  "explorar_subagente",
+  // Multi-key pool status is read-only and side-effect-free.
+  "status_pool",
+  // Task state read is read-only.
+  "ler_estado",
 ]);
 
 const FILE_TOOLS = new Set([
-  "aplicar_diff", "editar_arquivo", "multi_edit",
+  "aplicar_diff", "editar_arquivo", "editar_multi_arquivos",
+]);
+
+/** File-mutating tools — used to populate turnTouchedFiles for the strict quality gate */
+const WRITE_FILE_TOOLS = new Set([
+  "aplicar_diff", "editar_arquivo", "editar_multi_arquivos", "desfazer_edicao",
 ]);
 
 async function executeReadOnlyCallsInParallel(toolCalls: ToolCall[]): Promise<void> {
@@ -748,26 +979,7 @@ async function sendAndProcess(
     throw new Error("Agent loop exceeded maximum depth (20). Possible runaway detected.");
   }
 
-  const compaction = smartCompact(config.contextWindowTokens * 0.75);
-  if (compaction.compacted) {
-    log.debug(`Context compacted: saved ${compaction.savedTokens} tokens`);
-  }
-
-  // Check if we should write a checkpoint
-  const currentTokens = history.estimateTokens?.() ?? 0;
-  if (shouldWriteCheckpoint(currentTokens) && currentTokens > lastCheckpointTokens + 1000) {
-    const checkpoint = createCheckpoint(
-      sessionStartTime,
-      history.getHistory().map((m) => ({ role: m.role, content: typeof m.content === "string" ? m.content : "" })),
-      sessionFileChanges,
-      sessionToolsUsed
-    );
-    const { writeCheckpoint } = await import("./memory.js");
-    writeCheckpoint(memoryConfig, checkpoint);
-    lastCheckpointTokens = currentTokens;
-    log.debug(`Checkpoint saved at ${currentTokens} tokens`);
-  }
-
+  await runPreTurnMaintenance();
   history.optimizeContext();
 
   const response = await withRetry(
@@ -782,18 +994,12 @@ async function sendAndProcess(
 
   if (response.usage && onUsage) onUsage(response.usage);
   const choice = response.choices[0];
-  if (!choice) {
-    throw new Error("Empty response from NVIDIA NIM API");
-  }
+  if (!choice) throw new Error("Empty response from NVIDIA NIM API");
 
   const { message, finish_reason } = choice;
   history.addRawAssistantMessage(message);
 
-  // ── Trigger: always (every iteration) ────────────────────────────────
-  const triggerCtx: TriggerContext = { cwd: process.cwd() };
-  executeTrigger("always", triggerCtx).catch((err) => {
-    log.warn(`Always trigger failed: ${(err as Error).message}`);
-  });
+  fireTrigger("always");
 
   if (finish_reason === "tool_calls" && message.tool_calls?.length) {
     log.debug(`Model requested ${message.tool_calls.length} tool call(s)`);
@@ -801,12 +1007,96 @@ async function sendAndProcess(
     return sendAndProcess(depth + 1, onStreamStart, onToken, onThinking, onUsage);
   }
 
-  // ── Trigger: on_task (task complete) ─────────────────────────────────
-  executeTrigger("on_task", triggerCtx).catch((err) => {
-    log.warn(`On-task trigger failed: ${(err as Error).message}`);
-  });
+  // ── Stop-reason branch: quality gate + task state ──────────────────────
+  const recurseReason = await handleStopReason(message);
+  if (recurseReason) {
+    return sendAndProcess(depth + 1, onStreamStart, onToken, onThinking, onUsage);
+  }
 
+  // Reset turn-level counters for the next user turn
+  turnTouchedFiles = new Set();
+  turnStopHits = 0;
+
+  fireTrigger("on_task");
   return message.content ?? "(resposta vazia)";
+}
+
+/** Pre-turn maintenance: context compaction + checkpoint write. */
+async function runPreTurnMaintenance(): Promise<void> {
+  const compaction = smartCompact(config.contextWindowTokens * 0.75);
+  if (compaction.compacted) {
+    log.debug(`Context compacted: saved ${compaction.savedTokens} tokens`);
+  }
+  await maybeWriteCheckpoint();
+}
+
+async function maybeWriteCheckpoint(): Promise<void> {
+  const currentTokens = history.estimateTokens?.() ?? 0;
+  if (!shouldWriteCheckpoint(currentTokens) || currentTokens <= lastCheckpointTokens + 1000) return;
+  const checkpoint = createCheckpoint(
+    sessionStartTime,
+    history.getHistory().map((m) => ({ role: m.role, content: typeof m.content === "string" ? m.content : "" })),
+    sessionFileChanges,
+    sessionToolsUsed
+  );
+  const { writeCheckpoint } = await import("./memory.js");
+  writeCheckpoint(memoryConfig, checkpoint);
+  lastCheckpointTokens = currentTokens;
+  log.debug(`Checkpoint saved at ${currentTokens} tokens`);
+}
+
+function fireTrigger(name: "always" | "on_task"): void {
+  const triggerCtx: TriggerContext = { cwd: process.cwd() };
+  executeTrigger(name, triggerCtx).catch((err) => {
+    log.warn(`${name} trigger failed: ${(err as Error).message}`);
+  });
+}
+
+/**
+ * Handle a stop_reason. Returns true if the agent should recurse (continue working),
+ * false if the turn is complete and may finish.
+ */
+async function handleStopReason(message: { content?: string | null }): Promise<boolean> {
+  turnStopHits++;
+
+  // IDEIA 2: Self-validation — force the model to reflect before finishing.
+  // Must run BEFORE the strict quality gate so the model can fix issues
+  // it discovers during reflection before we measure with tsc/lint.
+  if (shouldSelfValidate(turnTouchedFiles.size)) {
+    injectSelfValidationPrompt([...turnTouchedFiles]);
+    return true; // recurse so the model runs the validation
+  }
+
+  // Strict quality gate — may inject errors and force a recursion
+  const gateBlocked = await runStrictGateIfActive();
+  if (gateBlocked) return true;
+
+  // Update TASK_STATE.md
+  updateTaskStateOnStop(message);
+
+  return false;
+}
+
+async function runStrictGateIfActive(): Promise<boolean> {
+  if (turnStopHits > MAX_STOPS_PER_TURN) return false;
+  if (!isStrictModeEnabled() || turnTouchedFiles.size === 0) return false;
+  const gateResult = await runQualityGate([...turnTouchedFiles]);
+  if (gateResult.allowed || !gateResult.errorLog) return false;
+  log.warn(`[STRICT_GATE] Blocking finish #${turnStopHits} — injecting errors into context.`);
+  history.addSystemMessage(gateResult.errorLog);
+  return true;
+}
+
+function updateTaskStateOnStop(message: { content?: string | null }): void {
+  try {
+    const summary = message.content?.slice(0, 200).replaceAll("\n", " ").trim();
+    if (summary) appendTaskStateItem("done", `[turn] ${summary}`);
+    if (readTaskState()) {
+      updateTaskState({ notes: `Last update at turn end (${new Date().toISOString()}).` });
+    }
+  } catch (err) {
+    log.debug(`[TASK_STATE] Update on stop failed: ${(err as Error).message}`);
+  }
 }
 
 // ─── Public Entry Point ───────────────────────────────────────────────────────
@@ -823,6 +1113,24 @@ export async function runAgentLoop(
   sessionFileChanges = [];
   sessionToolsUsed = [];
   lastCheckpointTokens = 0;
+  turnTouchedFiles = new Set();
+  turnStopHits = 0;
+  resetGateState();
+  resetContextInjection();
+  resetSelfValidation();
+  resetAutoTestSuggestions();
+  setEffortLevel(getEffortLevel()); // refresh system prompt with current effort
+
+  // 3.7: Initialize TASK_STATE.md from the user's first message
+  try {
+    initTaskStateFromUserMessage(userInput);
+    const summary = getTaskStateSummary();
+    if (summary) {
+      history.addSystemMessage(summary);
+    }
+  } catch (err) {
+    log.debug(`[TASK_STATE] Init failed: ${(err as Error).message}`);
+  }
 
   // Initialize external tools system
   await initializeTools();

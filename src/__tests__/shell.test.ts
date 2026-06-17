@@ -3,6 +3,8 @@
  */
 
 import { describe, it, expect } from "vitest";
+import * as os from "node:os";
+import * as path from "node:path";
 import { runShell, runShellSync } from "../shell.js";
 
 describe("runShell", () => {
@@ -25,7 +27,9 @@ describe("runShell", () => {
   });
 
   it("should respect cwd option", async () => {
-    const result = await runShell({ command: "node -v", cwd: "C:\\" });
+    // Use a cross-platform temp directory instead of Windows-specific "C:\\"
+    const tmpDir = os.tmpdir();
+    const result = await runShell({ command: "node -v", cwd: tmpDir });
     expect(result.exitCode).toBe(0);
   });
 

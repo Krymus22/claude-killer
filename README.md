@@ -14,9 +14,19 @@ Uma ferramenta de linha de comando que conecta o modelo Kimi K2.6 ao seu reposit
 | **Mutex de Concorrência** | Máximo de 1 requisição em andamento — a segunda espera na fila |
 | **Rate Limiter** | Janela deslizante de 60 s — nunca ultrapassa N rpm (padrão: 40) |
 | **Histórico Stateless** | Array em memória enviado completo a cada requisição |
-| **Tool Calling** | `ler_arquivo` e `aplicar_diff` com suporte a function calling nativo |
+| **Tool Calling** | `ler_arquivo`, `aplicar_diff`, `desfazer_edicao`, `executar_comando` e mais |
 | **Loop do Agente** | Ciclo ReAct automático: chama tools → recebe resultado → continua |
 | **Guardrail Anti-Alucinação** | Valida sintaxe antes de salvar; auto-cura em até 3 tentativas |
+| **Think Tool (pensar)** | Espaço estruturado de raciocínio obrigatório antes de cada escrita |
+| **Read-before-Write** | Gate programático: bloqueia editar arquivos não lidos antes |
+| **Rollback automático** | Backup de cada edição em `.rollback/` + tool `desfazer_edicao` |
+| **Strict Quality Gate** | `tsc --noEmit` + `npm run lint` obrigatórios antes de finish_reason (STRICT_MODE) |
+| **Tool Schema Validation** | Validação de argumentos contra JSON Schema antes de executar |
+| **Poka-Yoke** | Paths absolutos obrigatórios, descrições expandidas com exemplos |
+| **Structured Note-Taking** | `TASK_STATE.md` (feito/falta/decisões/bugs/dependências) atualizado a cada turno |
+| **Async Command Execution** | `executar_comando` usa `spawn` com streaming — não bloqueia o event loop |
+| **LSP Integration** | Conecta a tsserver/pylsp reais, com fallback para tree-sitter |
+| **TASK_STATE Tools** | `atualizar_estado`, `marcar_feito`, `ler_estado` |
 
 ---
 
@@ -25,18 +35,50 @@ Uma ferramenta de linha de comando que conecta o modelo Kimi K2.6 ao seu reposit
 ```
 claude-killer/
 ├── src/
-│   ├── index.ts       ← Entry point: REPL, banner, slash commands
-│   ├── agent.ts       ← Loop do agente ReAct (orquestra tool calls)
-│   ├── apiClient.ts   ← Cliente NVIDIA NIM com Mutex + Rate Limiter
-│   ├── history.ts     ← Gerenciador de histórico em memória
-│   ├── tools.ts       ← ler_arquivo / aplicar_diff com guardrail
-│   ├── guardrail.ts   ← Validação de sintaxe por extensão de arquivo
-│   ├── config.ts      ← Configuração centralizada via env vars
-│   └── logger.ts      ← Output estilizado com chalk
-├── .env.example       ← Template de variáveis de ambiente
+│   ├── index.ts                 ← Entry point: Ink TUI app
+│   ├── agent.ts                 ← Loop do agente ReAct + integração de gates
+│   ├── apiClient.ts             ← Cliente NVIDIA NIM + TOOL_DEFINITIONS
+│   ├── history.ts               ← Histórico em memória + system prompt
+│   ├── tools.ts                 ← ler_arquivo / aplicar_diff / desfazer_edicao / executar_comando
+│   ├── guardrail.ts             ← Validação de sintaxe por extensão (advisory)
+│   ├── strictQualityGate.ts     ← Quality Gate determinístico (STRICT_MODE)
+│   ├── readBeforeWrite.ts       ← Gate programático: bloqueia edits sem leitura prévia
+│   ├── rollbackStore.ts         ← Backups automáticos em .rollback/ + restore
+│   ├── thinkTool.ts             ← Tool "pensar" — espaço estruturado de raciocínio
+│   ├── toolSchemaValidation.ts  ← Validação de args contra JSON Schema
+│   ├── pokaYoke.ts              ← Error-proofing + descrições expandidas com exemplos
+│   ├── taskState.ts             ← TASK_STATE.md estruturado
+│   ├── lspClient.ts             ← Cliente LSP real (tsserver/pylsp) com fallback
+│   ├── lspAst.ts                ← AST parsing via tree-sitter (fallback do LSP)
+│   ├── memory.ts                ← Memória persistente (checkpoint, project, global, history)
+│   ├── shell.ts                 ← runShell (async) + runShellSync
+│   ├── config.ts                ← Config centralizada via env vars
+│   └── logger.ts                ← Output estilizado com chalk
+├── src/__tests__/               ← 1700+ testes (vitest)
+├── src/tools/                   ← External tool integrations (python, node, rust, go, docker, roblox)
+├── src/tui/                     ← Ink-based TUI components
 ├── package.json
 └── tsconfig.json
 ```
+
+---
+
+## ⚙️ Variáveis de Ambiente (além das originais)
+
+| Variável | Default | Descrição |
+|---|---|---|
+| `NVIDIA_API_KEY` | (required) | API key NVIDIA NIM |
+| `MODEL` | `moonshotai/kimi-k2.6` | Modelo a usar |
+| `STRICT_MODE` | `true` | Liga o Quality Gate determinístico |
+| `STRICT_GATE_TSC` | `true` | Roda `tsc --noEmit` no gate |
+| `STRICT_GATE_LINT` | `true` | Roda `npm run lint` no gate |
+| `STRICT_GATE_MAX_BLOCKS` | `8` | Máximo de bloqueios consecutivos |
+| `STRICT_GATE_SKIP_PATTERNS` | (vazio) | Globs para pular o gate (ex.: `**/*.md,**/*.json`) |
+| `LSP_ENABLED` | `true` | Liga LSP real (tsserver/pylsp) |
+| `LSP_TSSERVER_PATH` | auto-detected | Caminho do tsserver / typescript-language-server |
+| `LSP_PYLSP_PATH` | auto-detected | Caminho do pylsp |
+| `LSP_REQUEST_TIMEOUT_MS` | `5000` | Timeout por request LSP |
+| `MAX_HEAL_RETRIES` | `3` | Tentativas de auto-cura do guardrail advisory |
 
 ---
 

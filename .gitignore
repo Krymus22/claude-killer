@@ -8,5 +8,6 @@ Thumbs.db
 .scannerwork/
 sonar-issues.txt
 sonar-remaining.txt
-
 coverage/
+.rollback/
+.claude-killer/TASK_STATE.md

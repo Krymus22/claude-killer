@@ -17,6 +17,7 @@ import type { Message } from "./apiClient.js";
 import type OpenAI from "openai";
 
 import { getActiveSkills } from "./extensions.js";
+import { getEffortPromptSnippet } from "./effortLevels.js";
 
 // ─── Project Memory (CLAUDE.md / AGENTS.md) ──
 
@@ -64,7 +65,9 @@ You are running inside a developer's terminal and have direct access to their lo
 
 - ler_arquivo(caminho): reads file content or directory listing
 - aplicar_diff(caminho, bloco_diff): surgical search/replace edits with syntax validation
-- executar_comando(comando): runs shell commands (tests, linters, builds)
+- executar_comando(comando, cwd?, timeoutMs?): runs shell commands ASYNCHRONOUSLY with streaming
+- desfazer_edicao(caminho): restores the most recent backup of a file (rollback)
+- listar_backups(caminho?): lists available rollback backups
 - executar_testes(dir?, path?): runs test suite with auto-detection (vitest/jest/pytest/cargo/go)
 - sugerir_fixes(dir?): analyzes test failures and suggests fixes
 - parse_ast(path): parses code into AST symbols (functions, classes, imports)
@@ -72,6 +75,30 @@ You are running inside a developer's terminal and have direct access to their lo
 - buscar_arquivos(pattern, path): glob file search
 - buscar_conteudo(pattern, path?): regex content search
 - git_status/diff/log/commit/blame: git operations
+- pensar(pensamento, categoria?): structured thinking space — use BEFORE every write
+- atualizar_estado(...): updates TASK_STATE.md (done/todo/decisions/bugs/dependencies)
+- marcar_feito(item): moves an item from 'todo' to 'done' in TASK_STATE.md
+- ler_estado(): reads current TASK_STATE.md content
+
+## THINK TOOL — MANDATORY BEFORE WRITES (Anthropic +54% on τ-Bench)
+
+You MUST call 'pensar' BEFORE every write operation (aplicar_diff, editar_arquivo, editar_multi_arquivos, desfazer_edicao).
+The tool itself does nothing — it just gives you a structured space to reason.
+
+In the 'pensamento' field, follow this checklist:
+1. REAFFIRM: What will I change and why?
+2. VERIFY: Did I read the file first? Do I have the current content?
+3. EDGE CASES: What could go wrong? Dependencies? Type errors?
+4. MINIMAL: Is this the smallest change that solves the problem?
+5. CORRECT: Does this match the user's intent exactly?
+
+Example:
+  pensar({
+    pensamento: "Need to add error handling to parseArgs in agent.ts. I read the file at lines 80-86. Current code has no try-catch around JSON.parse. Will add try-catch returning { _raw: raw } on failure. Matches existing pattern, minimal change.",
+    categoria: "verification"
+  })
+
+Then proceed with the write. The system ENFORCES read-before-write — without a prior ler_arquivo, your edit will be blocked.
 
 ## Problem-Solving Approach
 
@@ -82,10 +109,11 @@ For any task, follow this structured approach:
 3. **Implement**: Make incremental changes, one file per turn when possible.
 4. **Verify**: After each edit, run executar_testes or executar_comando to validate.
 5. **Iterate**: If tests fail, read the error output and fix. Repeat until clean.
+6. **Track state**: Use atualizar_estado to keep TASK_STATE.md current. Use desfazer_edicao to roll back bad edits.
 
 ## Editing Rules
 
-1. ALWAYS read a file before editing it.
+1. ALWAYS read a file before editing it. The system BLOQUEIA edits on unread files.
 2. Use aplicar_diff with exact SEARCH blocks. Format:
 <<<<<<< SEARCH
 [exact old code]
@@ -101,6 +129,31 @@ For any task, follow this structured approach:
 5. After editing, ALWAYS run tests/linter to verify:
    executar_comando("npm test") or executar_testes()
 6. If tests fail, fix the code and re-run until clean.
+7. If STRICT_MODE is on, the system will BLOCK your finish_reason until tsc + lint pass — you cannot "give up" with broken code.
+
+## Poka-Yoke (Error-Proofing)
+
+- Use ABSOLUTE paths. The agent's cwd may differ from what you assume.
+- aplicar_diff REQUIRES at least one <<<<<<< SEARCH / >>>>>>> REPLACE pair.
+- editar_arquivo REQUIRES either edits[] or search+replace.
+- All paths must be non-empty strings.
+- Schema validation runs BEFORE tool execution — invalid args return an error immediately.
+
+## Parallel Tool Calls (IDEIA 6)
+
+You CAN batch multiple read-only tool calls in a single response (ler_arquivo, buscar_texto, buscar_arquivos, parse_ast, git_status/diff/log, explorar_subagente, status_pool, ler_estado).
+When you need to inspect 2+ files OR search in 2+ places, EMIT ALL those tool calls together in one response — they will run in parallel.
+This is much faster than serializing. The system supports parallel_tool_calls natively.
+
+PARALLEL SUB-AGENTS: You can invoke 2+ explorar_subagente calls in the SAME response — they run in TRUE parallel using different API keys from the pool (requires NVIDIA_API_KEYS with multiple keys). Use this when you need to explore independent aspects of a codebase simultaneously (e.g., one sub-agent maps the auth flow while another maps the data layer).
+
+## Multi-Key Pool (Fase 1)
+
+If multiple NVIDIA API keys are configured (NVIDIA_API_KEYS env var), the system uses a key pool:
+- Each key has its own 40 RPM / 1 concurrent quota
+- Sub-agents (explorar_subagente) automatically pick a different key — they run truly in parallel
+- Call status_pool to see per-key metrics (calls, errors, 429s, latency)
+- If a key returns 429, it's cooled down for 60s and the next call uses another key
 
 ## SWE-bench / Benchmark Mode
 
@@ -117,9 +170,10 @@ When solving SWE-bench style tasks:
 
 - Be concise. Precision over verbosity.
 - Never hallucinate file contents. Always read first.
-- Prefer relative paths. You're on the developer's machine.
+- Prefer ABSOLUTE paths. You're on the developer's machine.
 - Respond in the user's language (Portuguese or English).
-- Incremental edits: one file per response for complex tasks.`;
+- Incremental edits: one file per response for complex tasks.
+- Update TASK_STATE.md at every meaningful milestone (decision made, bug found, item done).`;
 
 let currentCavemanLevel: string | null = null; // 'lite', 'full', 'ultra', 'wenyan-lite', 'wenyan-full', 'wenyan-ultra', or null (disabled)
 
@@ -152,6 +206,12 @@ export function getCavemanLevel(): string | null {
 export function getSystemPrompt(): string {
   const skills = getActiveSkills();
   let basePrompt = BASE_SYSTEM_PROMPT;
+
+  // IDEIA 4: Append effort-level instructions (Low/Medium/High/Max)
+  const effortSnippet = getEffortPromptSnippet();
+  if (effortSnippet) {
+    basePrompt = `${basePrompt}\n\n${effortSnippet}`;
+  }
 
   if (currentCavemanLevel) {
     basePrompt = `[SYSTEM NOTE: CAVEMAN MODE IS ACTIVE (Level: ${currentCavemanLevel}). You MUST strictly adhere to the caveman rules below for ALL replies. Speaking in standard conversational prose is strictly forbidden. Keep all technical terms, code blocks, and exact strings intact.]\n\n${basePrompt}`;
@@ -255,6 +315,19 @@ export function historyLength(): number {
 /** Reset history to initial state (system prompt only). Useful for /reset. */
 export function resetHistory(): void {
   history = [{ role: "system", content: getSystemPrompt() }];
+}
+
+/**
+ * Replace the entire history with the provided messages.
+ * Used by model-based compaction (IDEIA 3) to swap in a compacted history.
+ * The first message MUST be the system prompt; if not, we prepend it.
+ */
+export function replaceHistory(messages: Message[]): void {
+  if (messages.length === 0 || messages[0].role !== "system") {
+    history = [{ role: "system", content: getSystemPrompt() }, ...messages];
+  } else {
+    history = [...messages];
+  }
 }
 
 /** Rough token estimate: ~4 chars per token, includes tool_calls JSON. */

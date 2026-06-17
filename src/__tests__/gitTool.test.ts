@@ -10,6 +10,9 @@ import { gitStatus, gitDiff, gitLog, gitCommit, gitBranch, gitBlame, gitShow, gi
 
 const TEST_DIR = path.join(process.cwd(), "__test_gitdir__");
 
+// Detect the default branch name (could be "master" or "main" depending on git version)
+let DEFAULT_BRANCH = "master";
+
 function git(args: string): string {
   return runShellSync({ command: `git ${args}`, cwd: TEST_DIR }).stdout.trim();
 }
@@ -19,6 +22,9 @@ beforeAll(() => {
   git("init");
   git("config user.email \"test@test.com\"");
   git("config user.name \"Test\"");
+  // Force a consistent branch name to avoid master/main mismatch
+  git("checkout -b master 2>/dev/null || git branch -m master");
+  DEFAULT_BRANCH = "master";
   fs.writeFileSync(path.join(TEST_DIR, "file1.txt"), "initial\n", "utf8");
   git("add .");
   git('commit -m "initial commit"');
@@ -147,7 +153,7 @@ describe("gitStashPop", () => {
 
 describe("gitCheckout", () => {
   it("should checkout a branch", async () => {
-    const result = await gitCheckout("master", TEST_DIR);
+    const result = await gitCheckout(DEFAULT_BRANCH, TEST_DIR);
     expect(typeof result).toBe("string");
   });
 });
@@ -224,7 +230,7 @@ describe("gitStatus - coverage gaps", () => {
       git("add conflict.txt");
       git('commit -m "branch change"');
 
-      git("checkout master");
+      git(`checkout ${DEFAULT_BRANCH}`);
       fs.writeFileSync(path.join(TEST_DIR, "conflict.txt"), "master version\n", "utf8");
       git("add conflict.txt");
       git('commit -m "master change"');
@@ -235,7 +241,7 @@ describe("gitStatus - coverage gaps", () => {
       expect(status.conflicted.length).toBeGreaterThanOrEqual(1);
     } finally {
       try { git("merge --abort"); } catch {}
-      git("checkout master");
+      git(`checkout ${DEFAULT_BRANCH}`);
       try { git("branch -D conflict-branch"); } catch {}
       try { git("rm -f conflict.txt"); } catch {}
       try { git('commit -m "cleanup"'); } catch {}

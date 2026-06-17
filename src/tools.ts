@@ -10,10 +10,11 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { execSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { validateSyntax } from "./guardrail.js";
 import { previewAndApprove } from "./diffPreview.js";
 import { executePreFileWriteHooks, executePostFileWriteHooks } from "./hooks.js";
+import { saveBackup, restoreBackup, listBackups } from "./rollbackStore.js";
 import * as log from "./logger.js";
 
 // ─── ler_arquivo ─────────────────────────────────────────────────────────────
@@ -258,6 +259,13 @@ export async function aplicarDiff(
   const contentToWrite = preWriteResult.modifiedContent ?? newContent;
 
   // ── Step 6: Write to disk ───────────────────────────────────────────────
+  // Save rollback backup BEFORE writing (only if file already exists)
+  let backupId: string | null = null;
+  if (originalContent.length > 0) {
+    const backup = saveBackup(resolved, originalContent, "aplicar_diff");
+    if (backup) backupId = backup.id;
+  }
+
   try {
     const dir = path.dirname(resolved);
     fs.mkdirSync(dir, { recursive: true });
@@ -293,41 +301,155 @@ export async function aplicarDiff(
   }
 
   // ── All good ──────────────────────────────────────────────────────────────
-  const msg = `[SUCESSO] Diff aplicado e arquivo salvo: ${resolved} (${newContent.length} bytes). Validação pós-escrita: OK.`;
+  const backupInfo = backupId ? ` Backup salvo: ${backupId}.` : "";
+  const msg = `[SUCESSO] Diff aplicado e arquivo salvo: ${resolved} (${newContent.length} bytes). Validação pós-escrita: OK.${backupInfo}`;
   log.toolResult("aplicar_diff", true, `${newContent.length} bytes`);
   return { written: true, toolMessage: msg };
+}
+
+// ─── desfazer_edicao ──────────────────────────────────────────────────────────
+
+export interface DesfazerEdicaoArgs {
+  /** Absolute or relative path of the file to restore. */
+  caminho: string;
+}
+
+/**
+ * Restore the most recent backup for the given file path.
+ * Returns a status message suitable for the model.
+ */
+export function desfazerEdicao(args: DesfazerEdicaoArgs): string {
+  const resolved = path.resolve(args.caminho);
+  log.toolCall("desfazer_edicao", { caminho: resolved });
+
+  const ok = restoreBackup(resolved);
+  if (ok) {
+    return `[SUCESSO] Arquivo restaurado a partir do backup: ${resolved}`;
+  }
+
+  // List available backups for diagnostics
+  const backups = listBackups(resolved);
+  if (backups.length === 0) {
+    return `[ERRO] Nenhum backup disponível para ${resolved}. ` +
+      `Backups são criados automaticamente antes de cada aplicar_diff / editar_arquivo bem-sucedido em arquivos existentes, ` +
+      `e expiram após 5 minutos.`;
+  }
+
+  return `[ERRO] Falha ao restaurar backup para ${resolved}. ` +
+    `Existem ${backups.length} backup(s) registrado(s) mas a restauração falhou (arquivo de backup pode estar corrompido ou ausente).`;
+}
+
+// ─── listar_backups ───────────────────────────────────────────────────────────
+
+export interface ListarBackupsArgs {
+  /** Optional: filter by file path. If omitted, lists all backups. */
+  caminho?: string;
+}
+
+/**
+ * List available rollback backups for a file (or all backups if no path given).
+ */
+export function listarBackups(args: ListarBackupsArgs): string {
+  const filter = args.caminho ? path.resolve(args.caminho) : undefined;
+  log.toolCall("listar_backups", { caminho: filter ?? "(todos)" });
+
+  const backups = listBackups(filter);
+  if (backups.length === 0) {
+    const suffix = filter ? ` para ${filter}` : "";
+    return `[INFO] Nenhum backup disponível${suffix}.`;
+  }
+
+  const lines = backups.map((b, i) => {
+    const time = b.timestamp;
+    return `  ${i + 1}. [${b.id}] ${b.originalPath} — ${b.size} bytes — ${b.toolName} — ${time}`;
+  });
+  return `[INFO] ${backups.length} backup(s) disponível(eis):\n${lines.join("\n")}`;
 }
 
 // ─── executar_comando ────────────────────────────────────────────────────────
 
 export interface ExecutarComandoArgs {
   comando: string;
+  /** Optional working directory (defaults to process.cwd()) */
+  cwd?: string;
+  /** Optional timeout in milliseconds (default: 60000) */
+  timeoutMs?: number;
 }
 
 /**
- * Executes a shell command in the terminal and returns its combined stdout/stderr output.
+ * Executes a shell command asynchronously with streaming stdout/stderr.
+ *
+ * Streams output to the optional onStdout / onStderr callbacks so the
+ * agent UI can display progress in real time. Captures up to
+ * MAX_OUTPUT_BYTES of combined output and returns it when the command
+ * completes.
+ *
+ * Replaces the previous execSync-based implementation — does NOT block
+ * the event loop.
  */
 export async function executarComando(
   args: ExecutarComandoArgs
 ): Promise<string> {
-  log.toolCall("executar_comando", { comando: args.comando });
+  const cwd = args.cwd ?? process.cwd();
+  const timeoutMs = args.timeoutMs ?? 60_000;
+  const MAX_OUTPUT_BYTES = 512 * 1024; // 512 KB cap
+  log.toolCall("executar_comando", { comando: args.comando, cwd });
 
-  try {
-    const output = execSync(args.comando, {
-      encoding: "utf8",
-      stdio: ["pipe", "pipe", "pipe"],
-      timeout: 30000, // 30 seconds timeout
+  return new Promise((resolve) => {
+    const child = spawn(args.comando, {
+      cwd,
+      shell: process.platform === "win32" ? "powershell.exe" : "/bin/bash",
+      env: { ...process.env },
+      stdio: ["ignore", "pipe", "pipe"],
     });
-    log.toolResult("executar_comando", true, "sucesso");
-    return output;
-  } catch (err: unknown) {
-    const e = err as { stdout?: string; stderr?: string; message?: string };
-    const output = [e.stdout, e.stderr, e.message]
-      .filter(Boolean)
-      .join("\n")
-      .trim();
-    log.toolResult("executar_comando", false, "falha");
-    return `[ERRO] Comando falhou:\n${output}`;
-  }
+
+    let stdout = "";
+    let stderr = "";
+    let killed = false;
+    const timer = setTimeout(() => {
+      killed = true;
+      try { child.kill("SIGKILL"); } catch { /* ignore */ }
+    }, timeoutMs);
+
+    child.stdout?.on("data", (chunk: Buffer) => {
+      if (stdout.length < MAX_OUTPUT_BYTES) {
+        stdout += chunk.toString("utf8").slice(0, MAX_OUTPUT_BYTES - stdout.length);
+      }
+    });
+
+    child.stderr?.on("data", (chunk: Buffer) => {
+      if (stderr.length < MAX_OUTPUT_BYTES) {
+        stderr += chunk.toString("utf8").slice(0, MAX_OUTPUT_BYTES - stderr.length);
+      }
+    });
+
+    child.on("error", (err) => {
+      clearTimeout(timer);
+      const output = `[ERRO] Falha ao iniciar comando: ${err.message}`;
+      log.toolResult("executar_comando", false, err.message);
+      resolve(output);
+    });
+
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      const combined = [stdout, stderr].filter(Boolean).join("\n").trim();
+
+      if (killed) {
+        const out = `[ERRO] Comando excedeu timeout de ${timeoutMs}ms e foi morto.\n${combined}`;
+        log.toolResult("executar_comando", false, "timeout");
+        resolve(out);
+        return;
+      }
+
+      if (code === 0) {
+        log.toolResult("executar_comando", true, `exit=0`);
+        resolve(combined || "[OK] Comando concluído sem saída.");
+      } else {
+        const out = `[ERRO] Comando falhou (exit=${code}):\n${combined}`;
+        log.toolResult("executar_comando", false, `exit=${code}`);
+        resolve(out);
+      }
+    });
+  });
 }
 

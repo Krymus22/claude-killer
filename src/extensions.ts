@@ -112,7 +112,7 @@ function parseFrontmatter(content: string): { data: Record<string, string>; body
     const parts = line.split(":");
     if (parts.length >= 2) {
       const key = parts[0].trim();
-      const val = parts.slice(1).join(":").trim().replaceAll(/^['"]|['"]$/g, "");
+      const val = parts.slice(1).join(":").trim().replaceAll(/(^['"])|(['"]$)/g, "");
       data[key] = val;
     }
   }

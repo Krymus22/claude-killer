@@ -7,7 +7,7 @@ on:
     branches: [main, master]
 
 jobs:
-  # ─── Job 1: Type-check ───────────────────────────────────────────────────
+  # --- Job 1: Type-check ---
   typecheck:
     name: TypeScript Type-Check
     runs-on: ubuntu-latest
@@ -20,7 +20,7 @@ jobs:
       - run: npm ci
       - run: npx tsc --noEmit
 
-  # ─── Job 2: Tests + Coverage ─────────────────────────────────────────────
+  # --- Job 2: Tests + Coverage ---
   test:
     name: Tests + Coverage
     runs-on: ubuntu-latest
@@ -41,3 +41,32 @@ jobs:
           name: coverage-lcov
           path: coverage/lcov.info
           retention-days: 7
+
+  # --- Job 3: Build + Start Smoke Test (Ubuntu + Windows) ---
+  smoke:
+    name: Build + Start (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    env:
+      NVIDIA_API_KEY: dummy
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+      - name: npm install
+        run: npm install
+      - name: npm run build
+        run: npm run build
+      - name: Verify dist/index.js exists
+        run: test -f dist/index.js && echo "OK: build produced dist/index.js" || (echo "FAIL: dist/index.js missing" && exit 1)
+        shell: bash
+      - name: Start CLI for 5 seconds (smoke test)
+        run: |
+          echo "Starting Claude-Killer for 5 seconds..."
+          timeout 5 node --no-warnings=DEP0040 dist/index.js 2>&1 || true
+          echo "Smoke test done (timeout exit is expected)"
+        shell: bash

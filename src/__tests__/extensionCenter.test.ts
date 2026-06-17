@@ -284,11 +284,13 @@ describe("extensionCenter", () => {
         makeExt({ id: "tool:1", category: "tool", installed: true }),
       ]);
       setTriggerMode("skill:1", "on_file");
-      toggleExtension("tool:1"); // disable
+      // Tools default to OFF, so toggle it ON then back OFF to test
+      toggleExtension("tool:1"); // enable (was OFF by default for tools)
+      toggleExtension("tool:1"); // disable again
 
       const summary = getHubSummary();
       expect(summary.total).toBe(2);
-      expect(summary.enabled).toBe(1);
+      expect(summary.enabled).toBe(1); // only skill:1 is enabled
       expect(summary.byCategory.skill.enabled).toBe(1);
       expect(summary.byCategory.tool.enabled).toBe(0);
       expect(summary.byTrigger.on_file).toBe(1);

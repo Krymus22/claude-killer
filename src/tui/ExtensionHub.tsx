@@ -245,6 +245,8 @@ function ExtensionCard({ item, selected }: Readonly<{ item?: ExtensionEntry; sel
   const icon = getCategoryIcon(item.category);
   const triggerLabel = getTriggerLabel(item.triggerMode);
   const triggerColor = TRIGGER_COLORS[item.triggerMode] ?? colors.muted;
+  // Show ON/OFF based on enabled + triggerMode
+  const isOn = item.enabled && item.triggerMode !== "disabled";
 
   return (
     <Box
@@ -264,8 +266,8 @@ function ExtensionCard({ item, selected }: Readonly<{ item?: ExtensionEntry; sel
 
       {/* Status + Trigger */}
       <Box>
-        <Text color={item.enabled ? colors.success : colors.muted}>
-          {item.enabled ? "[x]" : "[ ]"}
+        <Text color={isOn ? colors.success : colors.muted}>
+          {isOn ? "ON" : "OFF"}
         </Text>
         <Text color={colors.muted}> </Text>
         <Text color={triggerColor} bold={item.triggerMode !== "disabled"}>

@@ -94,6 +94,16 @@ function loadState(): ExtensionHubState {
       const raw = fs.readFileSync(p, "utf8");
       const parsed = JSON.parse(raw) as ExtensionHubState;
       if (parsed.version === HUB_VERSION && Array.isArray(parsed.extensions)) {
+        // Check if this is an old state with all features disabled (v1.0 bug)
+        // If so, discard and start fresh with new defaults
+        const allDisabled = parsed.extensions.every(e => !e.enabled || e.triggerMode === "disabled");
+        const hasFeatures = parsed.extensions.some(e => e.category === "feature");
+        if (hasFeatures && allDisabled) {
+          log.info("Hub: resetting state to apply new default settings");
+          const fresh = { extensions: [], version: HUB_VERSION, lastUpdated: new Date().toISOString() };
+          saveState(fresh);
+          return fresh;
+        }
         return parsed;
       }
     }
@@ -151,10 +161,20 @@ export function syncExtensions(entries: Omit<ExtensionEntry, "enabled" | "trigge
 
   const merged: ExtensionEntry[] = entries.map((entry) => {
     const existing = existingMap.get(entry.id);
+    
+    // Default behavior:
+    // - Features internas (Think Tool, Rollback, etc): ON by default
+    // - Tools externas (Roblox, Python, etc): OFF by default
+    // - Skills: ON by default (user installed them)
+    // - MCPs: ON by default (user configured them)
+    const isInternalFeature = entry.category === "feature";
+    const defaultEnabled = isInternalFeature ? true : entry.installed && entry.category !== "tool";
+    const defaultTrigger: TriggerMode = isInternalFeature ? "always" : "disabled";
+    
     return {
       ...entry,
-      enabled: existing?.enabled ?? entry.installed,
-      triggerMode: existing?.triggerMode ?? "disabled",
+      enabled: existing?.enabled ?? defaultEnabled,
+      triggerMode: existing?.triggerMode ?? defaultTrigger,
     };
   });
 
@@ -368,98 +388,98 @@ function discoverFeatures(entries: Omit<ExtensionEntry, "enabled" | "triggerMode
     {
       id: "feature:think_tool",
       name: "Think Tool",
-      description: "Structured reasoning space (pensar) before each write",
+      description: "Espaco estruturado de raciocinio (pensar) antes de cada escrita",
       installed: true,
       meta: { module: "thinkTool" },
     },
     {
       id: "feature:read_before_write",
       name: "Read-before-Write",
-      description: "Blocks edits on files that haven't been read first",
+      description: "Bloqueia edicoes em arquivos que nao foram lidos primeiro",
       installed: true,
       meta: { module: "readBeforeWrite" },
     },
     {
       id: "feature:rollback",
       name: "Auto Rollback",
-      description: "Saves backups in .rollback/ before each edit",
+      description: "Salva backups em .rollback/ antes de cada edicao",
       installed: true,
       meta: { module: "rollbackStore" },
     },
     {
       id: "feature:strict_gate",
       name: "Strict Quality Gate",
-      description: "Blocks finish_reason until tsc + lint pass",
+      description: "Bloqueia finish_reason ate tsc + lint passarem",
       installed: true,
       meta: { module: "strictQualityGate" },
     },
     {
       id: "feature:schema_validation",
       name: "Schema Validation",
-      description: "Validates tool args against JSON Schema before execution",
+      description: "Valida argumentos de tools contra JSON Schema antes de executar",
       installed: true,
       meta: { module: "toolSchemaValidation" },
     },
     {
       id: "feature:poka_yoke",
       name: "Poka-Yoke",
-      description: "Error-proofing: path validation, diff structure checks",
+      description: "Validacao de caminhos, estrutura de diff, descricoes expandidas",
       installed: true,
       meta: { module: "pokaYoke" },
     },
     {
       id: "feature:task_state",
       name: "Task State",
-      description: "Structured TASK_STATE.md (done/todo/bugs/decisions)",
+      description: "TASK_STATE.md estruturado (feito/falta/decisoes/bugs)",
       installed: true,
       meta: { module: "taskState" },
     },
     {
       id: "feature:self_validation",
       name: "Self-Validation",
-      description: "Forces model to reflect before finish_reason",
+      description: "Forca reflexao do modelo antes do finish_reason",
       installed: true,
       meta: { module: "selfValidation" },
     },
     {
       id: "feature:context_injection",
       name: "Context Injection",
-      description: "Auto-injects TASK_STATE.md before each decision",
+      description: "Injeta TASK_STATE.md automaticamente antes de cada decisao",
       installed: true,
       meta: { module: "contextInjector" },
     },
     {
       id: "feature:auto_test",
       name: "Auto-Test Gen",
-      description: "Suggests tests after each diff (skip Luau/Roblox)",
+      description: "Sugere testes apos cada diff (pula Luau/Roblox)",
       installed: true,
       meta: { module: "autoTestGenerator" },
     },
     {
       id: "feature:lsp",
       name: "LSP Integration",
-      description: "Real LSP (tsserver/pylsp) with tree-sitter fallback",
+      description: "LSP real (tsserver/pylsp) com fallback para tree-sitter",
       installed: true,
       meta: { module: "lspClient" },
     },
     {
       id: "feature:sub_agents",
       name: "Sub-Agents",
-      description: "Parallel exploration sub-agents with retry+checkpoint",
+      description: "Sub-agentes paralelos com retry e checkpoint",
       installed: true,
       meta: { module: "subAgents" },
     },
     {
       id: "feature:model_compaction",
       name: "Model Compaction",
-      description: "LLM summarizes context preserving decisions/bugs",
+      description: "LLM sumariza contexto preservando decisoes e bugs",
       installed: true,
       meta: { module: "contextCompaction" },
     },
     {
       id: "feature:multi_key_pool",
       name: "Multi-Key Pool",
-      description: "Round-robin API key pool with 429 cooldown",
+      description: "Pool de chaves API com round-robin e cooldown 429",
       installed: true,
       meta: { module: "apiKeyPool" },
     },

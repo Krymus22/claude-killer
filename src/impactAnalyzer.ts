@@ -578,7 +578,7 @@ export async function analyzeImpact(
   const report: ImpactReport = {
     targetFile,
     symbols,
-    affectedFiles: Array.from(affectedFilesSet).sort(),
+    affectedFiles: Array.from(affectedFilesSet).sort((a, b) => String(a).localeCompare(String(b))),
     usages: allUsages,
     durationMs: Date.now() - start,
   };

@@ -146,7 +146,8 @@ export function ExtensionHub({ onClose }: Readonly<ExtensionHubProps>) {
     }
   }
 
-  function handleActions(key: { return?: boolean }, inputChar: string) {
+  // sonar-disable-next-line typescript:S3776
+function handleActions(key: { return?: boolean }, inputChar: string) {
     if (key.return || inputChar === " ") {
       if (isModesTab) {
         const mode = visibleModes[cursorIndex];

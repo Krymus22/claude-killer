@@ -1261,6 +1261,69 @@ function fireTrigger(name: "always" | "on_task"): void {
  * Handle a stop_reason. Returns true if the agent should recurse (continue working),
  * false if the turn is complete and may finish.
  */
+
+async function checkPlanCompletion(): Promise<boolean> {
+  try {
+    const { hasIncompletePlan, formatPlan } = await import("./planExecutor.js");
+    if (hasIncompletePlan()) {
+      log.warn(`[PLAN] Blocking finish - plan has incomplete steps`);
+      history.addSystemMessage(`${formatPlan()}\n\nNÃO finalize até completar TODOS os passos do plano. Continue trabalhando.`);
+      return true;
+    }
+  } catch { /* planExecutor not available */ }
+  return false;
+}
+
+async function checkHonestyReview(message: { content?: string | null }): Promise<boolean> {
+  try {
+    const { isHonestyFeatureEnabled, runDevilsAdvocate, runAnonymousReview } = await import("./honestySystem.js");
+    const editedFiles = [...turnTouchedFiles].map((f) => ({ path: f, content: "" }));
+    if (editedFiles.length === 0) return false;
+
+    const agentClaims = message.content ?? "";
+    const devilsOn = await isHonestyFeatureEnabled("feature:devils_advocate");
+    const reviewOn = await isHonestyFeatureEnabled("feature:anonymous_review");
+    if (!devilsOn && !reviewOn) return false;
+
+    const fs = await import("node:fs");
+    for (const f of editedFiles) {
+      try { f.content = fs.readFileSync(f.path, "utf8"); } catch { /* skip */ }
+    }
+
+    const promises: Promise<any>[] = [];
+    if (devilsOn) promises.push(runDevilsAdvocate(editedFiles, agentClaims));
+    if (reviewOn) promises.push(runAnonymousReview(editedFiles));
+    const results = await Promise.all(promises);
+
+    if (devilsOn) {
+      const daResult = results[0] as any;
+      if (daResult?.severity === "high" && daResult.issues.length > 0) {
+        const msg = `[DEVIL'S ADVOCATE] Problemas críticos encontrados:\n${daResult.issues.map((i: string) => `  - ${i}`).join("\n")}\n\nCorrija antes de finalizar.`;
+        history.addSystemMessage(msg);
+        return true;
+      }
+    }
+  } catch { /* honestySystem not available */ }
+  return false;
+}
+
+async function checkGoalCompletion(message: { content?: string | null }): Promise<boolean> {
+  try {
+    const { verifyGoalCompletion, formatGoalVerification } = await import("./goalVerifier.js");
+    if (turnTouchedFiles.size === 0) return false;
+
+    const userRequestRaw = history.getHistory().find((m) => m.role === "user")?.content;
+    const userRequest = typeof userRequestRaw === "string" ? userRequestRaw : "";
+    const result = await verifyGoalCompletion(userRequest, [...turnTouchedFiles], message.content ?? "");
+    if (!result.done && result.verified) {
+      log.warn(`[GOAL_VERIFIER] Task NOT done - blocking finish`);
+      history.addSystemMessage(formatGoalVerification(result));
+      return true;
+    }
+  } catch { /* goalVerifier not available */ }
+  return false;
+}
+
 async function handleStopReason(message: { content?: string | null }): Promise<boolean> {
   turnStopHits++;
 

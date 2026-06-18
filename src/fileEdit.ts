@@ -73,6 +73,43 @@ export function applyEdits(content: string, edits: EditOperation[]): EditResult 
  * agents (main + sub-agents in powerful mode) can't edit the same file
  * simultaneously. Lock auto-releases after 30s TTL (or on function exit).
  */
+
+// --- Post-write checks (extracted to reduce cognitive complexity) ---
+async function runPostWriteChecks(resolved: string, content: string): Promise<void> {
+  // Honesty: Mark file as edited (for Read-Back Verification)
+  try {
+    const { markFileAsEdited } = await import("./honestySystem.js");
+    markFileAsEdited(resolved);
+  } catch { /* honestySystem not available */ }
+
+  // Honesty: Diff Reality Check
+  try {
+    const { diffRealityCheck } = await import("./honestySystem.js");
+    const diffCheck = await diffRealityCheck(resolved, content);
+    if (!diffCheck.matches && diffCheck.message) {
+      log.warn(`[HONESTY:DiffCheck] ${diffCheck.message}`);
+    }
+  } catch { /* honestySystem not available */ }
+
+  // Honesty: Hallucination Detector
+  try {
+    const { detectHallucinations } = await import("./honestySystem.js");
+    const hallucinationCheck = await detectHallucinations(resolved, content);
+    if (hallucinationCheck.hallucinatedSymbols.length > 0 && hallucinationCheck.message) {
+      log.warn(`[HONESTY:Hallucination] ${hallucinationCheck.message}`);
+    }
+  } catch { /* honestySystem not available */ }
+
+  // Import Resolver
+  try {
+    const { checkImports } = await import("./importResolver.js");
+    const importCheck = checkImports(resolved, content);
+    if (!importCheck.ok && importCheck.message) {
+      log.warn(`[IMPORT_RESOLVER] ${importCheck.message}`);
+    }
+  } catch { /* importResolver not available */ }
+}
+
 export async function editFile(
   filePath: string,
   edits: EditOperation[],

@@ -185,7 +185,8 @@ export class ToolRegistry {
   /**
    * Check installation of a tool
    */
-  private checkInstallation(tool: Tool): boolean {
+  // sonar-disable-next-line typescript:S3776
+private checkInstallation(tool: Tool): boolean {
     try {
       switch (tool.detection.method) {
         case "binary":

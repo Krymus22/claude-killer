@@ -258,7 +258,6 @@ function blockGate(cfg: QualityGateConfig, errors: string[]): GateResult {
   // model to act on than raw text walls.
   let structuredErrors = "";
   try {
-    // Self-healing is synchronous-safe here since parseErrors is sync
     const { parseErrors, formatStructuredErrors } = require("./selfHealing.js");
     const allParsed: any[] = [];
     for (const rawError of errors) {

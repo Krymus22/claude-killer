@@ -238,6 +238,17 @@ export async function editFile(
     }
   } catch { /* honestySystem not available */ }
 
+  // -- IDEIA 24: Import Resolver --
+  // After writing, verify that imports resolve to existing files and export
+  // the symbols used.
+  try {
+    const { checkImports } = await import("./importResolver.js");
+    const importCheck = checkImports(resolved, result.content);
+    if (!importCheck.ok && importCheck.message) {
+      log.warn(`[IMPORT_RESOLVER] ${importCheck.message}`);
+    }
+  } catch { /* importResolver not available */ }
+
   // Run post-edit hooks (externalized via mode.hooks.postEdit)
   // Typical use: auto-format the file that was just written (terraform fmt, black, etc)
   let hookResults = "";

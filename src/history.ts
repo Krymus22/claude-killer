@@ -252,7 +252,8 @@ export function getSystemPrompt(): string {
   }
 
   if (skills.length === 0) {
-    return basePrompt;
+    // Even without skills, inject code patterns if available
+    return injectPatterns(basePrompt);
   }
 
   let prompt = `${basePrompt}\n\nAvailable Skills / Workflows you must follow when instructed or relevant:\n`;
@@ -265,6 +266,24 @@ export function getSystemPrompt(): string {
       prompt += `\nCRITICAL CONTEXT: Caveman Mode is currently locked at level "${currentCavemanLevel}" for this session. You MUST obey the specific rules of level "${currentCavemanLevel}".\n`;
     }
     prompt += `--- END SKILL: ${skill.name} ---\n`;
+  }
+  return injectPatterns(prompt);
+}
+
+/**
+ * Inject extracted code patterns into the system prompt.
+ * This makes the AI match the project's existing coding style.
+ */
+function injectPatterns(prompt: string): string {
+  try {
+    // Dynamic import to avoid circular dependency at module load time
+    const { getPatternsCached } = require("./patternExtractor.js");
+    const patterns = getPatternsCached(process.cwd());
+    if (patterns.filesAnalyzed > 0) {
+      return `${prompt}\n\n${patterns.rawSummary}`;
+    }
+  } catch {
+    // patternExtractor not available - skip
   }
   return prompt;
 }

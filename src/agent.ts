@@ -752,6 +752,68 @@ const toolHandlers: Record<string, ToolHandler> = {
     };
   },
 
+  "escrever_spec": async (args) => {
+    const nome = asString(args.nome);
+    const descricao = asString(args.descricao);
+    if (!nome || !descricao) {
+      return { resultStr: "[ERRO] 'nome' e 'descricao' são obrigatórios.", usedHeal: false };
+    }
+    const { createSpec, formatSpec } = await import("./specFirst.js");
+    createSpec({
+      name: nome,
+      description: descricao,
+      inputs: (args.inputs as any[]) ?? [],
+      outputs: (args.outputs as any[]) ?? [],
+      edgeCases: (args.edgeCases as string[]) ?? [],
+      constraints: (args.constraints as string[]) ?? [],
+    });
+    return { resultStr: `[SUCESSO] Spec criada.\n\n${formatSpec()}`, usedHeal: false };
+  },
+
+  "criar_tdd": async (args) => {
+    const arquivoTeste = asString(args.arquivo_teste);
+    const arquivoImpl = asString(args.arquivo_impl);
+    const linguagem = asString(args.linguagem);
+    if (!arquivoTeste || !arquivoImpl || !linguagem) {
+      return { resultStr: "[ERRO] 'arquivo_teste', 'arquivo_impl' e 'linguagem' são obrigatórios.", usedHeal: false };
+    }
+    const { registerTDD, formatTDD } = await import("./tddMode.js");
+    registerTDD(arquivoTeste, arquivoImpl, linguagem, (args.casos as string[]) ?? []);
+    return { resultStr: `[SUCESSO] TDD registrado.\n\n${formatTDD()}`, usedHeal: false };
+  },
+
+  "capturar_snapshot": async (args) => {
+    const funcao = asString(args.funcao);
+    const arquivo = asString(args.arquivo);
+    const inputs = asString(args.inputs);
+    if (!funcao || !arquivo || !inputs) {
+      return { resultStr: "[ERRO] 'funcao', 'arquivo' e 'inputs' são obrigatórios.", usedHeal: false };
+    }
+    const { captureBeforeSnapshot } = await import("./snapshotTesting.js");
+    const result = await captureBeforeSnapshot(funcao, arquivo, inputs);
+    return { resultStr: result.message, usedHeal: false };
+  },
+
+  "executar_workflow": async (args) => {
+    const script = asString(args.script);
+    if (!script) {
+      return { resultStr: "[ERRO] 'script' é obrigatório.", usedHeal: false };
+    }
+    const { validateWorkflow, executeWorkflow } = await import("./dynamicWorkflow.js");
+    const validation = validateWorkflow(script);
+    if (!validation.valid) {
+      return { resultStr: `[ERRO] Workflow inválido: ${validation.error}`, usedHeal: false };
+    }
+    const result = await executeWorkflow(script);
+    if (!result.success) {
+      return { resultStr: `[ERRO] Workflow falhou: ${result.error}\n\nOutput:\n${result.output}`, usedHeal: false };
+    }
+    return {
+      resultStr: `[SUCESSO] Workflow executado em ${result.durationMs}ms (${result.stepsExecuted} passos).\n\n${result.output}`,
+      usedHeal: false,
+    };
+  },
+
   "ler_estado": async () => {
     const summary = getTaskStateSummary();
     return {
@@ -1099,8 +1161,34 @@ async function sendAndProcess(
   await runPreTurnMaintenance();
   history.optimizeContext();
 
+  // IDEIA 10: Tool reduction - filter tools by detected intent
+  let toolsForCall = getMergedTools();
+  try {
+    const { detectIntent, filterToolsByIntent, getFilterSummary } = await import("./toolReduction.js");
+    const userMsg = history.getHistory().find((m) => m.role === "user");
+    const userText = typeof userMsg?.content === "string" ? userMsg.content : "";
+    const intent = detectIntent(userText);
+    toolsForCall = filterToolsByIntent(toolsForCall, intent);
+    const summary = getFilterSummary(getMergedTools().length, toolsForCall.length, intent);
+    log.debug(`[TOOL_REDUCTION] ${summary}`);
+  } catch { /* toolReduction not available */ }
+
+  // IDEIA 27+#28: Checkpoint writer - proactive state extraction
+  try {
+    const { shouldCheckpoint, writeCheckpoint, formatCheckpoint } = await import("./checkpointWriter.js");
+    const histLen = history.getHistory().length;
+    const checkpointNum = shouldCheckpoint(histLen);
+    if (checkpointNum > 0) {
+      log.info(`[CHECKPOINT] Triggering checkpoint ${checkpointNum} at ${histLen} messages`);
+      const cp = await writeCheckpoint(checkpointNum);
+      if (cp.state.intention) {
+        history.addSystemMessage(formatCheckpoint(cp.state));
+      }
+    }
+  } catch { /* checkpointWriter not available */ }
+
   const response = await withRetry(
-    () => chat(history.getHistory(), onStreamStart, onToken, onThinking, getMergedTools()),
+    () => chat(history.getHistory(), onStreamStart, onToken, onThinking, toolsForCall),
     {
       maxRetries: 2,
       baseDelayMs: 1000,

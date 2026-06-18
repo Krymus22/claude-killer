@@ -706,6 +706,111 @@ export const TOOL_DEFINITIONS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
   {
     type: "function",
     function: {
+      name: "escrever_spec",
+      description:
+        "Escreve uma especificação técnica ANTES de implementar código. " +
+        "OBRIGATÓRIO para features complexas. Define: inputs, outputs, edge cases, constraints. " +
+        "A spec vira um contrato que a implementação deve satisfazer.",
+      parameters: {
+        type: "object",
+        properties: {
+          nome: { type: "string", description: "Nome da função/feature" },
+          descricao: { type: "string", description: "Descrição do que faz" },
+          inputs: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                name: { type: "string" },
+                type: { type: "string" },
+                required: { type: "boolean" },
+                description: { type: "string" },
+              },
+            },
+            description: "Lista de inputs da função",
+          },
+          outputs: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                name: { type: "string" },
+                type: { type: "string" },
+                description: { type: "string" },
+              },
+            },
+            description: "Lista de outputs",
+          },
+          edgeCases: { type: "array", items: { type: "string" }, description: "Casos limítrofes a tratar" },
+          constraints: { type: "array", items: { type: "string" }, description: "Restrições" },
+        },
+        required: ["nome", "descricao"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "criar_tdd",
+      description:
+        "Registra que TDD está ativo: testes foram escritos ANTES da implementação. " +
+        "Use APENAS quando você já escreveu os testes (em arquivo .spec). " +
+        "Os testes viram oráculo - a implementação deve fazê-los passar. " +
+        "NÃO modifique os testes depois de criá-los.",
+      parameters: {
+        type: "object",
+        properties: {
+          arquivo_teste: { type: "string", description: "Caminho do arquivo de teste" },
+          arquivo_impl: { type: "string", description: "Caminho do arquivo de implementação" },
+          linguagem: { type: "string", description: "Linguagem (typescript, python, rust, luau, etc)" },
+          casos: { type: "array", items: { type: "string" }, description: "Lista de casos de teste" },
+        },
+        required: ["arquivo_teste", "arquivo_impl", "linguagem"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "capturar_snapshot",
+      description:
+        "Captura o output de uma função ANTES de editá-la. " +
+        "Depois da edição, o sistema re-roda a função e compara. " +
+        "Se o output mudou inesperadamente, alerta sobre possível regressão. " +
+        "Use em funções puras (sem side effects).",
+      parameters: {
+        type: "object",
+        properties: {
+          funcao: { type: "string", description: "Nome da função" },
+          arquivo: { type: "string", description: "Caminho do arquivo" },
+          inputs: { type: "string", description: "JSON string dos inputs (ex: [1, 2] ou {x: 5})" },
+        },
+        required: ["funcao", "arquivo", "inputs"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "executar_workflow",
+      description:
+        "Executa um workflow dinâmico em JavaScript determinístico. " +
+        "Use para tarefas multi-step complexas onde prompt é ambíguo. " +
+        "Funções disponíveis: agent(pergunta) - sub-agente, parallel(...perguntas) - paralelo, log(msg). " +
+        "PROIBIDO: require, import, process, fs, child_process. " +
+        "O workflow roda em sandbox com timeout de 60s.",
+      parameters: {
+        type: "object",
+        properties: {
+          script: { type: "string", description: "Código JavaScript do workflow" },
+        },
+        required: ["script"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "ler_estado",
       description:
         "Lê o conteúdo atual do TASK_STATE.md e retorna como string formatada. " +

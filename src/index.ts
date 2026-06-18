@@ -19,6 +19,7 @@ import { loadAllExtensions, shutdownMCPServers } from "./extensions.js";
 import { execSync } from "node:child_process";
 import { seedUserConfig } from "./configSeeder.js";
 import { performUpdateCheck } from "./toolUpdater.js";
+import { registerShutdownHandlers } from "./gracefulShutdown.js";
 
 // --- Force UTF-8 everywhere ------------------------------------------------
 // Without this, Windows terminals (cmd.exe, PowerShell, Windows Terminal)
@@ -81,6 +82,9 @@ try {
 // --- Entry Point ---------------------------------------------------------
 
 async function main(): Promise<void> {
+  // Register graceful shutdown handlers (SIGINT, SIGTERM, SIGHUP, uncaughtException)
+  registerShutdownHandlers();
+
   // Seed bundled defaults (Roblox CLI tools, library skills, modes) on first run.
   // After this, the user owns everything in ~/.claude-killer/ and can edit/delete freely.
   seedUserConfig();

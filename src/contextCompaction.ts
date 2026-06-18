@@ -224,34 +224,42 @@ async function modelBasedCompactionAsync(): Promise<{ compacted: boolean; savedT
 
   const beforeTokens = history.estimateTokens();
 
-  // Build a prompt that asks the model to produce a structured summary
-  const summaryPrompt = buildSummaryPrompt(toSummarize);
+  // Surface compaction activity — this can take 5-15s on a large context.
+  const { pushActivity } = await import("./activityTracker.js");
+  const done = pushActivity("compacting", `${allMessages.length} mensagens`);
 
   try {
-    const response = await chat([
-      systemMsg,
-      { role: "user", content: summaryPrompt } as any,
-    ]);
-    const summary = response.choices[0]?.message?.content ?? "";
-    if (!summary || summary.length < 50) {
+    // Build a prompt that asks the model to produce a structured summary
+    const summaryPrompt = buildSummaryPrompt(toSummarize);
+
+    try {
+      const response = await chat([
+        systemMsg,
+        { role: "user", content: summaryPrompt } as any,
+      ]);
+      const summary = response.choices[0]?.message?.content ?? "";
+      if (!summary || summary.length < 50) {
+        return { compacted: false, savedTokens: 0 };
+      }
+
+      // Replace the summarized portion with a single system message containing the summary
+      const compactedHistory = [
+        systemMsg,
+        { role: "system", content: `[CONTEXTO COMPACTADO POR IA - ${toSummarize.length} mensagens antigas resumidas preservando decisões arquiteturais, bugs não resolvidos e próximos passos]\n\n${summary}` } as any,
+        ...toKeep,
+      ];
+
+      // Replace history in-place
+      history.replaceHistory(compactedHistory as any);
+      const afterTokens = history.estimateTokens();
+      log.debug(`[COMPACTION] Model-based: ${toSummarize.length} msgs -> 1 summary (${beforeTokens - afterTokens} tokens saved)`);
+      return { compacted: true, savedTokens: beforeTokens - afterTokens };
+    } catch (err) {
+      log.warn(`[COMPACTION] Model-based call failed: ${(err as Error).message}`);
       return { compacted: false, savedTokens: 0 };
     }
-
-    // Replace the summarized portion with a single system message containing the summary
-    const compactedHistory = [
-      systemMsg,
-      { role: "system", content: `[CONTEXTO COMPACTADO POR IA - ${toSummarize.length} mensagens antigas resumidas preservando decisões arquiteturais, bugs não resolvidos e próximos passos]\n\n${summary}` } as any,
-      ...toKeep,
-    ];
-
-    // Replace history in-place
-    history.replaceHistory(compactedHistory as any);
-    const afterTokens = history.estimateTokens();
-    log.debug(`[COMPACTION] Model-based: ${toSummarize.length} msgs -> 1 summary (${beforeTokens - afterTokens} tokens saved)`);
-    return { compacted: true, savedTokens: beforeTokens - afterTokens };
-  } catch (err) {
-    log.warn(`[COMPACTION] Model-based call failed: ${(err as Error).message}`);
-    return { compacted: false, savedTokens: 0 };
+  } finally {
+    done();
   }
 }
 

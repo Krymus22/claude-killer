@@ -2,8 +2,7 @@
  * index.ts - CLI entry point for Claude-Killer (Ink TUI edition).
  *
  * Responsibilities:
- *  - Force UTF-8 encoding on Windows (chcp + console mode + env vars)
- *  - Set LANG/LC_ALL for child processes on all platforms
+ *  - Force UTF-8 encoding on ALL platforms (Windows + Linux + macOS)
  *  - Load extensions (skills + MCP servers)
  *  - Render the Ink TUI application
  *  - Handle graceful shutdown
@@ -20,16 +19,24 @@ import { execSync } from "node:child_process";
 import { seedUserConfig } from "./configSeeder.js";
 import { performUpdateCheck } from "./toolUpdater.js";
 import { registerShutdownHandlers } from "./gracefulShutdown.js";
+import { forceUtf8Environment } from "./utf8Safety.js";
 
 // --- Force UTF-8 everywhere ------------------------------------------------
-// Without this, Windows terminals (cmd.exe, PowerShell, Windows Terminal)
-// display accented chars (á, é, í, õ, ç, ê) as garbage like "├¡" or "Ã©".
+// Without this, terminals display accented chars (á, é, í, õ, ç, ê) as
+// garbage like "├¡" or "Ã©". This happens on:
+//   - Windows cmd.exe (defaults to CP437 or CP1252)
+//   - Linux containers without `locale-gen pt_BR.UTF-8` (glibc falls back
+//     to the C/POSIX locale = ASCII)
+//   - macOS when LANG is unset
 //
-// Layered approach:
-//   1. chcp 65001 - sets console code page for cmd.exe children
-//   2. SetConsoleOutputCP via reg query - tries to set for current console
-//   3. LANG/LC_ALL env vars - for child processes (curl, rojo, etc.)
-//   4. process.stdout.setDefaultEncoding - tells Node to write UTF-8 bytes
+// We use a layered approach:
+//   1. (Windows only) chcp 65001 + PowerShell [Console]::OutputEncoding
+//   2. (All platforms) Probe `locale -a` for any UTF-8 locale, prefer
+//      pt_BR.UTF-8 → en_US.UTF-8 → C.UTF-8 (always available on glibc 2.35+
+//      and musl). Set LANG/LC_ALL accordingly.
+//   3. (All platforms) Force Python children to UTF-8 via PYTHONIOENCODING
+//      and PYTHONUTF8=1.
+//   4. (All platforms) Force Node stdio to UTF-8 via setDefaultEncoding.
 
 if (process.platform === "win32") {
   // Layer 1: chcp 65001 for cmd.exe
@@ -39,7 +46,7 @@ if (process.platform === "win32") {
     // PowerShell or non-cmd shell - chcp may not work, but won't throw
   }
 
-  // Layer 2: Try setting console output CP via PowerShell as fallback.
+  // Layer 1b: Try setting console output CP via PowerShell as fallback.
   // This works even when chcp doesn't (e.g. when stdin is redirected).
   try {
     execSync(
@@ -51,26 +58,19 @@ if (process.platform === "win32") {
   }
 }
 
-// Layer 3: Set LANG/LC_ALL on ALL platforms for child processes.
-// On Linux/macOS this is the standard way to set locale.
-// On Windows it's used by ports of Unix tools (git, curl, etc.)
-process.env.LANG ??= process.platform === "win32" ? "en_US.UTF-8" : "pt_BR.UTF-8";
-process.env.LC_ALL ??= process.env.LANG;
-// Also force Python (if invoked as child) to use UTF-8
-process.env.PYTHONIOENCODING ??= "utf-8";
-
-// Layer 4: Force Node stdio to UTF-8.
-// On Node 18+ this also affects how strings are encoded when written to stdout.
-try {
-  // setDefaultEncoding is on Socket/Tty streams
-  if (process.stdout && typeof (process.stdout as any).setDefaultEncoding === "function") {
-    (process.stdout as any).setDefaultEncoding("utf8");
-  }
-  if (process.stderr && typeof (process.stderr as any).setDefaultEncoding === "function") {
-    (process.stderr as any).setDefaultEncoding("utf8");
-  }
-} catch {
-  // ignore - not critical
+// Layer 2-4: Cross-platform UTF-8 setup (probes `locale -a`, picks best
+// available UTF-8 locale, falls back to C.UTF-8 if none exists, forces
+// Python and Node stdio to UTF-8). See utf8Safety.ts for details.
+const _utf8Result = forceUtf8Environment();
+if (_utf8Result.fallbackUsed) {
+  // Don't crash — just warn the user. They may need to run
+  // `sudo locale-gen pt_BR.UTF-8` for full UTF-8 support on old glibc.
+  console.error(
+    `[claude-killer] WARNING: no UTF-8 locale found on this system.\n` +
+    `  Using fallback "${_utf8Result.chosen}". Accented chars may not render\n` +
+    `  correctly. To fix permanently on Debian/Ubuntu:\n` +
+    `    sudo sed -i 's/# pt_BR.UTF-8/pt_BR.UTF-8/' /etc/locale.gen && sudo locale-gen\n`
+  );
 }
 
 // --- Entry Point ---------------------------------------------------------

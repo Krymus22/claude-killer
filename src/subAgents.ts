@@ -45,6 +45,7 @@ import { parseFile } from "./lspAst.js";
 import { shouldUseSubAgents, getEffortLevel } from "./effortLevels.js";
 import { getSystemPrompt } from "./history.js";
 import * as log from "./logger.js";
+import { pushActivity } from "./activityTracker.js";
 
 // --- Sub-agent ID counter (for tracking in rollback) ----------------------
 
@@ -237,6 +238,26 @@ export async function runSubAgent(args: SubAgentArgs): Promise<string | null> {
   const poolInfo = getPoolSize() > 0 ? ` (pool: ${getPoolSize()} keys)` : " (single key)";
   log.info(`[SUB_AGENT:${subAgentId}] Starting ${powerful ? "POWERFUL" : "READ-ONLY"}: "${args.question.slice(0, 80)}..." (cwd=${cwd}, maxCalls=${maxCalls}${poolInfo})`);
 
+  // Surface sub-agent activity in the TUI so the user sees the agent is
+  // delegating work to a sub-agent (not just "thinking forever").
+  const shortQ = args.question.length > 60 ? args.question.slice(0, 59) + "…" : args.question;
+  const subActivityDone = pushActivity("subagent", `#${subAgentId}: ${shortQ}`);
+
+  try {
+    return await runSubAgentInner(args, powerful, cwd, maxCalls, subAgentId);
+  } finally {
+    subActivityDone();
+  }
+}
+
+/** Inner implementation of runSubAgent — separated so we can wrap it with activity tracking. */
+async function runSubAgentInner(
+  args: SubAgentArgs,
+  powerful: boolean,
+  cwd: string,
+  maxCalls: number,
+  subAgentId: string,
+): Promise<string | null> {
   // Build initial history
   const systemPrompt = powerful
     ? buildPowerfulSubAgentPrompt(getSystemPrompt(), subAgentId, args.question)

@@ -26,6 +26,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as log from "./logger.js";
 import { parseErrors, formatStructuredErrors } from "./selfHealing.js";
+import { pushActivity } from "./activityTracker.js";
 
 // --- Config ------------------------------------------------------------------
 
@@ -183,9 +184,21 @@ export async function runQualityGate(filesTouched: string[] = []): Promise<GateR
   const skipReason = shouldSkipGate(cfg, filesTouched);
   if (skipReason) return skipReason;
 
-  const errors = await collectValidatorErrors(cfg);
-  if (errors.length === 0) return passGate();
-  return blockGate(cfg, errors);
+  // Surface quality gate activity in the TUI so the user sees why the agent
+  // appears to be "doing nothing" between sending a message and getting a
+  // reply. tsc + lint can take 5-30s on a large project.
+  const checks: string[] = [];
+  if (cfg.runTsc) checks.push("tsc");
+  if (cfg.runLint) checks.push("lint");
+  const done = pushActivity("quality_gate", checks.join(" + "));
+
+  try {
+    const errors = await collectValidatorErrors(cfg);
+    if (errors.length === 0) return passGate();
+    return blockGate(cfg, errors);
+  } finally {
+    done();
+  }
 }
 
 /** Returns a "skip" GateResult if the gate should not run, otherwise null. */

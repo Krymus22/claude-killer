@@ -58,6 +58,11 @@ import {
 } from "./externalTools.js";
 import { executeTrigger, type TriggerContext } from "./extensionCenter.js";
 import { think, THINK_TOOL_DEFINITION } from "./thinkTool.js";
+import { pushActivity, withActivity, clearActivity } from "./activityTracker.js";
+import {
+  shouldBlockForFalsePromise,
+  resetFalsePromiseCounter,
+} from "./promiseDetector.js";
 import { checkReadBeforeWrite, recordRead } from "./readBeforeWrite.js";
 import { validateToolCall, formatValidationErrors } from "./toolSchemaValidation.js";
 import { desfazerEdicao, listarBackups, aplicarDiff, executarComando, lerArquivo } from "./tools.js";
@@ -1046,8 +1051,15 @@ async function executeReadOnlyCallsInParallel(toolCalls: ToolCall[]): Promise<vo
     name: tc.function.name,
     args: parseArgs(tc.function.arguments),
     execute: async () => {
-      const result = await dispatchToolCall(tc);
-      return result.resultStr;
+      // Push a tool activity for each parallel tool. They'll show as the
+      // most recently pushed one (which is fine for visual purposes — the
+      // user just wants to know something is happening).
+      const label = formatToolActivityLabel(tc.function.name, parseArgs(tc.function.arguments));
+      const done = pushActivity("tool", label);
+      try {
+        const result = await dispatchToolCall(tc);
+        return result.resultStr;
+      } finally { done(); }
     },
   }));
   const results = await executeParallelTools(parallelTools);
@@ -1061,11 +1073,42 @@ async function executeReadOnlyCallsInParallel(toolCalls: ToolCall[]): Promise<vo
 
 async function executeToolCallsSequentially(toolCalls: ToolCall[]): Promise<void> {
   for (const toolCall of toolCalls) {
-    const { resultStr } = await dispatchToolCall(toolCall);
+    const args = parseArgs(toolCall.function.arguments);
+    const label = formatToolActivityLabel(toolCall.function.name, args);
+    const { resultStr } = await withActivity("tool", label, () => dispatchToolCall(toolCall));
     if (!alreadyInHistory(toolCall.id)) {
       history.addToolResult(toolCall.id, resultStr);
     }
   }
+}
+
+/**
+ * Builds a human-readable activity label for a tool call.
+ * Examples:
+ *   ler_arquivo { path: "/foo.ts" }            ->  "ler_arquivo /foo.ts"
+ *   aplicar_diff { path: "/foo.ts" }            ->  "aplicar_diff /foo.ts"
+ *   executar_comando { comando: "npm test" }    ->  "executar_comando: npm test"
+ *   pensar { pensamento: "..." }                ->  "pensar"
+ */
+function formatToolActivityLabel(toolName: string, args: Record<string, unknown>): string {
+  const path = args.path ?? args.caminho;
+  if (typeof path === "string" && path.length > 0) {
+    return `${toolName} ${truncate(path, 60)}`;
+  }
+  const cmd = args.comando ?? args.command;
+  if (typeof cmd === "string" && cmd.length > 0) {
+    return `${toolName}: ${truncate(cmd, 60)}`;
+  }
+  const query = args.query ?? args.consulta ?? args.questao;
+  if (typeof query === "string" && query.length > 0) {
+    return `${toolName}: ${truncate(query, 60)}`;
+  }
+  return toolName;
+}
+
+function truncate(s: string, max: number): string {
+  if (s.length <= max) return s;
+  return s.slice(0, max - 1) + "…";
 }
 
 // --- Auto-Heal: detect test/lint failures and inject retry context ------------
@@ -1180,23 +1223,45 @@ async function sendAndProcess(
     const checkpointNum = shouldCheckpoint(histLen);
     if (checkpointNum > 0) {
       log.info(`[CHECKPOINT] Triggering checkpoint ${checkpointNum} at ${histLen} messages`);
-      const cp = await writeCheckpoint(checkpointNum);
-      if (cp.state.intention) {
-        history.addSystemMessage(formatCheckpoint(cp.state));
-      }
+      const done = pushActivity("checkpoint", `checkpoint ${checkpointNum}`);
+      try {
+        const cp = await writeCheckpoint(checkpointNum);
+        if (cp.state.intention) {
+          history.addSystemMessage(formatCheckpoint(cp.state));
+        }
+      } finally { done(); }
     }
   } catch { /* checkpointWriter not available */ }
 
-  const response = await withRetry(
-    () => chat(history.getHistory(), onStreamStart, onToken, onThinking, toolsForCall),
-    {
-      maxRetries: 2,
-      baseDelayMs: 1000,
-      retryOn: isRetryableError,
-      onRetry: (attempt, err, delay) => log.warn(`Retry ${attempt} after ${delay}ms: ${(err as Error).message}`),
-    }
-  );
+  // Activity: waiting for LLM response. Popped when chat() returns.
+  const apiActivityDone = pushActivity("api_call", config.model);
+  try {
+    const response = await withRetry(
+      () => chat(history.getHistory(), onStreamStart, onToken, onThinking, toolsForCall),
+      {
+        maxRetries: 2,
+        baseDelayMs: 1000,
+        retryOn: isRetryableError,
+        onRetry: (attempt, err, delay) => log.warn(`Retry ${attempt} after ${delay}ms: ${(err as Error).message}`),
+      }
+    );
+    apiActivityDone();
+    return await handleChatResponse(response, depth, onStreamStart, onToken, onThinking, onUsage);
+  } catch (err) {
+    apiActivityDone();
+    throw err;
+  }
+}
 
+/** Process chat response: handle tool calls, stop reason, or final answer. */
+async function handleChatResponse(
+  response: { choices: any[]; usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number } },
+  depth: number,
+  onStreamStart: (() => void) | undefined,
+  onToken: ((token: string) => void) | undefined,
+  onThinking: (() => void) | undefined,
+  onUsage: ((usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number }) => void) | undefined,
+): Promise<string> {
   if (response.usage && onUsage) onUsage(response.usage);
   const choice = response.choices[0];
   if (!choice) throw new Error("Empty response from NVIDIA NIM API");
@@ -1326,6 +1391,26 @@ async function checkGoalCompletion(message: { content?: string | null }): Promis
 
 async function handleStopReason(message: { content?: string | null }): Promise<boolean> {
   turnStopHits++;
+
+  // False-promise detector — run FIRST, before any other gate.
+  // If the agent said "vou investigar" but didn't call any tool, that's a
+  // false promise. Inject a rejection message forcing the agent to either
+  // call a tool or explain why it can't. Bounded to MAX_FALSE_PROMISE_RETRIES
+  // per turn to prevent infinite loops.
+  //
+  // We count "tools called this turn" via turnStopHits and turnTouchedFiles:
+  //   - turnStopHits is incremented above (we just hit a stop)
+  //   - turnTouchedFiles contains files edited via aplicar_diff/editar_arquivo
+  // If turnStopHits === 1 (first stop this turn) AND no files were touched,
+  // the agent emitted a stop without doing anything — that's the suspicious case.
+  if (turnStopHits === 1 && turnTouchedFiles.size === 0) {
+    const fpResult = shouldBlockForFalsePromise(message.content ?? "", 0, 0);
+    if (fpResult.block && fpResult.rejectionMessage) {
+      log.warn(`[FALSE_PROMISE] ${fpResult.reason}`);
+      history.addSystemMessage(fpResult.rejectionMessage);
+      return true; // recurse — model must call a tool or explain
+    }
+  }
 
   // IDEIA 2: Self-validation - force the model to reflect before finishing.
   // Must run BEFORE the strict quality gate so the model can fix issues
@@ -1462,6 +1547,7 @@ export async function runAgentLoop(
   resetContextInjection();
   resetSelfValidation();
   resetAutoTestSuggestions();
+  resetFalsePromiseCounter();
   setEffortLevel(getEffortLevel()); // refresh system prompt with current effort
 
   // 3.7: Initialize TASK_STATE.md from the user's first message
@@ -1519,6 +1605,10 @@ export async function runAgentLoop(
 
   recordMessage(result.length);
   endSession();
+
+  // Clear any leftover activity entries so the TUI doesn't show a stale
+  // "Executando tool: foo" after the loop has ended.
+  clearActivity();
 
   return result;
 }

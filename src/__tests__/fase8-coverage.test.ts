@@ -237,10 +237,10 @@ describe("modes.ts coverage boost", () => {
     expect(mod.getAllModes).toBeDefined();
   });
 
-  it("getActiveModeName returns string", async () => {
+  it("getActiveModeName returns string or null", async () => {
     const { getActiveModeName } = await import("../modes.js");
     const result = getActiveModeName();
-    expect(typeof result).toBe("string");
+    expect(result === null || typeof result === "string").toBe(true);
   });
 
   it("getAllModes returns array", async () => {

@@ -1,8 +1,8 @@
 # Plano de Refatoração: Modos Completos + Tools Declarativas + Inbox
 
 > **Criado em:** 2026-06-19
-> **Status:** Aprovado (com hooks incluídos)
-> **Estimativa total:** ~42h (10 sprints, Sprint 10 expandido com testes detalhados)
+> **Status:** Aprovado (com hooks + mini chat + busca + compartilhamento)
+> **Estimativa total:** ~57h (11 sprints, incluindo Sprint 7 expandido + Sprint 8.5 novo)
 
 ## Contexto
 
@@ -518,29 +518,165 @@ Tool configurada. IA principal já pode usar.
 
 ---
 
-### Sprint 7: IA Configuradora (6h)
+### Sprint 7: IA Configuradora + Mini Chat (10h)
 
-**Objetivo:** Sub-agente limitado que cria manifests de tools desconhecidas.
+**Objetivo:** Sub-agente limitado com mini chat interativo para configurar tools, buscar arquivos na máquina, e criar manifests.
+
+#### 7.A — Mini Chat de Configuração (3h)
+
+**Objetivo:** Interface de chat dedicada pra configuração (não é só sim/não).
 
 **Tarefas:**
-- [ ] **F7.1** Criar `src/toolConfigurator.ts`:
-  - `configureUnknownTool(toolName, modeName)` — entry point
+- [ ] **F7.1** Criar `src/tui/ConfiguratorChat.tsx`:
+  - Componente Ink que renderiza um mini chat dentro do Hub
+  - Mostra mensagens do configurador + input do usuário
+  - Suporta múltiplos turnos de conversa
+  - Pode ser aberto via tecla 'C' no Hub OU via comando `/configurar`
 - [ ] **F7.2** System prompt do configurador:
-  - "Você é uma IA configuradora. Descubra como usar a tool X..."
-  - Restrições claras: não edita código, só cria .json
-- [ ] **F7.3** Tools limitadas do configurador:
-  - `executar_comando` (só pra --help, --version)
+  ```
+  "Você é uma IA configuradora. Sua tarefa é ajudar o usuário a configurar
+  tools, skills, hooks e MCPs para o modo ativo.
+  
+  Você PODE:
+  - Rodar comandos pra entender tools (--help, --version)
+  - Pesquisar na web pra achar documentação
+  - Criar arquivos .json (manifests, configs)
+  - Buscar arquivos na máquina do usuário (com permissão)
+  - Mover/copiar arquivos entre pastas do modo
+  - Fazer perguntas ao usuário quando incerta
+  
+  Você NÃO PODE:
+  - Editar código fonte do projeto
+  - Deletar arquivos do usuário
+  - Rodar comandos arbitrários (só --help, --version, where, find)
+  - Acessar arquivos fora das pastas do claude-iller
+  
+  Sempre explique o que está fazendo antes de fazer."
+  ```
+- [ ] **F7.3** Tools do configurador (limitadas):
+  - `executar_comando` (só --help, --version, where, find, ls)
   - `pesquisar` (web search)
-  - `criar_arquivo` (só pra criar o manifest)
-  - Sem acesso a editar_arquivo, aplicar_diff, etc.
-- [ ] **F7.4** Schema validation do manifest criado:
-  - Valida JSON contra schema
-  - Se inválido, pede pra IA corrigir
-- [ ] **F7.5** Hook no Hub: detectar tool sem manifest
-  - "darklua.exe encontrado sem config. Configurar? (s/n)"
-- [ ] **F7.6** Testar com tools reais (darklua, etc.)
+  - `criar_arquivo` (só em modes/<mode>/)
+  - `buscar_arquivo` (procura arquivo na máquina — vê 7.B)
+  - `mover_arquivo` (só entre pastas do modo)
+  - `perguntar_usuario` (faz pergunta no mini chat)
+- [ ] **F7.4** Render do mini chat no Hub:
+  - Painel dedicado quando configurador ativo
+  - Mostra histórico de mensagens
+  - Input field pra usuário responder
+  - Botões: [Enter] enviar, [Esc] cancelar configuração
 
-**Entregável:** Copiar darklua.exe → IA cria manifest automaticamente.
+#### 7.B — Busca de Arquivos na Máquina (3h)
+
+**Objetivo:** Usuário pode pedir "tenho darklua.exe em algum lugar, encontre e instale".
+
+**Tarefas:**
+- [ ] **F7.5** Criar `src/fileFinder.ts`:
+  - `searchInDefinedFolders(fileName, modeName)` — busca nas pastas padrão:
+    - `~/.claude-killer/modes/<mode>/tools/`
+    - `~/.claude-killer/modes/<mode>/inbox/`
+    - `~/.rokit/bin/` (legacy fallback)
+    - `~/.aftman/bin/` (legacy fallback)
+    - `~/.cargo/bin/` (legacy fallback)
+    - PATH do sistema
+  - `searchEntireMachine(fileName)` — busca em tudo (com permissão):
+    - Windows: `where /R C:\ darklua.exe` (por drive)
+    - Unix: `find / -name darklua -type f 2>/dev/null`
+    - Mostra progresso em tempo real
+    - Pode ser cancelado com Esc
+  - `searchWithProgress(fileName, onProgress, abortSignal)` — busca com callback
+- [ ] **F7.6** Fluxo de busca (pergunta permissão):
+  ```
+  Usuário: "tenho darklua.exe em algum lugar, instala pra mim"
+  ↓
+  Configurador: "Vou procurar darklua.exe. Primeiro nas pastas padrão..."
+  ↓
+  Sistema: searchInDefinedFolders("darklua.exe", "roblox")
+  ↓
+  Se encontrar: "Achei em ~/.rokit/bin/darklua.exe! Posso copiar pra 
+                 modes/roblox/tools/? (s/n)"
+  ↓
+  Se NÃO encontrar: "Não encontrei nas pastas padrão. Quer que eu procure
+                      em toda a máquina? (pode demorar 1-5 min) (s/n)"
+  ↓
+  Se sim: searchEntireMachine com progresso
+  ↓
+  Se encontrar: "Achei em D:\Tools\darklua.exe! Copiar? (s/n)"
+  Se não: "darklua.exe não encontrado em lugar nenhum. TALVEZ você 
+          precise baixar de https://github.com/..."
+  ```
+- [ ] **F7.7** Permissões de busca:
+  - Busca em pastas padrão: automática (sem perguntar)
+  - Busca em toda máquina: PRECISA permissão explícita do usuário
+  - Busca nunca roda automaticamente (sempre perguntana)
+  - Usuário pode cancelar a qualquer momento (Esc)
+- [ ] **F7.8** Resultado da busca:
+  - Pode encontrar múltiplos arquivos → pergunta qual usar
+  - Copia (não move) pra pasta do modo
+  - Cria manifest automaticamente após copiar
+
+#### 7.C — Configuração Interativa via Chat (4h)
+
+**Objetivo:** Usuário conversa com configurador pra configurar tudo.
+
+**Tarefas:**
+- [ ] **F7.9** Criar `src/toolConfigurator.ts`:
+  - `startConfigurationSession(modeName)` — inicia mini chat
+  - Usa `runAgentLoop` com tools limitadas + system prompt do configurador
+  - Session persiste até usuário cancelar (Esc) ou configurador terminar
+- [ ] **F7.10** Fluxo de configuração de tool desconhecida:
+  ```
+  Hub detecta: darklua.exe sem manifest
+  ↓
+  Hub mostra: "darklua.exe encontrado sem config. [C]onfigurar?"
+  ↓
+  Usuário pressiona 'C' → abre mini chat
+  ↓
+  Configurador: "Vou configurar darklua. Primeiro, deixa eu entender 
+                 o que ela faz..."
+  Configurador: [roda darklua --help]
+  Configurador: "Ok, darklua é um minifier/transformer pra Luau. 
+                 Tem 3 comandos: process, transform, minify.
+                 Quer que eu crie o manifest? (s/n)"
+  Usuário: "sim"
+  Configurador: [cria manifests/darklua.json]
+  Configurador: "Manifest criado! darklua agora aparece como 
+                 darklua_process, darklua_transform, darklua_minify 
+                 pra IA. Quer testar? (s/n)"
+  Usuário: "não"
+  Configurador: "Tudo certo! darklua configurada."
+  ↓
+  Mini chat fecha, Hub atualiza, card mostra [OK]
+  ```
+- [ ] **F7.11** Fluxo de busca + instalação via chat:
+  ```
+  Usuário: "tenho uma tool chamada my-linter em algum lugar"
+  ↓
+  Configurador: "Vou procurar my-linter. Primeiro nas pastas padrão..."
+  Configurador: [searchInDefinedFolders]
+  Configurador: "Não encontrei nas pastas padrão. Quer que eu procure 
+                 em toda a máquina? (s/n)"
+  Usuário: "sim"
+  ↓
+  Configurador: [searchEntireMachine com progresso]
+  Configurador: "Achei em C:\Users\kryst\Downloads\my-linter.exe! 
+                 Copiar pra modes/roblox/tools/? (s/n)"
+  Usuário: "sim"
+  ↓
+  Configurador: [copia + roda --help + cria manifest]
+  Configurador: "my-linter instalada e configurada! 
+                 Aparece como my_linter_lint pra IA."
+  ```
+- [ ] **F7.12** Schema validation do manifest criado:
+  - Valida JSON contra schema
+  - Se inválido, configurador corrige automaticamente (loop)
+- [ ] **F7.13** Múltiplas configurações na mesma session:
+  - Usuário pode configurar várias tools na mesma conversa
+  - "agora configura selene também"
+  - "tem mais uma tool chamada X"
+  - Session só termina quando usuário diz "pronto" ou Esc
+
+**Entregável:** Abrir mini chat → conversar com IA → tools configuradas automaticamente.
 
 ---
 
@@ -566,6 +702,117 @@ Tool configurada. IA principal já pode usar.
 - [ ] **F8.9** Inbox/README.md explicando uso
 
 **Entregável:** Jogar 4 arquivos no inbox → /organize → tudo configurado.
+
+---
+
+### Sprint 8.5: Modo Normal + Compartilhamento Entre Modos (5h)
+
+**Objetivo:** Modo "normal" também tem pasta. Tools podem ser compartilhadas entre modos (marcar quais modos usam as mesmas).
+
+#### 8.5.A — Modo Normal com Pasta (1.5h)
+
+**Objetivo:** Mesmo sem modo ativo, usuário tem pasta `~/.claude-killer/modes/normal/` com tools globais.
+
+**Tarefas:**
+- [ ] **F8.5.1** Criar modo "normal" built-in:
+  - `defaults/modes/normal/config.json` — config mínimo (sem validators, sem hooks)
+  - `defaults/modes/normal/{tools,manifests,skills,hooks,mcps,inbox}/` — estrutura vazia
+  - Sempre ativo quando nenhum outro modo está ativo
+  - Tools do modo normal são "padrão" — servem pra qualquer projeto
+- [ ] **F8.5.2** Quando nenhum modo ativo → carrega modo normal:
+  - `getActiveMode()` retorna modo normal em vez de null
+  - Function calls do modo normal ficam disponíveis
+  - Validators do modo normal rodam (se houver)
+- [ ] **F8.5.3** Modo normal é "base" pra outros modos:
+  - Outros modos HERDAM tools do normal (a menos que sobrescrevam)
+  - Ex: modo roblox tem rojo + herda git do normal
+  - Modo python tem pytest + herda git do normal
+- [ ] **F8.5.4** Config do modo normal:
+  ```json
+  {
+    "name": "normal",
+    "label": "Padrão",
+    "description": "Modo padrão com ferramentas básicas",
+    "isBase": true,
+    "tools": {
+      "items": ["git"]
+    },
+    "skills": {
+      "items": ["git-cli"]
+    }
+  }
+  ```
+
+#### 8.5.B — Compartilhamento de Tools Entre Modos (2h)
+
+**Objetivo:** Usuário marca quais modos usam as mesmas tools. Ex: tool X no modo normal → também quero no modo roblox.
+
+**Tarefas:**
+- [ ] **F8.5.5** Adicionar campo `sharedWith` no manifest:
+  ```json
+  {
+    "name": "darklua",
+    "category": "action",
+    "sharedWith": ["roblox", "devops"],
+    "actions": { ... }
+  }
+  ```
+  - Tool mora em UMA pasta (ex: `modes/normal/tools/darklua.exe`)
+  - Mas é visível nos modos listados em `sharedWith`
+- [ ] **F8.5.6** UI pra marcar compartilhamento (no Hub):
+  ```
+  ┌─────────────────────────────────────────┐
+  │ Tool: darklua                           │
+  │                                         │
+  │ Compartilhar com:                       │
+  │ [x] normal (origem)                     │
+  │ [x] roblox                              │
+  │ [ ] devops                              │
+  │ [ ] python                              │
+  │                                         │
+  │ [Enter] salvar  [Esc] cancelar          │
+  └─────────────────────────────────────────┘
+  ```
+- [ ] **F8.5.7** `getExternalToolDefinitions()` respeita `sharedWith`:
+  - Se modo ativo = roblox → mostra tools de roblox + tools compartilhadas COM roblox
+  - Tool compartilhada usa manifest da pasta de origem
+  - Tool compartilhada usa binary da pasta de origem (não duplica)
+- [ ] **F8.5.8** Comando `/compartilhar <tool> <modo>`:
+  - `/compartilhar darklua roblox` → marca darklua como sharedWith roblox
+  - `/compartilhar darklua roblox devops` → marca pra vários
+  - `/compartilhar darklua --todos` → compartilha com todos os modos
+- [ ] **F8.5.9** Comando `/descompartilhar <tool> <modo>`:
+  - Remove modo de `sharedWith`
+- [ ] **F8.5.10** Tecla 'X' no Hub (não é mais extreme search) → abre painel de compartilhamento da tool selecionada
+
+#### 8.5.C — Lógica de Herança (1.5h)
+
+**Objetivo:** Modo normal é base. Outros modos herdam + adicionam próprias.
+
+**Tarefas:**
+- [ ] **F8.5.11** Resolução de tools visíveis no modo ativo:
+  ```typescript
+  function getVisibleTools(modeName: string): Tool[] {
+    const modeTools = loadModeTools(modeName);  // tools do próprio modo
+    const normalTools = loadModeTools("normal"); // tools do modo normal
+    const sharedTools = findSharedWith(modeName); // tools de outros modos marcadas
+    
+    // Merge: modo específico > compartilhadas > normal
+    // Sobrescreve por nome (modo específico ganha)
+    return mergeTools(modeTools, sharedTools, normalTools);
+  }
+  ```
+- [ ] **F8.5.12** Tools padrão (já bundled) NÃO entram no compartilhamento:
+  - git, npm, node, etc. são padrão em todos os modos (hardcoded)
+  - Não aparecem na UI de compartilhamento
+  - Sempre disponíveis
+- [ ] **F8.5.13** Prioridade de resolução:
+  1. Tool do modo ativo (específica) → prioridade máxima
+  2. Tool compartilhada com o modo ativo → prioridade média
+  3. Tool do modo normal (herdada) → prioridade baixa
+  4. Tool padrão hardcoded → sempre disponível
+
+**Entregável:** Modo normal tem tools. Outros modos herdam + adicionam. Usuário pode marcar compartilhamento.
 
 ---
 
@@ -1034,7 +1281,210 @@ describe("Hub visual - modos completos")
   ✓ snapshot: Hub com painel de organize (tecla O)
 ```
 
-#### Resumo de testes do Sprint 10
+#### 10.13 — Tests do Sprint 7: Mini Chat + Busca de Arquivos (1.5h)
+
+**Arquivo:** `src/__tests__/configurator-chat.test.tsx` (novo)
+
+```
+describe("Mini chat de configuração")
+  ✓ abre mini chat ao pressionar 'C' no Hub
+  ✓ abre mini chat via comando /configurar
+  ✓ mostra mensagens do configurador
+  ✓ aceita input do usuário
+  ✓ múltiplos turnos de conversa
+  ✓ Esc fecha mini chat
+  ✓ mini chat atualiza Hub ao terminar
+
+describe("System prompt do configurador")
+  ✓ NÃO permite editar_arquivo
+  ✓ NÃO permite aplicar_diff
+  ✓ NÃO permite ler_arquivo no projeto
+  ✓ PERMITE executar_comando (só --help, --version, where, find, ls)
+  ✓ PERMITE pesquisar (web search)
+  ✓ PERMITE criar_arquivo (só em modes/<mode>/)
+  ✓ PERMITE buscar_arquivo
+  ✓ PERMITE mover_arquivo (só entre pastas do modo)
+  ✓ PERMITE perguntar_usuario
+  ✓ rejeita comando não whitelistado (ex: rm -rf)
+
+describe("Múltiplas configurações na mesma session")
+  ✓ configura tool A → pede pra configurar tool B → configura tool B
+  ✓ "agora configura selene também" → configura selene
+  ✓ "tem mais uma tool chamada X" → busca e configura X
+  ✓ session só termina com "pronto" ou Esc
+```
+
+**Arquivo:** `src/__tests__/fileFinder.test.ts` (novo)
+
+```
+describe("searchInDefinedFolders")
+  ✓ encontra arquivo em modes/<mode>/tools/
+  ✓ encontra arquivo em modes/<mode>/inbox/
+  ✓ encontra arquivo em ~/.rokit/bin/ (legacy fallback)
+  ✓ encontra arquivo em ~/.aftman/bin/ (legacy fallback)
+  ✓ encontra arquivo em ~/.cargo/bin/ (legacy fallback)
+  ✓ encontra arquivo no PATH do sistema
+  ✓ retorna null quando não encontra
+  ✓ retorna múltiplos resultados quando há duplicatas
+  ✓ adiciona .exe no Windows ao procurar
+  ✓ não adiciona extensão no Unix
+
+describe("searchEntireMachine")
+  ✓ busca em todas as unidades (Windows: C:\, D:\, etc.)
+  ✓ busca em / (Unix)
+  ✓ mostra progresso em tempo real
+  ✓ pode ser cancelado com Esc (abortSignal)
+  ✓ retorna null quando não encontra
+  ✓ retorna primeiro resultado encontrado
+  ✓ NÃO roda automaticamente (sempre pede permissão)
+
+describe("Fluxo de busca com permissão")
+  ✓ busca em pastas padrão: automática (sem perguntar)
+  ✓ se não encontra nas padrão → pergunta "buscar em toda máquina?"
+  ✓ se usuário diz não → retorna null
+  ✓ se usuário diz sim → busca em toda máquina com progresso
+  ✓ se encontra → pergunta "copiar? (s/n)"
+  ✓ se usuário diz sim → copia pra pasta do modo
+  ✓ se usuário diz não → não copia, retorna info
+  ✓ múltiplos resultados → pergunta qual usar
+  ✓ busca cancelada (Esc) → para graceful, sem erro
+
+describe("Cópia de arquivo encontrado")
+  ✓ copia (não move) pra pasta do modo
+  ✓ não deleta original
+  ✓ cria manifest automaticamente após copiar
+  ✓ se arquivo já existe na pasta → pergunta sobrescrever/ignorar
+  ✓ lida com erro de permissão gracefully
+```
+
+#### 10.14 — Tests do Sprint 8.5: Modo Normal + Compartilhamento (1.5h)
+
+**Arquivo:** `src/__tests__/mode-normal.test.ts` (novo)
+
+```
+describe("Modo normal")
+  ✓ modo normal existe em defaults/modes/normal/
+  ✓ modo normal tem config.json com isBase: true
+  ✓ modo normal tem estrutura de pastas completa
+  ✓ getActiveMode() retorna normal quando nenhum modo ativo
+  ✓ tools do modo normal ficam disponíveis sem modo ativo
+  ✓ skills do modo normal ficam disponíveis sem modo ativo
+  ✓ modo normal não tem validators (não bloqueia escrita)
+  ✓ modo normal não tem hooks
+
+describe("Herança do modo normal")
+  ✓ modo roblox herda tools do normal
+  ✓ modo python herda tools do normal
+  ✓ modo devops herda tools do normal
+  ✓ tool do modo específico sobrescreve tool do normal (mesmo nome)
+  ✓ skills do normal são injetadas junto com skills do modo ativo
+  ✓ desativar modo específico → volta pra normal (herdadas continuam)
+
+describe("Prioridade de resolução")
+  ✓ tool do modo ativo > tool compartilhada > tool do normal > tool padrão
+  ✓ tool do modo ativo sempre ganha (mesmo nome)
+  ✓ tool padrão (git, npm) sempre disponível
+  ✓ tool padrão não aparece na UI de compartilhamento
+```
+
+**Arquivo:** `src/__tests__/tool-sharing.test.ts` (novo)
+
+```
+describe("sharedWith no manifest")
+  ✓ manifest com sharedWith: ["roblox"] → visível no modo roblox
+  ✓ manifest sem sharedWith → só visível no modo de origem
+  ✓ manifest com sharedWith: ["roblox", "devops"] → visível nos 2
+  ✓ manifest com sharedWith: [] → só origem (igual sem campo)
+  ✓ tool compartilhada usa binary da pasta de origem (não duplica)
+  ✓ tool compartilhada usa manifest da pasta de origem
+
+describe("UI de compartilhamento (tecla X no Hub)")
+  ✓ press X → abre painel de compartilhamento da tool selecionada
+  ✓ painel mostra todos os modos com checkboxes
+  ✓ modo de origem marcado e desabilitado (não pode descompartilhar origem)
+  ✓ marcar modo → adiciona em sharedWith
+  ✓ desmarcar modo → remove de sharedWith
+  ✓ Enter salva mudanças
+  ✓ Esc cancela (não salva)
+
+describe("Comando /compartilhar")
+  ✓ /compartilhar darklua roblox → adiciona roblox em sharedWith
+  ✓ /compartilhar darklua roblox devops → adiciona os 2
+  ✓ /compartilhar darklua --todos → compartilha com todos os modos
+  ✓ /compartilhar darklua (sem modo) → erro: "especifique modo"
+  ✓ /compartilhar darklua modo_inexistente → erro: "modo não existe"
+  ✓ /compartilhar tool_inexistente roblox → erro: "tool não existe"
+
+describe("Comando /descompartilhar")
+  ✓ /descompartilhar darklua roblox → remove roblox de sharedWith
+  ✓ /descompartilhar darklua modo_não_compartilhado → aviso: "já não compartilhava"
+  ✓ /descompartilhar darklua (sem modo) → erro: "especifique modo"
+
+describe("Lógica de merge (getVisibleTools)")
+  ✓ modo roblox: vê tools próprias + compartilhadas com roblox + herdadas do normal
+  ✓ tool com mesmo nome: modo específico ganha sobre compartilhada
+  ✓ tool com mesmo nome: compartilhada ganha sobre herdada do normal
+  ✓ tool padrão (git) sempre visível (não entra no merge)
+  ✓ sem modo ativo: vê tools do normal + compartilhadas com normal
+  ✓ mudar de modo → recarrega tools visíveis
+
+describe("Casos edge de compartilhamento")
+  ✓ compartilhar com modo que já tem tool de mesmo nome → modo específico ganha
+  ✓ tool compartilhada deletada da origem → some de todos os modos compartilhados
+  ✓ tool compartilhada atualizada na origem → atualiza em todos os modos
+  ✓ compartilhar com modo normal → tool fica disponível globalmente
+  ✓ compartilhar com todos os modos → tool aparece em qualquer modo ativo
+```
+
+#### 10.15 — Tests E2E Adicionais: Configurador + Compartilhamento (1h)
+
+**Arquivo:** `src/__tests__/integration-configurator-sharing.test.ts` (novo)
+
+```
+describe("E2E: Mini chat → buscar → instalar → configurar → usar")
+  ✓ abre mini chat (/configurar)
+  ✓ usuário: "tenho darklua em algum lugar"
+  ✓ configurador busca nas pastas padrão → não encontra
+  ✓ configurador pede permissão pra buscar máquina toda
+  ✓ usuário: "sim"
+  ✓ configurador busca com progresso → encontra em Downloads
+  ✓ configurador pergunta "copiar?"
+  ✓ usuário: "sim"
+  ✓ configurador copia + roda --help + cria manifest
+  ✓ configurador: "darklua configurada!"
+  ✓ mini chat fecha
+  ✓ darklua aparece como function call no modo ativo
+  ✓ IA consegue chamar darklua_process()
+
+describe("E2E: Compartilhar tool entre modos")
+  ✓ modo normal tem darklua configurada
+  ✓ /compartilhar darklua roblox
+  ✓ ativa modo roblox
+  ✓ darklua aparece como function call no modo roblox
+  ✓ darklua usa binary da pasta do normal (não duplicou)
+  ✓ /descompartilhar darklua roblox
+  ✓ darklua some do modo roblox
+  ✓ darklua continua no modo normal
+
+describe("E2E: Modo normal base")
+  ✓ sem modo ativo → modo normal carregado
+  ✓ tool git do normal disponível
+  ✓ ativa modo roblox → herda git do normal + adiciona rojo
+  ✓ desativa roblox → volta pra normal, git continua disponível
+  ✓ tool do roblox (rojo) SOME ao desativar
+  ✓ tool do normal (git) CONTINUA ao desativar
+
+describe("E2E: Configurar via chat e compartilhar")
+  ✓ abre mini chat no modo normal
+  ✓ configura darklua no modo normal
+  ✓ /compartilhar darklua roblox
+  ✓ /compartilhar darklua devops
+  ✓ ativa roblox → darklua visível
+  ✓ ativa devops → darklua visível
+  ✓ ativa python → darklua NÃO visível (não compartilhada)
+```
+
+#### Resumo de testes do Sprint 10 (atualizado)
 
 | Categoria | Arquivos | Testes (estimado) |
 |---|---|---|
@@ -1044,13 +1494,15 @@ describe("Hub visual - modos completos")
 | Hooks por modo (Sprint 4) | 1 | ~25 |
 | MCPs por modo (Sprint 5) | 1 | ~10 |
 | Validators por modo (Sprint 6) | 1 | ~12 |
-| IA configuradora (Sprint 7) | 1 | ~20 |
+| **Mini chat + busca arquivos (Sprint 7)** | **2** | **~30** |
 | Inbox organizadora (Sprint 8) | 1 | ~30 |
+| **Modo normal + compartilhamento (Sprint 8.5)** | **2** | **~35** |
 | Migration (Sprint 9) | 1 | ~15 |
 | Integração E2E | 1 | ~25 |
+| **E2E configurador + compartilhamento** | **1** | **~20** |
 | Property-based | 1 | ~12 |
 | Snapshot visual | 1 | ~8 |
-| **Total** | **14 arquivos** | **~232 testes** |
+| **Total** | **19 arquivos** | **~297 testes** |
 
 **Meta:** Cobertura >= 80% do novo código. 0 regressões nos testes existentes.
 
@@ -1166,3 +1618,7 @@ src/
 - **2026-06-19:** Adicionado hooks (Sprint 4) → 10 sprints, 37h
 - **2026-06-19:** Adicionado inbox + organizadora (Sprint 8) → mantido 37h com hooks
 - **2026-06-19:** Sprint 10 expandido com testes detalhados (3h → 8h, ~232 testes em 14 arquivos) → total 42h
+- **2026-06-19:** Sprint 7 expandido com mini chat + busca de arquivos na máquina (6h → 10h)
+- **2026-06-19:** Sprint 8.5 novo: modo normal + compartilhamento entre modos (5h)
+- **2026-06-19:** Sprint 10 expandido com testes das novidades (+5 arquivos, +65 testes) → total 19 arquivos, ~297 testes
+- **Total atual:** ~57h, 11 sprints, ~297 testes

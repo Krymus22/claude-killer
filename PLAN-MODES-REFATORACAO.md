@@ -1,8 +1,8 @@
 # Plano de Refatoração: Modos Completos + Tools Declarativas + Inbox
 
 > **Criado em:** 2026-06-19
-> **Status:** Aprovado (com hooks + mini chat + busca + compartilhamento)
-> **Estimativa total:** ~57h (11 sprints, incluindo Sprint 7 expandido + Sprint 8.5 novo)
+> **Status:** Aprovado (com hooks + mini chat + busca + compartilhamento + AskUser)
+> **Estimativa total:** ~64h (12 sprints, incluindo Sprint 8.6 AskUser)
 
 ## Contexto
 
@@ -816,6 +816,170 @@ Tool configurada. IA principal já pode usar.
 
 ---
 
+### Sprint 8.6: Sistema de Perguntas Interativas (AskUser) (7h)
+
+**Objetivo:** Implementar sistema de perguntas igual ao Claude Code — IA faz pergunta, PARA, e usuário escolhe alternativa ou digita resposta. Disponível tanto no chat normal quanto no configurador.
+
+> **Inspirado em:** Claude Code's `AskUserQuestion` tool — quando a IA não tem certeza de algo, ela faz uma pergunta com múltipla escolha + opção de resposta livre. O agent loop PARA até o usuário responder. Isso reduz MUITO os erros em casos reais.
+
+#### 8.6.A — Tool `perguntar_usuario` (2h)
+
+**Objetivo:** Nova function call que IA pode usar pra fazer perguntas.
+
+**Tarefas:**
+- [ ] **F8.6.1** Definir tool `perguntar_usuario` em `agent.ts`:
+  ```typescript
+  {
+    type: "function",
+    function: {
+      name: "perguntar_usuario",
+      description: "Faça uma pergunta ao usuário quando você não tem certeza de algo. " +
+        "O usuário vai escolher uma das alternativas ou digitar a própria resposta. " +
+        "USE SEMPRE que: não entendeu perfeitamente o pedido, há múltiplas interpretações, " +
+        "precisa de informação que não está no contexto, ou precisa confirmar uma decisão importante. " +
+        "NUNCA assuma — pergunte.",
+      parameters: {
+        type: "object",
+        properties: {
+          pergunta: { 
+            type: "string", 
+            description: "A pergunta em linguagem natural, clara e específica" 
+          },
+          alternativas: {
+            type: "array",
+            items: { type: "string" },
+            description: "Lista de alternativas pré-definidas (mínimo 2, máximo 6). " +
+              "O usuário pode escolher uma OU digitar resposta livre.",
+            minItems: 2,
+            maxItems: 6
+          },
+          contexto: {
+            type: "string",
+            description: "Contexto adicional opcional explicando POR QUE está perguntando"
+          }
+        },
+        required: ["pergunta", "alternativas"]
+      }
+    }
+  }
+  ```
+- [ ] **F8.6.2** Handler de `perguntar_usuario`:
+  - Quando IA chama essa tool, o agent loop PARA
+  - Renderiza UI de pergunta (8.6.B)
+  - Aguarda usuário responder (escolher alternativa ou digitar)
+  - Retorna resposta como tool result pra IA
+  - Agent loop CONTINUA com a resposta
+- [ ] **F8.6.3** Disponibilizar `perguntar_usuario` no chat normal E no configurador:
+  - Chat normal: sempre disponível
+  - Configurador: sempre disponível (já estava no prompt do 7.A)
+  - Sub-agentes: disponível se `allowUserQuestions: true` (default: false)
+
+#### 8.6.B — UI de Pergunta no Terminal (3h)
+
+**Objetivo:** Interface visual igual Claude Code — alternativas numeradas + input livre.
+
+**Tarefas:**
+- [ ] **F8.6.4** Criar `src/tui/QuestionPrompt.tsx`:
+  - Componente Ink que renderiza pergunta + alternativas
+  - Layout:
+    ```
+    ┌─────────────────────────────────────────────┐
+    │ ❓ Pergunta                                  │
+    │                                             │
+    │ Qual framework você quer usar pra UI?       │
+    │                                             │
+    │ Contexto: Você mencionou "interface" mas    │
+    │ não especificou qual framework.             │
+    │                                             │
+    │ [1] React                                   │
+    │ [2] Vue                                     │
+    │ [3] Svelte                                  │
+    │ [4] Nenhum — HTML puro                      │
+    │                                             │
+    │ Digite o número da alternativa              │
+    │ OU digite sua própria resposta:             │
+    │                                             │
+    │ > _                                         │
+    │                                             │
+    │ [Enter] confirmar  [Esc] cancelar           │
+    └─────────────────────────────────────────────┘
+    ```
+- [ ] **F8.6.5** Interação:
+  - Setas ↑↓ ou números 1-6 selecionam alternativa
+  - Enter confirma seleção
+  - OU usuário digita resposta livre (qualquer texto que não seja número)
+  - Esc cancela pergunta → retorna "usuário cancelou"
+  - Tab alterna entre "escolher alternativa" e "digitar resposta"
+- [ ] **F8.6.6** Estado de "aguardando resposta":
+  - Quando `perguntar_usuario` é chamada, App entra em modo "aguardando"
+  - Agent loop PAUSA (não continua pra próxima iteração)
+  - UI mostra QuestionPrompt
+  - Input normal do chat fica desabilitado
+  - Status bar mostra "Aguardando resposta..."
+  - Após resposta, agent loop CONTINUA
+- [ ] **F8.6.7** Render da pergunta no histórico do chat:
+  - Pergunta aparece como mensagem especial no chat
+  - Resposta do usuário também aparece
+  - Histórico preserva pergunta+resposta pra contexto futuro
+
+#### 8.6.C — Integração com Agent Loop (2h)
+
+**Objetivo:** Agent loop pausa/resume corretamente quando IA pergunta.
+
+**Tarefas:**
+- [ ] **F8.6.8** Modificar `runAgentLoop`:
+  ```typescript
+  // Quando dispatchToolCall recebe "perguntar_usuario":
+  if (toolName === "perguntar_usuario") {
+    const { pergunta, alternativas, contexto } = args;
+    
+    // PAUSA agent loop — renderiza UI e aguarda
+    const resposta = await waitForUserResponse(pergunta, alternativas, contexto);
+    
+    // Retorna resposta como tool result
+    return { 
+      resultStr: resposta.cancelled 
+        ? "[USUÁRIO CANCELOU A PERGUNTA]"
+        : `[RESPOSTA DO USUÁRIO] ${resposta.value}`,
+      usedHeal: false 
+    };
+  }
+  ```
+- [ ] **F8.6.9** `waitForUserResponse()`:
+  - Cria Promise que resolve quando usuário responde
+  - Renderiza QuestionPrompt via callback
+  - Resolve com `{ value: string, cancelled: boolean, fromAlternatives: boolean }`
+  - Pode ser cancelado (Esc) → `{ cancelled: true }`
+- [ ] **F8.6.10** System prompt atualizado pra encorajar perguntas:
+  ```
+  REGRAS:
+  - Se você NÃO tem certeza do que o usuário quer, USE perguntar_usuario.
+  - NUNCA assuma — pergunte.
+  - É melhor perguntar e errar 0 vezes do que assumir e errar 5.
+  - Pergunte quando: há múltiplas interpretações, falta contexto,
+    precisa confirmar decisão importante, usuário foi vago.
+  - Dê alternativas específicas (não genéricas).
+  - Sempre inclua "Outro" implícito (usuário pode digitar resposta livre).
+  ```
+
+#### 8.6.D — Disponibilidade Seletiva (0.5h)
+
+**Objetivo:** Nem todo sub-agente pode perguntar (evita spam).
+
+**Tarefas:**
+- [ ] **F8.6.11** Configuração por agente:
+  - Chat principal: `allowUserQuestions: true` (sempre)
+  - Configurador: `allowUserQuestions: true` (sempre)
+  - Sub-agentes paralelos: `allowUserQuestions: false` (default)
+  - Sub-agentes podem ter `allowUserQuestions: true` se explicitamente configurado
+- [ ] **F8.6.12** Se IA tenta `perguntar_usuario` sem permissão:
+  - Retorna erro: "perguntar_usuario não disponível neste contexto"
+  - IA deve continuar sem perguntar (usar melhor juízo)
+
+**Entregável:** IA faz pergunta → agent pausa → usuário responde → IA continua. Funciona no chat normal e configurador.
+
+---
+
 ### Sprint 9: config.json Schema + Migration (4h)
 
 **Objetivo:** Schema rigoroso + migration de usuários existentes.
@@ -1436,6 +1600,111 @@ describe("Casos edge de compartilhamento")
   ✓ compartilhar com todos os modos → tool aparece em qualquer modo ativo
 ```
 
+#### 10.15 — Tests do Sprint 8.6: Sistema de Perguntas (AskUser) (1.5h)
+
+**Arquivo:** `src/__tests__/askUser.test.tsx` (novo)
+
+```
+describe("Tool perguntar_usuario")
+  ✓ tool está disponível no chat normal
+  ✓ tool está disponível no configurador
+  ✓ tool NÃO está disponível em sub-agentes (allowUserQuestions: false)
+  ✓ tool disponível em sub-agente quando allowUserQuestions: true
+  ✓ schema requer "pergunta" (string)
+  ✓ schema requer "alternativas" (array min 2, max 6)
+  ✓ schema tem "contexto" opcional
+  ✓ IA sem permissão recebe erro ao tentar usar
+
+describe("UI de pergunta (QuestionPrompt)")
+  ✓ renderiza pergunta + alternativas numeradas
+  ✓ mostra contexto quando fornecido
+  ✓ setas ↑↓ navegam entre alternativas
+  ✓ números 1-6 selecionam alternativa diretamente
+  ✓ Enter confirma alternativa selecionada
+  ✓ Tab alterna entre "escolher alternativa" e "digitar resposta"
+  ✓ modo "digitar resposta" aceita texto livre
+  ✓ Esc cancela pergunta → retorna cancelled: true
+  ✓ alternativa selecionada destacada visualmente
+  ✓ mais de 6 alternativas → erro (maxItems)
+
+describe("Integração com agent loop")
+  ✓ agent loop PARA quando perguntar_usuario é chamada
+  ✓ agent loop CONTINUA após usuário responder
+  ✓ resposta do usuário é retornada como tool result
+  ✓ resposta de alternativa → resultStr = "[RESPOSTA] <alternativa>"
+  ✓ resposta livre → resultStr = "[RESPOSTA] <texto digitado>"
+  ✓ cancelamento → resultStr = "[USUÁRIO CANCELOU]"
+  ✓ IA recebe resposta e continua trabalhando
+  ✓ múltiplas perguntas na mesma conversa funcionam
+  ✓ pergunta aparece no histórico do chat
+  ✓ resposta aparece no histórico do chat
+
+describe("Estado de aguardando resposta")
+  ✓ App entra em modo "aguardando" quando IA pergunta
+  ✓ input normal do chat fica desabilitado
+  ✓ status bar mostra "Aguardando resposta..."
+  ✓ Hub não abre durante aguardando (Ctrl+E ignorado)
+  ✓ após resposta, App volta ao normal
+
+describe("Disponibilidade seletiva")
+  ✓ chat principal: allowUserQuestions = true
+  ✓ configurador: allowUserQuestions = true
+  ✓ sub-agente default: allowUserQuestions = false
+  ✓ sub-agente com flag true: pode perguntar
+  ✓ sub-agente com flag false: recebe erro
+  ✓ tentativa sem permissão não trava agent loop
+
+describe("Casos edge")
+  ✓ pergunta com alternativas vazias → erro de schema
+  ✓ pergunta com 1 alternativa → erro (minItems 2)
+  ✓ pergunta com 7 alternativas → erro (maxItems 6)
+  ✓ pergunta muito longa (>500 chars) → truncada ou erro
+  ✓ usuário digita número inválido (ex: 9) → ignora, espera válido
+  ✓ usuário digita texto em modo "escolher alternativa" → muda pra "digitar"
+  ✓ IA pergunta durante streaming → pausa stream, mostra pergunta
+  ✓ IA pergunta após tool call → pergunta aparece após resultado do tool
+```
+
+**Arquivo:** `src/__tests__/integration-askUser.test.ts` (novo)
+
+```
+describe("E2E: IA pergunta quando não entende")
+  ✓ usuário: "faz uma interface"
+  ✓ IA: pergunta "Qual framework?" com alternativas [React, Vue, Svelte, HTML puro]
+  ✓ usuário: "1" (React)
+  ✓ IA: continua e cria interface em React
+
+describe("E2E: IA pergunta pra confirmar decisão importante")
+  ✓ usuário: "deleta todos os arquivos .log"
+  ✓ IA: pergunta "Tem certeza? Vou deletar 47 arquivos .log. Confirmar?" 
+        com alternativas [Sim, deletar todos, Não, cancelar, Só os do diretório atual]
+  ✓ usuário: "Sim, deletar todos"
+  ✓ IA: deleta arquivos
+
+describe("E2E: Usuário digita resposta livre")
+  ✓ IA pergunta: "Qual porta pro servidor?" [3000, 8080, 34872]
+  ✓ usuário digita: "12345" (não é alternativa)
+  ✓ IA: usa porta 12345
+
+describe("E2E: Usuário cancela pergunta")
+  ✓ IA pergunta algo
+  ✓ usuário pressiona Esc
+  ✓ IA: "Ok, vou prosseguir sem essa informação" ou para
+
+describe("E2E: Múltiplas perguntas em sequência")
+  ✓ IA pergunta 1 → usuário responde → IA pergunta 2 → usuário responde
+  ✓ histórico mostra ambas perguntas + respostas
+  ✓ IA usa ambas respostas no trabalho final
+
+describe("E2E: Configurador usa perguntar_usuario")
+  ✓ configurador: "darklua.exe encontrado. Configurar?" [Sim, Não, Mais info]
+  ✓ usuário: "Mais info"
+  ✓ configurador: explica o que darklua faz
+  ✓ configurador: pergunta "Agora quer configurar?" [Sim, Não]
+  ✓ usuário: "Sim"
+  ✓ configurador: cria manifest
+```
+
 #### 10.15 — Tests E2E Adicionais: Configurador + Compartilhamento (1h)
 
 **Arquivo:** `src/__tests__/integration-configurator-sharing.test.ts` (novo)
@@ -1494,15 +1763,16 @@ describe("E2E: Configurar via chat e compartilhar")
 | Hooks por modo (Sprint 4) | 1 | ~25 |
 | MCPs por modo (Sprint 5) | 1 | ~10 |
 | Validators por modo (Sprint 6) | 1 | ~12 |
-| **Mini chat + busca arquivos (Sprint 7)** | **2** | **~30** |
+| Mini chat + busca arquivos (Sprint 7) | 2 | ~30 |
 | Inbox organizadora (Sprint 8) | 1 | ~30 |
-| **Modo normal + compartilhamento (Sprint 8.5)** | **2** | **~35** |
+| Modo normal + compartilhamento (Sprint 8.5) | 2 | ~35 |
+| **Sistema de perguntas AskUser (Sprint 8.6)** | **2** | **~40** |
 | Migration (Sprint 9) | 1 | ~15 |
 | Integração E2E | 1 | ~25 |
-| **E2E configurador + compartilhamento** | **1** | **~20** |
+| E2E configurador + compartilhamento | 1 | ~20 |
 | Property-based | 1 | ~12 |
 | Snapshot visual | 1 | ~8 |
-| **Total** | **19 arquivos** | **~297 testes** |
+| **Total** | **21 arquivos** | **~347 testes** |
 
 **Meta:** Cobertura >= 80% do novo código. 0 regressões nos testes existentes.
 
@@ -1621,4 +1891,6 @@ src/
 - **2026-06-19:** Sprint 7 expandido com mini chat + busca de arquivos na máquina (6h → 10h)
 - **2026-06-19:** Sprint 8.5 novo: modo normal + compartilhamento entre modos (5h)
 - **2026-06-19:** Sprint 10 expandido com testes das novidades (+5 arquivos, +65 testes) → total 19 arquivos, ~297 testes
-- **Total atual:** ~57h, 11 sprints, ~297 testes
+- **2026-06-19:** Sprint 8.6 novo: sistema de perguntas interativas AskUser (7h) — IA pergunta, agent pausa, usuário responde
+- **2026-06-19:** Sprint 10 expandido com testes do AskUser (+2 arquivos, +50 testes) → total 21 arquivos, ~347 testes
+- **Total atual:** ~64h, 12 sprints, ~347 testes

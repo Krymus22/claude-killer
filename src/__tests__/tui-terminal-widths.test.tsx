@@ -31,7 +31,6 @@ vi.mock("../config.js", () => ({
     contextWindowTokens: 128000, contextWarnThreshold: 0.6, contextCompactThreshold: 0.75,
     costPerKPrompt: 0.01, costPerKCompletion: 0.03, maxHealRetries: 2,
     temperature: 0.6, topP: 0.9, maxTokens: 4096,
-    aiSearchEnabled: true, aiSearchApiKey: "k", aiSearchBaseUrl: "u", aiSearchModel: "m",
   },
 }));
 
@@ -77,9 +76,6 @@ vi.mock("../modes.js", () => ({
 
 vi.mock("../toolDetector.js", () => ({
   detectTool: vi.fn(() => ({ status: "missing", binaryPath: null, version: null, error: "", searchedPaths: [] })),
-  searchAllTools: vi.fn(async () => []),
-  extremeSearchAllTools: vi.fn(async () => []),
-  aiOnlySearchAllTools: vi.fn(async () => []),
   extractToolBinaryName: vi.fn((id: string) => id.replace(/^tool:/, "").replace(/_.+$/, "")),
   getModeToolNames: vi.fn((ids: string[]) => [...new Set(ids.map((id: string) => id.replace(/^tool:/, "").replace(/_.+$/, "")))]),
 }));

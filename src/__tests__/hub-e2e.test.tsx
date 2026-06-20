@@ -32,14 +32,6 @@
  *     - M toggles mode filter (only shows extensions from active mode)
  *     - Filter indicator "FILTRO: só do modo ativo" appears
  *
- *   [Search — S, A, X]
- *     - S triggers smart search (calls searchAllTools)
- *     - A triggers AI-only search (calls aiOnlySearchAllTools)
- *     - X triggers extreme search (calls extremeSearchAllTools)
- *     - Esc cancels extreme search without closing hub
- *     - Mutually exclusive: S+A, S+X, A+X don't both run
- *     - Disabled on Modes tab
- *
  *   [Visual regression]
  *     - Active mode label appears when mode is active
  *     - Card shows [FALTA] for missing tools
@@ -63,8 +55,6 @@ vi.mock("../config.js", () => ({
     contextWindowTokens: 128000, contextWarnThreshold: 0.6, contextCompactThreshold: 0.75,
     costPerKPrompt: 0, costPerKCompletion: 0, maxHealRetries: 2,
     temperature: 0.6, topP: 0.9, maxTokens: 4096,
-    aiSearchEnabled: true, aiSearchApiKey: "ai-key",
-    aiSearchBaseUrl: "https://ai.test", aiSearchModel: "ai-model",
   },
 }));
 
@@ -73,28 +63,12 @@ const mockDetectTool = vi.hoisted(() => vi.fn(() => ({
   status: "missing", binaryPath: null, version: null, error: "not found", searchedPaths: [],
 })));
 
-const mockSearchAllTools = vi.hoisted(() => vi.fn(async (_names: string[], onProgress?: (p: any) => void) => {
-  if (onProgress) onProgress({ currentTool: "rojo", currentPath: "(test)", toolsDone: 1, toolsTotal: 1, results: [] });
-  return [];
-}));
-const mockAiOnlySearchAllTools = vi.hoisted(() => vi.fn(async (_names: string[], onProgress?: (p: any) => void) => {
-  if (onProgress) onProgress({ currentTool: "rojo", currentPath: "(ai)", toolsDone: 1, toolsTotal: 1, results: [] });
-  return [];
-}));
-const mockExtremeSearchAllTools = vi.hoisted(() => vi.fn(async (_names: string[], onProgress?: (p: any) => void, _abort?: { aborted: boolean }) => {
-  if (onProgress) onProgress({ currentTool: "rojo", currentPath: "(extreme)", toolsDone: 1, toolsTotal: 1, results: [] });
-  return [];
-}));
-
 vi.mock("../toolDetector.js", () => ({
   detectTool: mockDetectTool,
   detectAndVerify: vi.fn(async () => ({ status: "missing", binaryPath: null, version: null, error: "", searchedPaths: [], verified: false })),
   verifyToolWorks: vi.fn(async () => ({ works: false })),
   getSearchPathsForTool: vi.fn(() => []),
   isAutoDetectEnabled: vi.fn(() => false),
-  searchAllTools: mockSearchAllTools,
-  extremeSearchAllTools: mockExtremeSearchAllTools,
-  aiOnlySearchAllTools: mockAiOnlySearchAllTools,
   extractToolBinaryName: vi.fn((id: string) => id.replace(/^tool:/, "").replace(/_.+$/, "")),
   getModeToolNames: vi.fn((ids: string[]) => [...new Set(ids.map((id: string) => id.replace(/^tool:/, "").replace(/_.+$/, "")))]),
 }));
@@ -425,131 +399,6 @@ describe("Hub E2E — complete user flows", () => {
     });
   });
 
-  // ─── Search: S, A, X ─────────────────────────────────────────────────
-
-  describe("smart search (S)", () => {
-    it("pressing S calls searchAllTools", async () => {
-      const { stdin } = render(<ExtensionHub onClose={() => {}} />);
-      stdin.write("s");
-      await delay(50);
-      expect(mockSearchAllTools).toHaveBeenCalled();
-    });
-
-    it("shows 'Buscando' panel while searching", async () => {
-      // Make the search slow so the panel has time to render before it resolves
-      mockSearchAllTools.mockImplementationOnce(async (_n: string[], onProgress?: (p: any) => void) => {
-        if (onProgress) onProgress({ currentTool: "rojo", currentPath: "(searching...)", toolsDone: 0, toolsTotal: 1, results: [] });
-        await new Promise((r) => setTimeout(r, 300));
-        return [];
-      });
-      const { stdin, lastFrame } = render(<ExtensionHub onClose={() => {}} />);
-      stdin.write("s");
-      await delay(100);
-      const out = stripAnsi(lastFrame() ?? "");
-      expect(out).toMatch(/Buscando|Busca/);
-    });
-
-    it("S on Modes tab does nothing", async () => {
-      mockSearchAllTools.mockClear();
-      const { stdin } = render(<ExtensionHub onClose={() => {}} />);
-      for (let i = 0; i < 6; i++) { stdin.write("\t"); await delay(30); }
-      stdin.write("s");
-      await delay(50);
-      expect(mockSearchAllTools).not.toHaveBeenCalled();
-    });
-  });
-
-  describe("AI search (A)", () => {
-    it("pressing A calls aiOnlySearchAllTools", async () => {
-      const { stdin } = render(<ExtensionHub onClose={() => {}} />);
-      stdin.write("a");
-      await delay(50);
-      expect(mockAiOnlySearchAllTools).toHaveBeenCalled();
-    });
-
-    it("shows 'BUSCA IA' panel while searching", async () => {
-      mockAiOnlySearchAllTools.mockImplementationOnce(async (_n: string[], onProgress?: (p: any) => void) => {
-        if (onProgress) onProgress({ currentTool: "rojo", currentPath: "(ai)", toolsDone: 0, toolsTotal: 1, results: [] });
-        await new Promise((r) => setTimeout(r, 300));
-        return [];
-      });
-      const { stdin, lastFrame } = render(<ExtensionHub onClose={() => {}} />);
-      stdin.write("a");
-      await delay(100);
-      const out = stripAnsi(lastFrame() ?? "");
-      expect(out).toMatch(/BUSCA IA|Busca IA/);
-    });
-
-    it("A does nothing while S is running", async () => {
-      mockSearchAllTools.mockImplementationOnce(async () => {
-        await new Promise((r) => setTimeout(r, 500));
-        return [];
-      });
-      const { stdin } = render(<ExtensionHub onClose={() => {}} />);
-      stdin.write("s");
-      await delay(50);
-      mockAiOnlySearchAllTools.mockClear();
-      stdin.write("a");
-      await delay(50);
-      expect(mockAiOnlySearchAllTools).not.toHaveBeenCalled();
-    });
-  });
-
-  describe("extreme search (X)", () => {
-    it("pressing X calls extremeSearchAllTools", async () => {
-      const { stdin } = render(<ExtensionHub onClose={() => {}} />);
-      stdin.write("x");
-      await delay(50);
-      expect(mockExtremeSearchAllTools).toHaveBeenCalled();
-    });
-
-    it("shows 'BUSCA EXTREMA' panel while searching", async () => {
-      const { stdin, lastFrame } = render(<ExtensionHub onClose={() => {}} />);
-      stdin.write("x");
-      await delay(50);
-      const out = stripAnsi(lastFrame() ?? "");
-      expect(out).toMatch(/BUSCA EXTREMA|Busca extrema/);
-    });
-
-    it("Esc cancels extreme search instead of closing hub", async () => {
-      mockExtremeSearchAllTools.mockImplementationOnce(
-        async (_n: string[], _op?: any, abort?: { aborted: boolean }) => {
-          const start = Date.now();
-          while (Date.now() - start < 2000) {
-            if (abort?.aborted) return [];
-            await new Promise((r) => setTimeout(r, 30));
-          }
-          return [];
-        }
-      );
-      const onClose = vi.fn();
-      const { stdin, lastFrame } = render(<ExtensionHub onClose={onClose} />);
-      stdin.write("x");
-      await delay(100);
-      stdin.write("\u001B"); // Esc
-      await delay(100);
-      // Hub should still be open
-      expect(onClose).not.toHaveBeenCalled();
-      const out = stripAnsi(lastFrame() ?? "");
-      expect(out).toContain("EXTENSION HUB");
-      expect(out).toMatch(/cancelad[ao]/i);
-    });
-
-    it("X does nothing while A is running", async () => {
-      mockAiOnlySearchAllTools.mockImplementationOnce(async () => {
-        await new Promise((r) => setTimeout(r, 500));
-        return [];
-      });
-      const { stdin } = render(<ExtensionHub onClose={() => {}} />);
-      stdin.write("a");
-      await delay(50);
-      mockExtremeSearchAllTools.mockClear();
-      stdin.write("x");
-      await delay(50);
-      expect(mockExtremeSearchAllTools).not.toHaveBeenCalled();
-    });
-  });
-
   // ─── Visual regression ────────────────────────────────────────────────
 
   describe("visual state", () => {
@@ -603,52 +452,6 @@ describe("Hub E2E — complete user flows", () => {
       const out = stripAnsi(lastFrame() ?? "");
       // 3/3 active
       expect(out).toMatch(/\d+\/\d+ active/);
-    });
-  });
-
-  // ─── Concurrent state ─────────────────────────────────────────────────
-
-  describe("concurrent search prevention", () => {
-    it("S+A doesn't run both", async () => {
-      mockSearchAllTools.mockImplementationOnce(async () => {
-        await new Promise((r) => setTimeout(r, 500));
-        return [];
-      });
-      const { stdin } = render(<ExtensionHub onClose={() => {}} />);
-      stdin.write("s");
-      await delay(50);
-      mockAiOnlySearchAllTools.mockClear();
-      stdin.write("a");
-      await delay(50);
-      expect(mockAiOnlySearchAllTools).not.toHaveBeenCalled();
-    });
-
-    it("S+X doesn't run both", async () => {
-      mockSearchAllTools.mockImplementationOnce(async () => {
-        await new Promise((r) => setTimeout(r, 500));
-        return [];
-      });
-      const { stdin } = render(<ExtensionHub onClose={() => {}} />);
-      stdin.write("s");
-      await delay(50);
-      mockExtremeSearchAllTools.mockClear();
-      stdin.write("x");
-      await delay(50);
-      expect(mockExtremeSearchAllTools).not.toHaveBeenCalled();
-    });
-
-    it("A+X doesn't run both", async () => {
-      mockAiOnlySearchAllTools.mockImplementationOnce(async () => {
-        await new Promise((r) => setTimeout(r, 500));
-        return [];
-      });
-      const { stdin } = render(<ExtensionHub onClose={() => {}} />);
-      stdin.write("a");
-      await delay(50);
-      mockExtremeSearchAllTools.mockClear();
-      stdin.write("x");
-      await delay(50);
-      expect(mockExtremeSearchAllTools).not.toHaveBeenCalled();
     });
   });
 });

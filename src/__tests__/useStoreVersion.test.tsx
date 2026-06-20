@@ -32,7 +32,6 @@ vi.mock("../config.js", () => ({
     contextWindowTokens: 128000, contextWarnThreshold: 0.6, contextCompactThreshold: 0.75,
     costPerKPrompt: 0, costPerKCompletion: 0, maxHealRetries: 2,
     temperature: 0.6, topP: 0.9, maxTokens: 4096,
-    aiSearchEnabled: false, aiSearchApiKey: "", aiSearchBaseUrl: "", aiSearchModel: "",
   },
 }));
 

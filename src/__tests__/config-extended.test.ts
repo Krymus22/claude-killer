@@ -6,8 +6,7 @@
  *     do módulo com diferentes combinações de env vars
  *   - optionalInt/Bool/Float com valores extremos (negativo, zero, decimal,
  *     string, vazio)
- *   - env var loading (NVIDIA_API_KEYS multi-key pool, NVIDIA_API_KEYS_FILE,
- *     AI_SEARCH_* vars)
+ *   - env var loading (NVIDIA_API_KEYS multi-key pool, NVIDIA_API_KEYS_FILE)
  *   - provider detection (NVIDIA via key única, ZenMux via ZENMUX_API_KEY,
  *     override via API_PROVIDER)
  *   - error messages (mensagens específicas para cada combinação de env
@@ -39,10 +38,6 @@ describe("Config (extended)", () => {
     delete process.env.CONTEXT_WARN_THRESHOLD;
     delete process.env.COST_PER_K_PROMPT;
     delete process.env.COST_PER_K_COMPLETION;
-    delete process.env.AI_SEARCH_API_KEY;
-    delete process.env.AI_SEARCH_BASE_URL;
-    delete process.env.AI_SEARCH_MODEL;
-    delete process.env.AI_SEARCH_ENABLED;
   });
 
   afterEach(() => {
@@ -157,25 +152,6 @@ describe("Config (extended)", () => {
     process.env.NVIDIA_API_KEYS_FILE = "/path/to/keys.txt";
     const { config } = await import("../config.js");
     expect(config.nvidiaApiKeysFile).toBe("/path/to/keys.txt");
-  });
-
-  it("AI_SEARCH_* sobrescreve defaults do provider principal", async () => {
-    process.env.NVIDIA_API_KEY = "main-key";
-    process.env.AI_SEARCH_API_KEY = "search-key";
-    process.env.AI_SEARCH_BASE_URL = "https://search.example.com/v1";
-    process.env.AI_SEARCH_MODEL = "fast-model";
-    const { config } = await import("../config.js");
-    expect(config.aiSearchApiKey).toBe("search-key");
-    expect(config.aiSearchBaseUrl).toBe("https://search.example.com/v1");
-    expect(config.aiSearchModel).toBe("fast-model");
-  });
-
-  it("AI_SEARCH_* cai para defaults do provider quando não setadas", async () => {
-    process.env.NVIDIA_API_KEY = "main-key";
-    const { config } = await import("../config.js");
-    // Defaults vêm de _providerConfig
-    expect(config.aiSearchApiKey).toBe("main-key");
-    expect(config.aiSearchModel).toBe("moonshotai/kimi-k2.6");
   });
 
   // --- provider detection ----------------------------------------------------

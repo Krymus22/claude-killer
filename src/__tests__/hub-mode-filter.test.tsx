@@ -186,7 +186,7 @@ describe("Hub mode filter", () => {
   it("shortcuts bar includes 'M' for filter", () => {
     const { lastFrame } = render(<ExtensionHub onClose={() => {}} />);
     const out = stripAnsi(lastFrame() ?? "");
-    // The compact help text uses "M" (between I and A=ai) for the filter toggle
+    // The compact help text uses "M" for the filter toggle
     expect(out).toMatch(/\bM\b/);
   });
 

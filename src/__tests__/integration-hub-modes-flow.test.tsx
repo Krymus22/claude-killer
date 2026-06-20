@@ -15,14 +15,14 @@
  *   - history (effortLevels.ts importa, mas não queremos side-effects)
  *   - auxiliary modules (apiKeyPool, i18n, agent, todo, memory, session, etc.)
  *
- * Fluxos cobertos (16 testes):
+ * Fluxos cobertos (13 testes):
  *   1. Ativar modo Roblox (UI + variação modo inexistente)        — 2 testes
  *   2. Desativar modo (tecla D)                                    — 1 teste
  *   3. Trocar de modo (roblox → devops)                           — 1 teste
  *   4. Mode filter M (liga/desliga; sem modo ativo)               — 2 testes
  *   5. Toggle extension + cycle trigger mode (T, 1-4, Enter)      — 2 testes
  *   6. Install tool flow (I)                                       — 1 teste
- *   7. Search flow S/A/X (smart, AI, extreme+Esc)                 — 3 testes
+ *   7. (Removed in Sprint 2 — search system was deleted)
  *   8. State preservation (cursor/scroll mantidos entre ações)    — 2 testes
  *   + 2 testes extras de robustez (estado inicial, re-render)
  */
@@ -176,28 +176,13 @@ vi.mock("../config.js", () => ({
     contextWindowTokens: 128000, contextWarnThreshold: 0.6, contextCompactThreshold: 0.75,
     costPerKPrompt: 0, costPerKCompletion: 0, maxHealRetries: 2,
     temperature: 0.6, topP: 0.9, maxTokens: 4096,
-    aiSearchEnabled: true, aiSearchApiKey: "ai-key",
-    aiSearchBaseUrl: "https://ai.test", aiSearchModel: "ai-model",
   },
 }));
 
-// toolDetector — mock controlável por teste (search functions)
+// toolDetector — mock controlável por teste
 const mockDetectTool = vi.hoisted(() => vi.fn(() => ({
   status: "missing", binaryPath: null, version: null, error: "not found", searchedPaths: [],
 })));
-
-const mockSearchAllTools = vi.hoisted(() => vi.fn(async (_names: string[], onProgress?: (p: any) => void) => {
-  if (onProgress) onProgress({ currentTool: "rojo", currentPath: "(test)", toolsDone: 1, toolsTotal: 1, results: [] });
-  return [];
-}));
-const mockAiOnlySearchAllTools = vi.hoisted(() => vi.fn(async (_names: string[], onProgress?: (p: any) => void) => {
-  if (onProgress) onProgress({ currentTool: "rojo", currentPath: "(ai)", toolsDone: 1, toolsTotal: 1, results: [] });
-  return [];
-}));
-const mockExtremeSearchAllTools = vi.hoisted(() => vi.fn(async (_names: string[], onProgress?: (p: any) => void, _abort?: { aborted: boolean }) => {
-  if (onProgress) onProgress({ currentTool: "rojo", currentPath: "(extreme)", toolsDone: 1, toolsTotal: 1, results: [] });
-  return [];
-}));
 
 vi.mock("../toolDetector.js", () => ({
   detectTool: mockDetectTool,
@@ -205,9 +190,6 @@ vi.mock("../toolDetector.js", () => ({
   verifyToolWorks: vi.fn(async () => ({ works: false })),
   getSearchPathsForTool: vi.fn(() => []),
   isAutoDetectEnabled: vi.fn(() => false),
-  searchAllTools: mockSearchAllTools,
-  extremeSearchAllTools: mockExtremeSearchAllTools,
-  aiOnlySearchAllTools: mockAiOnlySearchAllTools,
   extractToolBinaryName: vi.fn((id: string) => id.replace(/^tool:/, "").replace(/_.+$/, "")),
   getModeToolNames: vi.fn((ids: string[]) => [...new Set(ids.map((id: string) => id.replace(/^tool:/, "").replace(/_.+$/, "")))]),
 }));
@@ -752,104 +734,8 @@ describe("Integration: ExtensionHub + Modes + EffortLevels flow", () => {
   });
 
   // ═══════════════════════════════════════════════════════════════════════
-  // 7. Search flow: S → A → X (3 testes)
+  // 7. (Removed in Sprint 2) Search flow S/A/X — search system was deleted.
   // ═══════════════════════════════════════════════════════════════════════
-
-  describe("7. Search flow S/A/X", () => {
-    it("S (smart) chama searchAllTools e mostra painel 'Buscando'", async () => {
-      // Faz a searchAllTools demorar um pouco pra podermos capturar o painel
-      mockSearchAllTools.mockImplementationOnce(
-        async (_names: string[], onProgress?: (p: any) => void) => {
-          if (onProgress) onProgress({
-            currentTool: "rojo", currentPath: "(searching...)",
-            toolsDone: 0, toolsTotal: 1, results: [],
-          });
-          await new Promise((r) => setTimeout(r, 300));
-          return [];
-        }
-      );
-
-      const { stdin, lastFrame } = render(<ExtensionHub onClose={() => {}} />);
-      await delay(30);
-
-      stdin.write("s");
-      await delay(100);
-
-      // searchAllTools foi chamado
-      expect(mockSearchAllTools).toHaveBeenCalled();
-
-      // Painel de busca visível
-      const frame = stripAnsi(lastFrame() ?? "");
-      expect(frame).toMatch(/Buscando/);
-    });
-
-    it("A (AI only) chama aiOnlySearchAllTools e mostra painel 'BUSCA IA'", async () => {
-      mockAiOnlySearchAllTools.mockImplementationOnce(
-        async (_names: string[], onProgress?: (p: any) => void) => {
-          if (onProgress) onProgress({
-            currentTool: "rojo", currentPath: "(ai)",
-            toolsDone: 0, toolsTotal: 1, results: [],
-          });
-          await new Promise((r) => setTimeout(r, 300));
-          return [];
-        }
-      );
-
-      const { stdin, lastFrame } = render(<ExtensionHub onClose={() => {}} />);
-      await delay(30);
-
-      stdin.write("a");
-      await delay(100);
-
-      expect(mockAiOnlySearchAllTools).toHaveBeenCalled();
-
-      const frame = stripAnsi(lastFrame() ?? "");
-      expect(frame).toMatch(/BUSCA IA/);
-    });
-
-    it("X (extreme) chama extremeSearchAllTools; Esc cancela sem fechar hub", async () => {
-      // extremeSearchAllTools que respeita o sinal de abort
-      mockExtremeSearchAllTools.mockImplementationOnce(
-        async (_names: string[], onProgress?: (p: any) => void, abort?: { aborted: boolean }) => {
-          if (onProgress) onProgress({
-            currentTool: "rojo", currentPath: "(scanning...)",
-            toolsDone: 0, toolsTotal: 1, results: [],
-          });
-          const start = Date.now();
-          while (Date.now() - start < 2000) {
-            if (abort?.aborted) return [];
-            await new Promise((r) => setTimeout(r, 30));
-          }
-          return [];
-        }
-      );
-
-      const onClose = vi.fn();
-      const { stdin, lastFrame } = render(<ExtensionHub onClose={onClose} />);
-      await delay(30);
-
-      stdin.write("x");
-      await delay(100);
-
-      // Painel BUSCA EXTREMA visível
-      let frame = stripAnsi(lastFrame() ?? "");
-      expect(frame).toMatch(/BUSCA EXTREMA/);
-      expect(mockExtremeSearchAllTools).toHaveBeenCalled();
-
-      // Esc cancela a busca (não fecha o hub)
-      stdin.write("\u001B"); // Esc
-      await delay(100);
-
-      // Hub NÃO foi fechado
-      expect(onClose).not.toHaveBeenCalled();
-
-      // Frame ainda mostra o Hub
-      frame = stripAnsi(lastFrame() ?? "");
-      expect(frame).toContain("EXTENSION HUB");
-      // Mensagem de cancelamento aparece
-      expect(frame).toMatch(/cancelad/i);
-    });
-  });
 
   // ═══════════════════════════════════════════════════════════════════════
   // 8. State preservation entre ações (2 testes)

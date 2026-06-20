@@ -58,6 +58,13 @@ import {
 } from "./externalTools.js";
 import { executeTrigger, type TriggerContext } from "./extensionCenter.js";
 import { think, THINK_TOOL_DEFINITION } from "./thinkTool.js";
+import {
+  ASK_USER_TOOL_DEFINITION,
+  handleAskUser,
+  setAskUserCallback,
+  clearAskUserCallback,
+  type AskUserCallback,
+} from "./askUser.js";
 import { pushActivity, withActivity, clearActivity } from "./activityTracker.js";
 import {
   shouldBlockForFalsePromise,
@@ -184,6 +191,7 @@ function getMergedTools(): OpenAI.Chat.Completions.ChatCompletionTool[] {
 
   const allTools = [...TOOL_DEFINITIONS, ...externalTools];
   allTools.push(THINK_TOOL_DEFINITION);
+  allTools.push(ASK_USER_TOOL_DEFINITION);
 
   if (mcpTools.length > 0) {
     allTools.push(...mcpTools);
@@ -327,6 +335,11 @@ type ToolHandler = (
 ) => Promise<ToolResult>;
 
 const toolHandlers: Record<string, ToolHandler> = {
+  // Sprint 1: AskUser — IA faz pergunta, agent pausa, usuário responde
+  "perguntar_usuario": async (args) => {
+    return handleAskUser(args);
+  },
+
   "ler_arquivo": async (args) => {
     const result = await lerArquivo({ caminho: asString(args.caminho) });
     return { resultStr: result, usedHeal: false };
@@ -1658,6 +1671,18 @@ export async function runAgentLoop(
    * The TUI uses this to add a "tool result" message with success/error status.
    */
   onToolResult?: (toolName: string, ok: boolean, resultStr: string) => void,
+  /**
+   * Sprint 1: AskUser — Called when the IA calls `perguntar_usuario`.
+   * The TUI shows a QuestionPrompt UI and resolves the promise when
+   * the user answers. The agent loop naturally pauses (async/await).
+   * If undefined, perguntar_usuario returns an error (sub-agents).
+   */
+  onAskUser?: AskUserCallback,
+  /**
+   * Whether the current context allows user questions.
+   * Main chat: true (default). Sub-agents: false.
+   */
+  allowUserQuestions: boolean = true,
 ): Promise<string> {
   startSession();
   sessionStartTime = new Date().toISOString();
@@ -1711,6 +1736,7 @@ export async function runAgentLoop(
   // block below to prevent leaking across turns.
   currentOnToolCall = onToolCall;
   currentOnToolResult = onToolResult;
+  setAskUserCallback(onAskUser, allowUserQuestions);
 
   let result: string;
   try {
@@ -1719,6 +1745,7 @@ export async function runAgentLoop(
     // Always clear callbacks to prevent leaks across turns
     currentOnToolCall = undefined;
     currentOnToolResult = undefined;
+    clearAskUserCallback();
   }
 
   // Save session trace

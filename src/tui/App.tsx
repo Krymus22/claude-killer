@@ -39,7 +39,9 @@ import { StatusBar } from "./StatusBar.js";
 import { TodoPanel, TodoItem } from "./TodoPanel.js";
 import { ThinkingIndicator } from "./ThinkingIndicator.js";
 import { ExtensionHub } from "./ExtensionHub.js";
+import { QuestionPrompt } from "./QuestionPrompt.js";
 import { useTerminalWidth } from "./useTerminal.js";
+import type { AskUserQuestion, AskUserResponse } from "../askUser.js";
 
 // --- Types ------------------------------------------------------------------
 
@@ -634,6 +636,12 @@ export function App() {
   const [acIndex, setAcIndex] = useState(0);
   const [showHub, setShowHub] = useState(false);
 
+  // Sprint 1: AskUser — estado de pergunta pendente
+  // Quando a IA chama perguntar_usuario, essa state é setada e o QuestionPrompt
+  // é renderizado. O agent loop pausa (await) até o usuário responder.
+  const [pendingQuestion, setPendingQuestion] = useState<AskUserQuestion | null>(null);
+  const questionResolverRef = useRef<((response: AskUserResponse) => void) | null>(null);
+
   const isProcessing = useRef(false);
 
   // -- Autocomplete state -------------------------------------------------
@@ -803,6 +811,15 @@ export function App() {
           },
         ]);
       },
+      // Sprint 1: AskUser — IA faz pergunta, agent pausa, usuário responde
+      (question: AskUserQuestion) => {
+        return new Promise<AskUserResponse>((resolve) => {
+          questionResolverRef.current = resolve;
+          setPendingQuestion(question);
+        });
+      },
+      // allowUserQuestions: true (chat principal sempre pode perguntar)
+      true,
     );
 
     return { response, streamStarted };
@@ -976,6 +993,20 @@ export function App() {
         <Box marginBottom={1}>
           <ExtensionHub onClose={() => setShowHub(false)} />
         </Box>
+      )}
+
+      {/* Sprint 1: AskUser — pergunta interativa da IA */}
+      {pendingQuestion && (
+        <QuestionPrompt
+          question={pendingQuestion}
+          onRespond={(response: AskUserResponse) => {
+            setPendingQuestion(null);
+            if (questionResolverRef.current) {
+              questionResolverRef.current(response);
+              questionResolverRef.current = null;
+            }
+          }}
+        />
       )}
 
       {/* System messages */}

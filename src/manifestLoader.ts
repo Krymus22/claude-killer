@@ -47,6 +47,8 @@ export interface ToolManifest {
   command: string;
   args: string[];
   flags?: ToolFlag[];
+  /** Sprint 6: Modes that can use this tool (in addition to the mode where it lives). */
+  sharedWith?: string[];
   detection?: { method: string; check: string };
   context?: {
     whenToUse?: string[];
@@ -118,26 +120,100 @@ export function loadModeManifests(modeName: string | null): ToolManifest[] {
 }
 
 /**
- * Load manifests for the active mode + the "normal" base mode.
- * Mode-specific manifests take priority over normal mode manifests.
+ * Load manifests for the active mode + the "normal" base mode + shared tools.
+ *
+ * Sprint 6: Also loads manifests from OTHER modes that have sharedWith
+ * including the active mode. For example, if "normal" has darklua with
+ * sharedWith: ["roblox"], and roblox is active, darklua is included.
+ *
+ * Priority: mode-specific > shared > normal (base).
  */
 export function loadActiveManifests(): ToolManifest[] {
   const mode = getActiveMode();
   const modeName = mode?.name ?? null;
 
-  // Load mode-specific manifests
+  // 1. Load mode-specific manifests (highest priority)
   const modeManifests = loadModeManifests(modeName);
 
-  // Load normal mode manifests (base mode — always inherited)
+  // 2. Load normal mode manifests (base mode — always inherited)
   const normalManifests = loadModeManifests("normal");
 
-  // Merge: mode-specific overrides normal (by tool name)
-  const normalMap = new Map(normalManifests.map((m) => [m.name, m]));
-  for (const m of modeManifests) {
-    normalMap.set(m.name, m); // mode-specific wins
+  // 3. Sprint 6: Load shared manifests from other modes
+  const sharedManifests = findSharedManifests(modeName);
+
+  // Merge: mode-specific > shared > normal (by tool name)
+  const mergedMap = new Map<string, ToolManifest>();
+
+  // Normal first (lowest priority)
+  for (const m of normalManifests) mergedMap.set(m.name, m);
+
+  // Shared (medium priority)
+  for (const m of sharedManifests) mergedMap.set(m.name, m);
+
+  // Mode-specific (highest priority — overrides everything)
+  for (const m of modeManifests) mergedMap.set(m.name, m);
+
+  return Array.from(mergedMap.values());
+}
+
+/**
+ * Sprint 6: Find manifests from OTHER modes that are shared with the active mode.
+ *
+ * Scans all mode directories for manifests with `sharedWith` containing the
+ * active mode name. Returns manifests that should be visible in the active
+ * mode but live in a different mode's folder.
+ */
+function findSharedManifests(modeName: string | null): ToolManifest[] {
+  if (!modeName) return [];
+
+  const home = process.env.HOME ?? process.env.USERPROFILE ?? os.homedir();
+  const modesDir = path.join(home, ".claude-killer", "modes");
+  const shared: ToolManifest[] = [];
+
+  // Scan user's modes directory
+  if (fs.existsSync(modesDir)) {
+    try {
+      for (const entry of fs.readdirSync(modesDir)) {
+        const entryPath = path.join(modesDir, entry);
+        if (!fs.statSync(entryPath).isDirectory()) continue;
+        if (entry === modeName || entry === "normal") continue; // skip self + normal
+
+        // Load manifests from this mode
+        const otherManifests = loadModeManifests(entry);
+        for (const m of otherManifests) {
+          if (m.sharedWith?.includes(modeName)) {
+            shared.push(m);
+            log.debug(`[MANIFEST] Shared tool: ${m.name} from mode "${entry}" → "${modeName}"`);
+          }
+        }
+      }
+    } catch {
+      // Can't read dir, skip
+    }
   }
 
-  return Array.from(normalMap.values());
+  // Also scan bundled defaults
+  const bundledModesDir = path.join(process.cwd(), "defaults", "modes");
+  if (fs.existsSync(bundledModesDir)) {
+    try {
+      for (const entry of fs.readdirSync(bundledModesDir)) {
+        const entryPath = path.join(bundledModesDir, entry);
+        if (!fs.statSync(entryPath).isDirectory()) continue;
+        if (entry === modeName || entry === "normal") continue;
+
+        const otherManifests = loadModeManifests(entry);
+        for (const m of otherManifests) {
+          if (m.sharedWith?.includes(modeName) && !shared.some((s) => s.name === m.name)) {
+            shared.push(m);
+          }
+        }
+      }
+    } catch {
+      // Can't read dir, skip
+    }
+  }
+
+  return shared;
 }
 
 // --- Function Call Generation ------------------------------------------------

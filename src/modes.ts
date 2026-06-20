@@ -385,10 +385,21 @@ export function getActiveModeName(): string | null {
   }
 }
 
-/** Get the full ModeDefinition of the currently active mode (or null). */
+/**
+ * Get the full ModeDefinition of the currently active mode.
+ *
+ * Sprint 6: If no mode is explicitly active, returns the "normal" base mode.
+ * This means getActiveMode() never returns null — there's always a mode.
+ * Other modes INHERIT from normal (tools, skills, etc.).
+ */
 export function getActiveMode(): ModeDefinition | null {
   const name = getActiveModeName();
-  if (!name) return null;
+  if (!name) {
+    // Sprint 6: Fall back to "normal" base mode
+    const normalMode = getMode("normal");
+    if (normalMode) return normalMode;
+    return null;
+  }
   return getMode(name);
 }
 

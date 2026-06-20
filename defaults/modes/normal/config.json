@@ -1,0 +1,22 @@
+{
+  "name": "normal",
+  "label": "Padrão",
+  "description": "Modo padrão com ferramentas básicas. Sempre ativo quando nenhum outro modo está ativo.",
+  "icon": "N",
+  "builtIn": true,
+  "isBase": true,
+  "effortLevel": "medium",
+  "strictMode": false,
+  "readBeforeWrite": false,
+  "advancedThinking": false,
+  "toolsDir": "tools",
+  "manifestsDir": "manifests",
+  "skillsDir": "skills",
+  "hooksDir": "hooks",
+  "mcpsDir": "mcps",
+  "tools": [],
+  "skills": [],
+  "enableFeatures": [],
+  "validators": [],
+  "systemPrompt": ""
+}

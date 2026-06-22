@@ -148,7 +148,11 @@ const ALLOWED_COMMAND_PATTERNS = [
   /^dir\s+/i,
 ];
 
-function isSafeCommand(cmd: string): boolean {
+/**
+ * Verifica se um comando é seguro (apenas --help, --version, where, find, ls, dir).
+ * Exportado no Sprint 12 para permitir testes diretos.
+ */
+export function isSafeCommand(cmd: string): boolean {
   const trimmed = cmd.trim();
   return ALLOWED_COMMAND_PATTERNS.some((p) => p.test(trimmed));
 }

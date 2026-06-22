@@ -75,8 +75,11 @@ function getManifestsDir(modeName: string): string | null {
   const bundledDir = path.join(process.cwd(), "defaults", "modes", modeName, "manifests");
   if (fs.existsSync(bundledDir)) return bundledDir;
 
-  // 3. Try relative to __dirname (when running from dist/)
-  const distDir = path.join(__dirname, "..", "defaults", "modes", modeName, "manifests");
+  // 3. Try relative to import.meta.dirname (when running from dist/)
+  // ESM-compatible: use import.meta.dirname (Node 20.11+) or fallback to process.cwd()
+  const distDir = typeof import.meta !== "undefined" && import.meta.dirname
+    ? path.join(import.meta.dirname, "..", "defaults", "modes", modeName, "manifests")
+    : path.join(process.cwd(), "defaults", "modes", modeName, "manifests");
   if (fs.existsSync(distDir)) return distDir;
 
   return null;

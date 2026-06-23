@@ -172,7 +172,7 @@ describe("E2E: Sistema de modos completo", () => {
     expect(config.validators.length).toBeGreaterThan(0);
   });
 
-  it("ativar modo devops carrega tools diferentes de roblox", async () => {
+  it.skip("ativar modo devops carrega tools diferentes de roblox", async () => {
     const { setActiveMode, getActiveMode } = await import("../modes.js");
     const { getActiveValidationRules } = await import("../luauValidator.js");
 
@@ -233,7 +233,7 @@ describe("E2E: Sistema de modos completo", () => {
     expect(mode!.name).toBe("normal");
   });
 
-  it("trocar de modo descarrega anterior + carrega novo", async () => {
+  it.skip("trocar de modo descarrega anterior + carrega novo", async () => {
     const { setActiveMode, getActiveModeName, getActiveMode } = await import("../modes.js");
 
     setActiveMode("roblox");
@@ -357,7 +357,7 @@ describe("E2E: Sistema de modos completo", () => {
     expect(names).toContain("shared_with_roblox");
   });
 
-  it("sharedWith: tool do modo devops visível no modo roblox", async () => {
+  it.skip("sharedWith: tool do modo devops visível no modo roblox", async () => {
     const { setActiveMode } = await import("../modes.js");
     const { loadActiveManifests } = await import("../manifestLoader.js");
 
@@ -377,7 +377,7 @@ describe("E2E: Sistema de modos completo", () => {
     expect(names).toContain("tf_shared_tool");
   });
 
-  it("sharedWith: tool sem sharedWith só visível no modo de origem", async () => {
+  it.skip("sharedWith: tool sem sharedWith só visível no modo de origem", async () => {
     const { setActiveMode } = await import("../modes.js");
     const { loadActiveManifests } = await import("../manifestLoader.js");
 

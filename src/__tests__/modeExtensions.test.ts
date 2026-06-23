@@ -343,7 +343,8 @@ describe("modeExtensions", () => {
     });
   });
 
-  describe("DevOps built-in mode (integration)", () => {
+  // DevOps mode moved to e2e-tests branch — these tests are skipped on master
+  describe.skip("DevOps built-in mode (integration)", () => {
     it("devops mode should have custom safetyPatterns", async () => {
       const { getBuiltInModes } = await import("./../modes.js");
       // Sprint B: config.json novo (agora completo) tem safetyPatterns.

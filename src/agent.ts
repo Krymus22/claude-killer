@@ -419,12 +419,21 @@ const toolHandlers: Record<string, ToolHandler> = {
       // rollbackStore não disponível — não bloqueia o edit
     }
 
-    const edits = args.edits as EditOperation[] | undefined;
+    // Sprint C bug fix (BUG-T): algumas IAs (especialmente Llama) passam
+    // 'edits' como string JSON em vez de array nativo. Auto-parse se string.
+    let edits = args.edits as EditOperation[] | undefined;
+    if (typeof edits === "string") {
+      try {
+        edits = JSON.parse(edits);
+      } catch {
+        // não é JSON válido — deixa como está pra schema validation pegar
+      }
+    }
     if (edits && Array.isArray(edits)) {
       const result = await editFile(
         filePath,
         edits,
-        { createIfMissing: args.createIfMissing as boolean | undefined }
+        { createIfMissing: args.createIfMissing === true || args.createIfMissing === "true" }
       );
       readOnlyCache.invalidate("ler_arquivo", { caminho: args.path ?? args.caminho });
       return { resultStr: result, usedHeal: false };
@@ -432,12 +441,12 @@ const toolHandlers: Record<string, ToolHandler> = {
     const edit: EditOperation = {
       search: asString(args.search ?? args.oldString),
       replace: asString(args.replace ?? args.newString),
-      all: args.all as boolean | undefined,
+      all: args.all === true || args.all === "true",
     };
     const result = await editFile(
       filePath,
       [edit],
-      { createIfMissing: args.createIfMissing as boolean | undefined }
+      { createIfMissing: args.createIfMissing === true || args.createIfMissing === "true" }
     );
     return { resultStr: result, usedHeal: false };
   },
@@ -1112,6 +1121,10 @@ async function resolvePreCallHooks(name: string, rawArgs: Record<string, unknown
 
 /** Run schema validation, poka-yoke, and read-before-write gates. Returns an error string if blocked, else null. */
 function runDispatchGates(name: string, args: Record<string, unknown>): string | null {
+  // Sprint C bug fix (BUG-T): auto-parse args que algumas IAs (Llama) passam
+  // como string JSON em vez de tipo nativo. Faz isso ANTES do schema gate.
+  autoParseArgs(name, args);
+
   const schemaBlock = runSchemaGate(name, args);
   if (schemaBlock) return schemaBlock;
 
@@ -1122,6 +1135,56 @@ function runDispatchGates(name: string, args: Record<string, unknown>): string |
   if (!rbwResult.allowed) return rbwResult.message ?? "[BLOCKED] Read-before-write check failed.";
 
   return null;
+}
+
+/**
+ * Sprint C (BUG-T): Auto-parse args que algumas IAs passam como string JSON.
+ * - editar_arquivo: 'edits' deve ser array mas IA passa como string JSON
+ * - criar_plano: 'passos' deve ser array mas IA passa como string JSON
+ * - editar_multi_arquivos: 'requests' deve ser array mas IA passa como string
+ * - Boolean fields: 'createIfMissing', 'all' passados como "true"/"false" string
+ * Modifica args in-place.
+ */
+function autoParseArgs(name: string, args: Record<string, unknown>): void {
+  // Array fields que IAs costumam passar como string JSON
+  const arrayFields: Record<string, string[]> = {
+    "editar_arquivo": ["edits"],
+    "editar_multi_arquivos": ["requests"],
+    "criar_plano": ["passos"],
+    "todo_write": ["items"],
+    "atualizar_estado": ["done", "todo", "decisions", "bugs", "dependencies"],
+    "executar_paralelo": ["chamadas"],
+  };
+
+  const fields = arrayFields[name];
+  if (fields) {
+    for (const field of fields) {
+      const val = args[field];
+      if (typeof val === "string" && val.trim().startsWith("[")) {
+        try {
+          args[field] = JSON.parse(val);
+          log.debug(`[AUTO-PARSE] Parsed ${name}.${field} from string to array`);
+        } catch {
+          // não é JSON válido — deixa como está
+        }
+      }
+    }
+  }
+
+  // Boolean fields que IAs passam como string "true"/"false"
+  const boolFields: Record<string, string[]> = {
+    "editar_arquivo": ["createIfMissing", "all"],
+    "editar_multi_arquivos": ["createIfMissing"],
+  };
+
+  const bFields = boolFields[name];
+  if (bFields) {
+    for (const field of bFields) {
+      const val = args[field];
+      if (val === "true") args[field] = true;
+      else if (val === "false") args[field] = false;
+    }
+  }
 }
 
 function runSchemaGate(name: string, args: Record<string, unknown>): string | null {

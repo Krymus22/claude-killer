@@ -140,14 +140,22 @@ function checkAplicarDiff(args: Record<string, unknown>): PokaYokeResult {
 function checkEditarArquivo(args: Record<string, unknown>): PokaYokeResult {
   const hasEditsArray = Array.isArray(args.edits) && args.edits.length > 0;
   const hasSearchReplace = isNonEmptyString(args.search) && typeof args.replace === "string";
-  if (!hasEditsArray && !hasSearchReplace) {
+  // Sprint C bug fix: createIfMissing com search vazio deve ser permitido.
+  // A documentação (linha 240) diz: "Empty search string + createIfMissing=true
+  // creates a new file with the replace content." Mas o poka-yoke exigia
+  // search não-vazio — criando contradição. Agora: se createIfMissing=true
+  // e replace é string, permite mesmo com search vazio.
+  const isCreateIfMissing = args.createIfMissing === true && typeof args.replace === "string";
+  if (!hasEditsArray && !hasSearchReplace && !isCreateIfMissing) {
     return {
       ok: false,
       error:
         `[POKA-YOKE] editar_arquivo requer OU "edits" (array de {search, replace, all?}) ` +
         `OU "search" + "replace" como strings. ` +
+        `OU "replace" + "createIfMissing: true" (para criar novo arquivo). ` +
         `Exemplo 1: editar_arquivo({ path: "/x.ts", search: "foo", replace: "bar" }) ` +
-        `Exemplo 2: editar_arquivo({ path: "/x.ts", edits: [{search: "foo", replace: "bar"}] })`,
+        `Exemplo 2: editar_arquivo({ path: "/x.ts", edits: [{search: "foo", replace: "bar"}] }) ` +
+        `Exemplo 3: editar_arquivo({ path: "/new.ts", replace: "content", createIfMissing: true })`,
     };
   }
   return { ok: true };

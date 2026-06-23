@@ -403,10 +403,26 @@ const toolHandlers: Record<string, ToolHandler> = {
   },
 
   "editar_arquivo": async (args) => {
+    const filePath = asString(args.path ?? args.caminho);
+    // Sprint C bug fix (BUG-R): salvar backup no rollbackStore ANTES de editar.
+    // Antes, desfazer_edicao não encontrava backup porque editar_arquivo nunca
+    // chamava saveBackup — só fazia .bak file se options.backup=true (que não
+    // era passado). Agora salva no rollbackStore automaticamente.
+    try {
+      const { saveBackup } = await import("./rollbackStore.js");
+      const resolved = await import("node:path").then((p) => p.resolve(filePath));
+      if (await import("node:fs").then((fs) => fs.existsSync(resolved))) {
+        const content = await import("node:fs").then((fs) => fs.readFileSync(resolved, "utf8"));
+        saveBackup(resolved, content, "editar_arquivo");
+      }
+    } catch {
+      // rollbackStore não disponível — não bloqueia o edit
+    }
+
     const edits = args.edits as EditOperation[] | undefined;
     if (edits && Array.isArray(edits)) {
       const result = await editFile(
-        asString(args.path ?? args.caminho),
+        filePath,
         edits,
         { createIfMissing: args.createIfMissing as boolean | undefined }
       );
@@ -419,7 +435,7 @@ const toolHandlers: Record<string, ToolHandler> = {
       all: args.all as boolean | undefined,
     };
     const result = await editFile(
-      asString(args.path ?? args.caminho),
+      filePath,
       [edit],
       { createIfMissing: args.createIfMissing as boolean | undefined }
     );

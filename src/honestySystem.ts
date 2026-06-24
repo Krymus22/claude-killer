@@ -69,7 +69,7 @@ export interface ContradictionResult {
 // --- Feature registry ------------------------------------------------------
 
 const FEATURES: HonestyFeature[] = [
-  { id: "feature:devils_advocate", name: "Devil's Advocate", description: "Sub-agente adversarial revisa código antes de finalizar (procura bugs ativamente)", enabled: false },
+  { id: "feature:devils_advocate", name: "Devil's Advocate", description: "Adversarial sub-agent reviews code before finishing (actively looks for bugs)", enabled: false },
   { id: "feature:diff_reality_check", name: "Diff Reality Check", description: "Verifica se o arquivo editado contem o que a IA disse que adicionou", enabled: false },
   { id: "feature:read_back_verify", name: "Read-Back Verification", description: "Forca a IA a ler o arquivo de volta apos editar antes de finalizar", enabled: false },
   { id: "feature:hallucination_detector", name: "Hallucination Detector", description: "Verifica se simbolos usados no codigo realmente existem no projeto", enabled: false },
@@ -139,7 +139,7 @@ List every issue you find. If none, say "Nada encontrado".`;
     const lower = result.toLowerCase();
     let severity: DevilAdvocateResult["severity"] = "none";
     if (lower.includes("crITICAL") || lower.includes("grave") || lower.includes("high")) severity = "high";
-    else if (lower.includes("medium") || lower.includes("médio") || lower.includes("moderado")) severity = "medium";
+    else if (lower.includes("medium") || lower.includes("medio") || lower.includes("moderado")) severity = "medium";
     else if (lower.includes("low") || lower.includes("baixo") || lower.includes("leve")) severity = "low";
     else if (!lower.includes("nada encontrado")) severity = "medium"; // default if issues found
 
@@ -252,7 +252,7 @@ export function getReadBackWarning(): string {
   const files = getUnreadBackFiles();
   if (files.length === 0) return "";
   const fileList = files.map((f) => `  - ${path.basename(f)}`).join("\n");
-  return `[READ-BACK REQUIRED] Você editou os seguintes arquivos mas não leu de volta para confirmar:\n${fileList}\n\nUse ler_arquivo em cada um antes de finalizar. Verifique se o código está como você espera.`;
+  return `[READ-BACK REQUIRED] You edited these files but did not read them back to confirm:\n${fileList}\n\nUse ler_arquivo on each before finishing. Verify the code is as you expect.`;
 }
 
 // --- 4. Hallucination Detector ---------------------------------------------
@@ -484,7 +484,7 @@ export function extractConfidence(pensarContent: string): number {
   if (qualitativeMatch) {
     const word = (qualitativeMatch[1] ?? qualitativeMatch[2] ?? "").toLowerCase();
     if (["high", "alta", "alto", "muito alta", "very high"].includes(word)) return 9;
-    if (["medium", "media", "média", "medio", "médio", "moderate"].includes(word)) return 6;
+    if (["medium", "media", "media", "medio", "medio", "moderate"].includes(word)) return 6;
     if (["low", "baixa", "baixo", "muito baixa", "very low"].includes(word)) return 3;
   }
 
@@ -507,21 +507,21 @@ export async function checkConfidenceAction(
     // Confidence not provided - warn but don't block
     return {
       blocked: false,
-      message: "[CONFIDENCE] Você não forneceu nível de confiança (1-10) no pensar(). Considere adicionar: confianca: N",
+      message: "[CONFIDENCE] You did not provide confidence level (1-10) in pensar(). Consider adding: confianca: N",
     };
   }
 
   if (actionType === "write" && confidence <= 3) {
     return {
       blocked: true,
-      message: `[CONFIDENCE LOW] Confiança=${confidence}/10. Muito baixa para escrever. Pesquise mais (ler_arquivo, pesquisar_api_atualizada) antes de editar.`,
+      message: `[CONFIDENCE LOW] Confiança=${confidence}/10. Too low to write. Research more (ler_arquivo) before editing.`,
     };
   }
 
   if (actionType === "finish" && confidence <= 5) {
     return {
       blocked: false,
-      message: `[CONFIDENCE MEDIUM] Confiança=${confidence}/10. Considere rodar testes (executar_testes) antes de finalizar.`,
+      message: `[CONFIDENCE MEDIUM] Confiança=${confidence}/10. Consider running tests (executar_testes) before finishing.`,
     };
   }
 
@@ -679,7 +679,7 @@ export async function proveItCheck(
   if (evidence.unverifiedClaims.length > 0) {
     return {
       blocked: true,
-      message: `[PROVE IT MODE] Response blocked. Unverified claims:\n${evidence.unverifiedClaims.map((c) => `  - ${c}`).join("\n")}\n\nUse a tool apropriada para verificar cada claim antes de respondê-la.`,
+      message: `[PROVE IT MODE] Response blocked. Unverified claims:\n${evidence.unverifiedClaims.map((c) => `  - ${c}`).join("\n")}\n\nUse an appropriate tool to verify each claim before responding.`,
     };
   }
   return { blocked: false, message: "" };

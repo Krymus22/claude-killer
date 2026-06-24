@@ -8,7 +8,7 @@
  * Levels:
  *   - low    -> "Responda direto. Não use pensar() a menos que seja muito complexo."
  *              For trivial tasks (rename, format, simple Q&A). Skips self-validation.
- *   - medium -> "Use pensar() para tarefas não-triviais. Mantenha raciocínio curto."
+ *   - medium -> "Use pensar() for tarefas não-triviais. Mantenha raciocínio curto."
  *              Default. Good balance.
  *   - high   -> "Use pensar() antes de CADA escrita. Verifique tipos e edge cases."
  *              For complex refactors, multi-file changes.
@@ -71,13 +71,13 @@ export function getEffortPromptSnippet(): string {
   switch (currentLevel) {
     case "low":
       return `## EFFORT LEVEL: LOW
-Responda direto e conciso. Use pensar() APENAS para tarefas complexas (multi-arquivo, algoritmos, debugging).
+Responda direto e conciso. Use pensar() APENAS for tarefas complexas (multi-arquivo, algoritmos, debugging).
 Não valide cada passo - foque em velocidade.
 Pule auto-testes pós-diff a menos que o usuário peça.`;
 
     case "medium":
       return `## EFFORT LEVEL: MEDIUM (default)
-Use pensar() para tarefas não-triviais (escritas, edições, comandos que mudam estado).
+Use pensar() for tarefas não-triviais (escritas, edições, comandos que mudam estado).
 Raciocínio curto e focado: 1-3 frases no pensar().
 Verifique tipos e erros óbvios antes de escrever código.`;
 
@@ -86,7 +86,7 @@ Verifique tipos e erros óbvios antes de escrever código.`;
 Use pensar() antes de CADA escrita (aplicar_diff, editar_arquivo, desfazer_edicao).
 No pensar(), verifique explicitamente: tipos, dependências, edge cases, regressões.
 Raciocínio médio: 3-6 frases. Sempre considere o que pode dar errado.
-Após editar, rode testes/tsc para validar.`;
+Após editar, rode testes/tsc for validar.`;
 
     case "max":
       return `## EFFORT LEVEL: MAX

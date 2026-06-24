@@ -376,7 +376,7 @@ describe("luauValidator (extended)", () => {
       );
       expect(result.ok).toBe(true);
       expect(result.rulesSkipped.length).toBeGreaterThan(0);
-      expect(result.rulesSkipped[0]).toContain("não instalado");
+      expect(result.rulesSkipped[0]).toContain("not installed");
     });
 
     it("aplica comando custom (rule.command) para validação genérica", async () => {

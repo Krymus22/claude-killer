@@ -73,7 +73,7 @@ describe("parallelTools-extended: limitConcurrency (ToolExecutor)", () => {
   it("construtor sem argumentos usa maxConcurrency padrão = 5", () => {
     const executor = new ToolExecutor();
     // Não há getter público para maxConcurrency, mas podemos verificar o comportamento:
-    // submetendo 10 tasks lentas, no máximo 5 rodam concorrentemente.
+    // submetendo 10 tasks lentas, no maximum 5 rodam concorrentemente.
     let active = 0;
     let maxActive = 0;
     const tasks = Array.from({ length: 10 }, () =>

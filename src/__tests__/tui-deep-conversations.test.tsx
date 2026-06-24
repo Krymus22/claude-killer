@@ -212,12 +212,12 @@ x := 1
     const messages: ChatMessage[] = [
       { role: "user", content: "Roda npm test" },
       { role: "assistant", content: "Vou rodar os testes." },
-      { role: "assistant", content: "[ERRO] Falha: 3 testes falharam\n  - test 1: expected 5 got 4\n  - test 2: TypeError\n  - test 3: timeout" },
+      { role: "assistant", content: "[ERROR] Falha: 3 testes falharam\n  - test 1: expected 5 got 4\n  - test 2: TypeError\n  - test 3: timeout" },
       { role: "assistant", content: "Vou corrigir os erros." },
     ];
     const { lastFrame } = render(<ChatDisplay messages={messages} />);
     const out = stripAnsi(lastFrame() ?? "");
-    expect(out).toContain("[ERRO]");
+    expect(out).toContain("[ERROR]");
     expect(out).toContain("3 testes falharam");
     expect(out).toContain("test 1");
     expect(out).toContain("TypeError");
@@ -725,7 +725,7 @@ describe("Message types — all variants", () => {
     const { lastFrame } = render(<ChatDisplay messages={messages} />);
     const out = stripAnsi(lastFrame() ?? "");
     // ChatDisplay adds leading space for alignment
-    expect(out).toContain(" você:");
+    expect(out).toContain(" you:");
     expect(out).toContain(" test");
   });
 

@@ -105,13 +105,13 @@ export function truncateStr(s: string, maxChars: number): string {
  * COMPORTAMENTO INTENCIONAL QUANDO maxChars <= 3:
  *   Quando maxChars é 0, 1, 2 ou 3, a função retorna `s.slice(0, maxChars)`
  *   SEM adicionar reticências. Isso é proposital: o próprio "..." ocupa 3
- *   caracteres, então para maxChars <= 3 não haveria espaço para qualquer
+ *   caracteres, então for maxChars <= 3 não haveria espaço for qualquer
  *   conteúdo além das reticências (um path só com "..." é inútil). Nesses
  *   casos, preferimos retornar os primeiros `maxChars` caracteres do path
  *   original — ainda truncado, mas com informação útil.
  *
  *   Propriedades que assumem "sempre contém '...' quando trunca" só valem
- *   para maxChars > 3. Para maxChars <= 3, a propriedade não se aplica.
+ *   for maxChars > 3. Para maxChars <= 3, a propriedade não se aplica.
  *
  * @param s - String a truncar (path, identificador, etc.)
  * @param maxChars - Largura máxima desejada. Se <= 3, retorna sem reticências.

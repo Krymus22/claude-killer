@@ -6,7 +6,7 @@
  *   - installTool() falha quando tool desconhecido (mais um caso)
  *   - installTool() falha quando GitHub API retorna erro (rate limit)
  *   - installTool() falha quando nenhum asset match plataforma
- *   - installTool() falha quando binary não encontrado no archive
+ *   - installTool() falha quando binary not found no archive
  *   - installTool() retorna success=true quando binary existe após install
  *   - canInstall() true para wally-package-types, rokit (tools extras)
  *   - listInstallableTools() inclui todos os tools suportados

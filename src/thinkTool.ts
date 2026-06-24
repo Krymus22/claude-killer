@@ -33,7 +33,7 @@ export async function think(args: ThinkArgs): Promise<ThinkResult> {
   return {
     confirmed: true,
     message: `[PENSAMENTO REGISTRADO - categoria: ${category}, ${thoughtLength} chars]\n` +
-      `Use este espaço para raciocinar antes de agir. ` +
+      `Use este espaço for raciocinar antes de agir. ` +
       `Agora prossiga com a ação planejada.`,
   };
 }

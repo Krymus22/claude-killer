@@ -184,7 +184,7 @@ export async function searchEntireMachine(
     }
   }
 
-  onProgress?.({ current: abortSignal?.aborted ? "(cancelado)" : "(concluído)", found: results.length });
+  onProgress?.({ current: abortSignal?.aborted ? "(cancelled)" : "(done)", found: results.length });
   log.debug(`[FILE_FINDER] searchEntireMachine: ${results.length} results${abortSignal?.aborted ? " (cancelled)" : ""}`);
   return results;
 }

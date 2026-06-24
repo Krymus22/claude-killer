@@ -438,7 +438,7 @@ describe("Tool call spam", () => {
       { role: "user", content: "testa erro" },
       {
         role: "tool",
-        content: "[ERRO] Arquivo não encontrado: /missing.ts",
+        content: "[ERROR] File not found: /missing.ts",
         toolName: "ler_arquivo",
         isResult: true,
         ok: false,
@@ -450,8 +450,8 @@ describe("Tool call spam", () => {
     // Tool name aparece
     expect(out).toContain("ler_arquivo");
     // Mensagem de erro aparece
-    expect(out).toContain("[ERRO]");
-    expect(out).toContain("não encontrado");
+    expect(out).toContain("[ERROR]");
+    expect(out).toContain("not found");
   });
 
   it("Tool call sem args (args vazio)", () => {
@@ -576,7 +576,7 @@ describe("Estado de erro/recuperação", () => {
     stdin.write("\r");
     await delay(200);
     out = stripAnsi(lastFrame() ?? "");
-    expect(out).toContain("Histórico resetado");
+    expect(out).toContain("History reset");
 
     // Segunda mensagem — App deve estar consistente
     stdin.write("msg2");
@@ -645,7 +645,7 @@ describe("Conversa longa", () => {
     expect(u1).toBeGreaterThan(a0);
   });
 
-  it("Histórico com 10K tokens simulados — StatusBar mostra % corretamente", () => {
+  it("History com 10K tokens simulados — StatusBar mostra % corretamente", () => {
     // 10000 / 256000 = 3.90625% → Math.round = 4%
     const { lastFrame } = render(
       <StatusBar

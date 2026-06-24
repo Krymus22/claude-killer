@@ -339,7 +339,7 @@ return M
   });
 
   describe("formatImpactSummary", () => {
-    it("should return 'sem dependências' when no usages", async () => {
+    it("should return 'no dependencies' when no usages", async () => {
       const { formatImpactSummary } = await import("./../impactAnalyzer.js");
       const report = {
         targetFile: "/test/foo.luau",
@@ -348,7 +348,7 @@ return M
         usages: [],
         durationMs: 10,
       };
-      expect(formatImpactSummary(report)).toBe("sem dependências");
+      expect(formatImpactSummary(report)).toBe("no dependencies");
     });
 
     it("should include counts when usages exist", async () => {

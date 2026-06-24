@@ -507,7 +507,7 @@ export async function researchApi(req: ResearchRequest): Promise<ResearchResult 
  */
 export function formatResearchResult(result: ResearchResult | ResearchError): string {
   if ("error" in result) {
-    return `[ERRO] Pesquisa de API falhou para "${result.apiName}" (${result.language}):\n${result.error}`;
+    return `[ERROR] API search failed for "${result.apiName}" (${result.language}):\n${result.error}`;
   }
 
   const lines: string[] = [];

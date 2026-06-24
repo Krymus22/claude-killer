@@ -385,10 +385,10 @@ async function executeSubAgentTool(name: string, args: any, cwd: string): Promis
         ].join("\n");
       }
       default:
-        return `[ERRO] Ferramenta desconhecida: ${name}`;
+        return `[ERROR] Unknown tool: ${name}`;
     }
   } catch (err) {
-    return `[ERRO] ${name} falhou: ${(err as Error).message}`;
+    return `[ERROR] ${name} failed: ${(err as Error).message}`;
   }
 }
 

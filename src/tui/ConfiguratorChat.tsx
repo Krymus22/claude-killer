@@ -1,5 +1,5 @@
 /**
- * ConfiguratorChat.tsx — Mini chat para configuração de tools
+ * ConfiguratorChat.tsx — Mini chat for configuração de tools
  *
  * Sprint 11: Interface de chat dedicada pra configurador.
  * Mostra mensagens do configurador + permite input do usuário.
@@ -71,7 +71,7 @@ export function ConfiguratorChat({ onClose, onMessage, toolName }: Readonly<Conf
         .catch((err) => {
           setMessages((prev) => [
             ...prev,
-            { role: "system", content: `Erro: ${(err as Error).message}` },
+            { role: "system", content: `Error: ${(err as Error).message}` },
           ]);
           setRunning(false);
         });
@@ -104,7 +104,7 @@ export function ConfiguratorChat({ onClose, onMessage, toolName }: Readonly<Conf
           onMessage?.(result.message);
         })
         .catch((err) => {
-          setMessages((prev) => [...prev, { role: "system", content: `Erro: ${(err as Error).message}` }]);
+          setMessages((prev) => [...prev, { role: "system", content: `Error: ${(err as Error).message}` }]);
           setRunning(false);
         });
     }
@@ -117,12 +117,12 @@ export function ConfiguratorChat({ onClose, onMessage, toolName }: Readonly<Conf
       if (toolsWithoutManifest.length > 0) {
         setMessages([{
           role: "system",
-          content: `Tools sem manifest encontradas:\n${toolsWithoutManifest.map((t) => `  - ${t}`).join("\n")}\n\nDigite o nome de uma tool para configurar, ou "sair" para fechar.`,
+          content: `Tools sem manifest encontradas:\n${toolsWithoutManifest.map((t) => `  - ${t}`).join("\n")}\n\nDigite o nome de uma tool for configurar, ou "sair" for fechar.`,
         }]);
       } else {
         setMessages([{
           role: "system",
-          content: `Nenhuma tool sem manifest encontrada no modo "${modeName ?? "nenhum"}".\nDigite o nome de uma tool para configurar, ou "sair" para fechar.`,
+          content: `Nenhuma tool sem manifest encontrada no modo "${modeName ?? "nenhum"}".\nDigite o nome de uma tool for configurar, ou "sair" for fechar.`,
         }]);
       }
     }
@@ -157,7 +157,7 @@ export function ConfiguratorChat({ onClose, onMessage, toolName }: Readonly<Conf
       {running ? (
         <Text color={colors.warning}>{" "}⏳ Trabalhando...</Text>
       ) : finished ? (
-        <Text color={colors.muted}>{" "}Concluído. [Esc] para fechar.</Text>
+        <Text color={colors.muted}>{" "}Done. [Esc] to close.</Text>
       ) : (
         <Box>
           <Text color={colors.muted}>{" "}{">"} </Text>

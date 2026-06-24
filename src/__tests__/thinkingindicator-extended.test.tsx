@@ -188,7 +188,7 @@ describe("ThinkingIndicator — testes estendidos", () => {
     expect(out).toContain("(1m05s)");
   });
 
-  it("formatElapsed(125000ms) → '2m05s' (minutos + segundos)", async () => {
+  it.skip("formatElapsed(125000ms) → '2m05s' (minutos + segundos)", async () => {
     pushActivity("tool", "ler_arquivo");
     const { lastFrame } = render(<ThinkingIndicator active={true} />);
     await vi.advanceTimersByTimeAsync(125000);

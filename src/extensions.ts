@@ -577,7 +577,7 @@ export function getMCPToolDefinitions(): Array<{
 export async function callMCPTool(prefixedName: string, args: Record<string, unknown>): Promise<string> {
   const separatorIdx = prefixedName.indexOf("__");
   if (separatorIdx === -1) {
-    return `[ERRO] Invalid MCP tool name format: "${prefixedName}". Expected "serverName__toolName".`;
+    return `[ERROR] Invalid MCP tool name format: "${prefixedName}". Expected "serverName__toolName".`;
   }
 
   const serverName = prefixedName.slice(0, separatorIdx);
@@ -585,7 +585,7 @@ export async function callMCPTool(prefixedName: string, args: Record<string, unk
 
   const server = activeMCPServers.get(serverName);
   if (!server?.initialized) {
-    return `[ERRO] MCP server "${serverName}" is not available.`;
+    return `[ERROR] MCP server "${serverName}" is not available.`;
   }
 
   try {
@@ -604,6 +604,6 @@ export async function callMCPTool(prefixedName: string, args: Record<string, unk
 
     return JSON.stringify(result);
   } catch (err) {
-    return `[ERRO] MCP tool call failed: ${(err as Error).message}`;
+    return `[ERROR] MCP tool call failed: ${(err as Error).message}`;
   }
 }

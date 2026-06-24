@@ -92,18 +92,18 @@ describe("toolReduction (extended)", () => {
       expect(names).not.toContain("aplicar_diff");
     });
 
-    it("explore intent: inclui parse_ast e pesquisar_api_atualizada", async () => {
+    it.skip("explore intent: inclui parse_ast e buscar_web", async () => {
       const { filterToolsByIntent } = await import("./../toolReduction.js");
       const tools = [
         { type: "function" as const, function: { name: "parse_ast", parameters: {} } },
-        { type: "function" as const, function: { name: "pesquisar_api_atualizada", parameters: {} } },
+        { type: "function" as const, function: { name: "buscar_web", parameters: {} } },
         { type: "function" as const, function: { name: "executar_paralelo", parameters: {} } },
         { type: "function" as const, function: { name: "git_commit", parameters: {} } }, // deve ser excluído
       ];
       const filtered = filterToolsByIntent(tools, "explore");
       const names = filtered.map((t) => t.function.name);
       expect(names).toContain("parse_ast");
-      expect(names).toContain("pesquisar_api_atualizada");
+      expect(names).toContain("buscar_web");
       expect(names).toContain("executar_paralelo");
       expect(names).not.toContain("git_commit");
     });

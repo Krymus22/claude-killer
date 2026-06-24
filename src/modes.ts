@@ -506,8 +506,8 @@ export function getActiveMode(): ModeDefinition | null {
     // the system always has a base mode to work with.
     return {
       name: "normal",
-      label: "Padrão",
-      description: "Modo padrão",
+      label: "Default",
+      description: "Default mode",
       builtIn: true,
       enableTools: [],
       enableSkills: [],
@@ -681,14 +681,14 @@ export async function applyMode(name: string): Promise<ModeApplyResult> {
  * do `applyMode` — o usuário pode ter habilitado skills/features manualmente.
  */
 export function deactivateMode(): void {
-  // ANTES de limpar o ponteiro, lê o modo ativo para saber quais tools reverter.
+  // ANTES de limpar o ponteiro, lê o modo ativo for saber quais tools reverter.
   const mode = getActiveMode();
   // Sprint B bug fix: enableTools pode ser undefined no novo formato (que usa 'tools').
   // Usar optional chaining + fallback pra array vazia.
   const modeTools = (mode as any)?.tools ?? mode?.enableTools ?? [];
   if (mode && modeTools.length > 0) {
     try {
-      // Lazy-import para evitar dependência circular (mesmo padrão do applyMode).
+      // Lazy-import for evitar dependência circular (mesmo padrão do applyMode).
       // Como o dynamic import é async, usamos um wrapper fire-and-forget —
       // chamadas sincronizadas a deactivateMode ainda limpam o ponteiro
       // imediatamente (abaixo), mas a reversão das tools acontece de forma

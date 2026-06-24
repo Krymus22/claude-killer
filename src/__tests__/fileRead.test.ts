@@ -48,12 +48,12 @@ describe("readFileAdvanced", () => {
 
   it("should handle non-existent file", () => {
     const result = readFileAdvanced({ path: "/nonexistent/file.txt" });
-    expect(result).toContain("[ERRO]");
+    expect(result).toContain("[ERROR]");
   });
 
   it("should list directory contents", () => {
     const result = readFileAdvanced({ path: TEST_DIR });
-    expect(result).toContain("[DIRETÓRIO");
+    expect(result).toContain("[DIRECTORY");
     expect(result).toContain("test.txt");
   });
 
@@ -84,7 +84,7 @@ describe("readFileAdvanced", () => {
 
   it("should handle invalid regex in grep", () => {
     const result = readFileAdvanced({ path: TEST_FILE, grep: "[" });
-    expect(result).toContain("[ERRO] Regex inválida");
+    expect(result).toContain("[ERROR] Regex inválida");
   });
 });
 

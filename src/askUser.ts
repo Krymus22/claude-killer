@@ -26,7 +26,7 @@ export interface AskUserQuestion {
   pergunta: string;
   /** Lista de alternativas pré-definidas (mínimo 2, máximo 6) */
   alternativas: string[];
-  /** Contexto adicional opcional explicando POR QUE está perguntando */
+  /** Optional context explaining WHY you are asking */
   contexto?: string;
 }
 
@@ -62,7 +62,7 @@ export const ASK_USER_TOOL_DEFINITION: OpenAI.Chat.Completions.ChatCompletionToo
         },
         contexto: {
           type: "string",
-          description: "Contexto adicional opcional explicando POR QUE está perguntando",
+          description: "Optional context explaining WHY you are asking",
         },
       },
       required: ["pergunta", "alternativas"],
@@ -117,7 +117,7 @@ export function clearAskUserCallback(): void {
 export async function handleAskUser(args: Record<string, unknown>): Promise<{ resultStr: string; usedHeal: boolean }> {
   // BUG FIX: guard against null/undefined args
   if (!args || typeof args !== "object") {
-    return { resultStr: "[ERRO] args inválidos (esperado objeto)", usedHeal: false };
+    return { resultStr: "[ERROR] invalid args (expected object)", usedHeal: false };
   }
   const pergunta = String(args.pergunta ?? "");
   const alternativas = Array.isArray(args.alternativas) ? (args.alternativas as string[]) : [];
@@ -125,21 +125,21 @@ export async function handleAskUser(args: Record<string, unknown>): Promise<{ re
 
   // Validate
   if (!pergunta) {
-    return { resultStr: "[ERRO] pergunta é obrigatória", usedHeal: false };
+    return { resultStr: "[ERROR] pergunta is required", usedHeal: false };
   }
   if (alternativas.length < 2) {
-    return { resultStr: "[ERRO] alternativas deve ter no mínimo 2 itens", usedHeal: false };
+    return { resultStr: "[ERROR] alternativas must have at least 2 items", usedHeal: false };
   }
   if (alternativas.length > 6) {
-    return { resultStr: "[ERRO] alternativas deve ter no máximo 6 itens", usedHeal: false };
+    return { resultStr: "[ERROR] alternativas must have at most 6 items", usedHeal: false };
   }
 
   // Check permission
   if (!currentOnAskUser || !allowUserQuestions) {
     return {
       resultStr:
-        "[ERRO] perguntar_usuario não está disponível neste contexto. " +
-        "Use seu melhor julgamento e continue sem perguntar.",
+        "[ERROR] perguntar_usuario is not available in this context. " +
+        "Use your best judgment and continue without asking.",
       usedHeal: false,
     };
   }
@@ -151,7 +151,7 @@ export async function handleAskUser(args: Record<string, unknown>): Promise<{ re
     response = await currentOnAskUser(question);
   } catch (err) {
     return {
-      resultStr: `[ERRO] Falha ao obter resposta do usuário: ${(err as Error).message}`,
+      resultStr: `[ERROR] Failed to get user response: ${(err as Error).message}`,
       usedHeal: false,
     };
   }
@@ -159,12 +159,12 @@ export async function handleAskUser(args: Record<string, unknown>): Promise<{ re
   // Format response for the IA
   if (response.cancelled) {
     return {
-      resultStr: "[USUÁRIO CANCELOU A PERGUNTA] O usuário optou por não responder. Use seu melhor julgamento.",
+      resultStr: "[USER CANCELLED QUESTION] User chose not to answer. Use your best judgment.",
       usedHeal: false,
     };
   }
 
-  const prefix = response.fromAlternatives ? "[RESPOSTA DO USUÁRIO]" : "[RESPOSTA DO USUÁRIO (texto livre)]";
+  const prefix = response.fromAlternatives ? "[USER RESPONSE]" : "[USER RESPONSE (free text)]";
   return {
     resultStr: `${prefix} ${response.value}`,
     usedHeal: false,

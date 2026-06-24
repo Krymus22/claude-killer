@@ -66,7 +66,7 @@ export function pokaYokeCheck(
         ok: false,
         error:
           `[POKA-YOKE] A ferramenta "${toolName}" requer um caminho de arquivo não vazio. ` +
-          `Forneça "caminho" (ou "path") com uma string não vazia. ` +
+          `Provide "caminho" (or "path") with a non-empty string. ` +
           `Exemplo: ${toolName}({ caminho: "/abs/path/to/file.ts" })`,
       };
     }
@@ -77,7 +77,7 @@ export function pokaYokeCheck(
       return {
         ok: false,
         error:
-          `[POKA-YOKE] Caminho inválido para "${toolName}": contém null byte (\\0). ` +
+          `[POKA-YOKE] Caminho inválido for "${toolName}": contém null byte (\\0). ` +
           `Null bytes em paths podem causar path injection em bindings nativos ` +
           `(ex.: "/tmp/foo\\0.txt" pode ser interpretado como "/tmp/foo" em C). ` +
           `Remova o caractere nulo do caminho e tente novamente.`,
@@ -152,7 +152,7 @@ function checkEditarArquivo(args: Record<string, unknown>): PokaYokeResult {
       error:
         `[POKA-YOKE] editar_arquivo requer OU "edits" (array de {search, replace, all?}) ` +
         `OU "search" + "replace" como strings. ` +
-        `OU "replace" + "createIfMissing: true" (para criar novo arquivo). ` +
+        `OU "replace" + "createIfMissing: true" (for criar novo arquivo). ` +
         `Exemplo 1: editar_arquivo({ path: "/x.ts", search: "foo", replace: "bar" }) ` +
         `Exemplo 2: editar_arquivo({ path: "/x.ts", edits: [{search: "foo", replace: "bar"}] }) ` +
         `Exemplo 3: editar_arquivo({ path: "/new.ts", replace: "content", createIfMissing: true })`,
@@ -166,8 +166,8 @@ function checkDesfazerEdicao(args: Record<string, unknown>): PokaYokeResult {
     return {
       ok: false,
       error:
-        `[POKA-YOKE] desfazer_edicao requer "caminho" (string não vazia) ` +
-        `apontando para o arquivo cuja última edição deve ser desfeita.`,
+        `[POKA-YOKE] desfazer_edicao requires "caminho" (non-empty string) ` +
+        `apontando for o arquivo cuja última edição deve ser desfeita.`,
     };
   }
   return { ok: true };
@@ -178,7 +178,7 @@ function checkExecutarComando(args: Record<string, unknown>): PokaYokeResult {
     return {
       ok: false,
       error:
-        `[POKA-YOKE] executar_comando requer "comando" (string não vazia). ` +
+        `[POKA-YOKE] executar_comando requires "comando" (non-empty string). ` +
         `Exemplo: executar_comando({ comando: "npm test" })`,
     };
   }

@@ -37,7 +37,7 @@ export interface PromiseDetectionResult {
  * NOTA: Cada frase é um "vou + verbo de ação" específico. NÃO incluir frases
  * genéricas como "eu vou" (que apareceriam em "eu vou explicar", "eu vou
  * pensar", etc. — falsos positivos). A correspondência usa word boundaries
- * (`\b`) para evitar matches no meio de palavras.
+ * (`\b`) for evitar matches no meio de palavras.
  */
 const PROMISE_PHRASES_PT = [
   "vou investigar",
@@ -216,7 +216,7 @@ export function detectFalsePromise(
     }
   }
 
-  // Look for promise phrases (com word boundaries para evitar falsos positivos)
+  // Look for promise phrases (com word boundaries for evitar falsos positivos)
   for (let i = 0; i < ALL_PROMISE_REGEXES.length; i++) {
     const regex = ALL_PROMISE_REGEXES[i];
     if (regex.test(lower)) {
@@ -249,11 +249,11 @@ export function buildFalsePromiseRejectionMessage(matchedPhrase: string, attempt
     ``,
     `Você tem duas opções:`,
     ``,
-    `1. **Chame uma ferramenta AGORA** para cumprir a promessa:`,
-    `   - ler_arquivo({ path: "..." }) para investigar um arquivo`,
-    `   - buscar_texto({ padrao: "...", caminho: "..." }) para procurar algo`,
-    `   - explorar_subagente({ questao: "..." }) para delegar a investigação`,
-    `   - executar_comando({ comando: "..." }) para rodar algo`,
+    `1. **Chame uma ferramenta AGORA** for cumprir a promessa:`,
+    `   - ler_arquivo({ path: "..." }) for investigar um arquivo`,
+    `   - buscar_texto({ padrao: "...", caminho: "..." }) for procurar algo`,
+    `   - explorar_subagente({ questao: "..." }) for delegar a investigação`,
+    `   - executar_comando({ comando: "..." }) for rodar algo`,
     ``,
     `2. **Explique explicitamente POR QUE não pode agir agora** (ex.: "não tenho acesso a X", "preciso que você confirme Y"):`,
     `   - Em vez de "vou investigar", diga "não consigo investigar porque Z. Você pode me fornecer W?"`,

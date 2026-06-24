@@ -25,13 +25,13 @@ beforeEach(() => {
 });
 
 describe("contextInjector (extended) — injectContext", () => {
-  it("injeção inclui sufixo 'Lembre-se destes pontos'", () => {
+  it("injeção inclui sufixo 'Remember these points'", () => {
     mockedGetSummary.mockReturnValue("## TASK_STATE\nTodo:\n  ○ item");
     // Skip 2 calls to get to 3rd
     getContextInjection("aplicar_diff");
     getContextInjection("aplicar_diff");
     const result = getContextInjection("aplicar_diff");
-    expect(result).toContain("Lembre-se destes pontos antes da próxima ação.");
+    expect(result).toContain("Remember these points before the next action.");
   });
 
   it("retorna vazio quando summary tem apenas seções irrelevantes (Done/Notes)", () => {
@@ -75,13 +75,13 @@ describe("contextInjector (extended) — shouldInject (throttle)", () => {
 });
 
 describe("contextInjector (extended) — formatContext (separadores)", () => {
-  it("formato inclui marcadores --- [CONTEXTO ATUAL] --- e --- [FIM DO CONTEXTO] ---", () => {
+  it("formato inclui marcadores --- [CURRENT CONTEXT] --- e --- [END CONTEXT] ---", () => {
     mockedGetSummary.mockReturnValue("## TASK_STATE\nTodo:\n  ○ item");
     getContextInjection("aplicar_diff");
     getContextInjection("aplicar_diff");
     const result = getContextInjection("aplicar_diff");
-    expect(result).toContain("--- [CONTEXTO ATUAL] ---");
-    expect(result).toContain("--- [FIM DO CONTEXTO] ---");
+    expect(result).toContain("--- [CURRENT CONTEXT] ---");
+    expect(result).toContain("--- [END CONTEXT] ---");
   });
 
   it("mantém cabeçalho da seção 'Decisions:' e 'Bugs:' mas não itens fora delas", () => {
@@ -112,6 +112,6 @@ describe("contextInjector (extended) — edge cases", () => {
     expect(getContextInjection("aplicar_diff")).toBe("");
     expect(getContextInjection("aplicar_diff")).toBe("");
     // 3ª call injeta
-    expect(getContextInjection("aplicar_diff")).toContain("CONTEXTO ATUAL");
+    expect(getContextInjection("aplicar_diff")).toContain("CURRENT CONTEXT");
   });
 });

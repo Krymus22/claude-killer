@@ -38,7 +38,7 @@ describe("selfHealing (extended) - parseErrors", () => {
     const output = `src/foo.ts:42:5: error  Expected '===' ExpectationEquality`;
     const errors = parseErrors(output);
     expect(errors.length).toBeGreaterThanOrEqual(1);
-    // eslint é detectado por padrão: \d+:\d+:\s*(error|warning)\s+
+    // eslint é detectado por default: \d+:\d+:\s*(error|warning)\s+
     expect(errors[0]!.severity).toBe("error");
     expect(errors[0]!.line).toBe(42);
   });

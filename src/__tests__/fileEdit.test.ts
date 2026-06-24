@@ -70,7 +70,7 @@ describe("editFile", () => {
     fs.writeFileSync(testFile, "const a = 1;\n", "utf8");
 
     const result = await editFile(testFile, [{ search: "const a = 1;", replace: "const a = 2;" }]);
-    expect(result).toContain("[SUCESSO]");
+    expect(result).toContain("[SUCCESS]");
 
     const content = fs.readFileSync(testFile, "utf8");
     expect(content).toBe("const a = 2;\n");
@@ -79,7 +79,7 @@ describe("editFile", () => {
   it("should create file if createIfMissing", async () => {
     const newFile = path.join(TEST_DIR, "new_file.ts");
     const result = await editFile(newFile, [{ search: "", replace: "export {};" }], { createIfMissing: true });
-    expect(result).toContain("[SUCESSO]");
+    expect(result).toContain("[SUCCESS]");
 
     const content = fs.readFileSync(newFile, "utf8");
     expect(content).toContain("export {};");
@@ -87,7 +87,7 @@ describe("editFile", () => {
 
   it("should fail for non-existent file without createIfMissing", async () => {
     const result = await editFile("/nonexistent/file.ts", [{ search: "x", replace: "y" }]);
-    expect(result).toContain("[ERRO]");
+    expect(result).toContain("[ERROR]");
   });
 
   it("should create backup when backup option is set", async () => {
@@ -106,7 +106,7 @@ describe("editFile", () => {
     fs.writeFileSync(testFile, "const a = 1;\n", "utf8");
 
     const result = await editFile(testFile, [{ search: "nonexistent string", replace: "x" }]);
-    expect(result).toContain("[ERRO]");
-    expect(result).toContain("Edição falhou");
+    expect(result).toContain("[ERROR]");
+    expect(result).toContain("Edit failed");
   });
 });

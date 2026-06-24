@@ -93,7 +93,7 @@ describe("selfValidation", () => {
 
     it("instructs to fix issues if found during validation", () => {
       const result = injectSelfValidationPrompt(["foo.ts"]);
-      expect(result).toContain("CORRIJA");
+      expect(result).toContain("FIX");
     });
   });
 

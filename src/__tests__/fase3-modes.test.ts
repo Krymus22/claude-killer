@@ -240,7 +240,7 @@ describe("Fase 3 E2E (mocked) — modes, plans, goal verifier, failure memory, h
 
       mockedChat
         .mockResolvedValueOnce(makeStopResponse("Iniciando o trabalho."))
-        .mockResolvedValueOnce(makeStopResponse("Trabalho concluído."));
+        .mockResolvedValueOnce(makeStopResponse("Trabalho done."));
 
       const result = await runAgentLoop("Faz o trabalho");
 

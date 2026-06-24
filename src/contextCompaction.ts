@@ -98,7 +98,7 @@ const strategies: CompactionStrategy[] = [
     shouldApply: (msgs) => {
       let errorCount = 0;
       return msgs.some((m) => {
-        if (m.role === "tool" && typeof m.content === "string" && m.content.includes("[ERRO]")) {
+        if (m.role === "tool" && typeof m.content === "string" && m.content.includes("[ERROR]")) {
           errorCount++;
           return errorCount > 5;
         }
@@ -109,7 +109,7 @@ const strategies: CompactionStrategy[] = [
       const result: any[] = [];
       let errorCount = 0;
       for (const msg of msgs) {
-        if (msg.role === "tool" && typeof msg.content === "string" && msg.content.includes("[ERRO]")) {
+        if (msg.role === "tool" && typeof msg.content === "string" && msg.content.includes("[ERROR]")) {
           errorCount++;
           if (errorCount > 3) continue; // skip old errors
         }
@@ -245,7 +245,7 @@ async function modelBasedCompactionAsync(): Promise<{ compacted: boolean; savedT
       // Replace the summarized portion with a single system message containing the summary
       const compactedHistory = [
         systemMsg,
-        { role: "system", content: `[CONTEXTO COMPACTADO POR IA - ${toSummarize.length} mensagens antigas resumidas preservando decisões arquiteturais, bugs não resolvidos e próximos passos]\n\n${summary}` } as any,
+        { role: "system", content: `[AI CONTEXT COMPACTED - ${toSummarize.length} old messages summarized preserving architectural decisions, unresolved bugs and next steps]\n\n${summary}` } as any,
         ...toKeep,
       ];
 
@@ -271,34 +271,34 @@ function buildSummaryPrompt(messages: any[]): string {
     return `[${role}]: ${content.slice(0, 800)}`;
   }).join("\n\n");
 
-  return `Você está compactando o histórico de uma conversa entre um usuário e um agente de código (Claude-Killer).
+  return `You are compacting the history of a conversation between a user and a code agent (Claude-Killer).
 
-Sua tarefa: produzir um resumo ESTRUTURADO que preserve TODA a informação crítica para a continuidade da tarefa.
+Your task: produce a STRUCTURED summary that preserves ALL critical information for task continuity.
 
-Histórico a ser compactado:
+History to compact:
 ${transcript}
 
-Responda SOMENTE com o seguinte formato (sem preâmbulo):
+Respond ONLY with the following format (no preamble):
 
-## Decisões Arquiteturais Tomadas
-- (liste cada decisão e por quê)
+## Architectural Decisions Made
+- (list each decision and why)
 
 ## Arquivos Modificados
 - (caminho: o que mudou)
 
-## Bugs Não Resolvidos
-- (descrição + contexto)
+## Unresolved Bugs
+- (description + context)
 
-## Próximos Passos Planejados
+## Planned Next Steps
 - (o que o agente ia fazer a seguir)
 
-## Preferências/Restrições do Usuário
+## User Preferences/Constraints
 - (descobertas durante a conversa)
 
-## Contexto Técnico Crítico
+## Critical Technical Context
 - (qualquer detalhe que seria perdido sem este resumo)
 
-Se uma seção não tiver conteúdo, escreva "N/A". Seja conciso mas completo - outro agente vai continuar o trabalho baseado apenas neste resumo.`;
+If a section has no content, write "N/A". Be concise but complete - another agent will continue based only on this summary.`;
 }
 
 function renderMessageContent(m: any): string {

@@ -34,7 +34,7 @@ describe("promiseDetector", () => {
     });
 
     it("detects 'vou verificar' (Portuguese)", () => {
-      const result = detectFalsePromise("Vou verificar isso para você.", 0, 0);
+      const result = detectFalsePromise("Vou verificar isso para you.", 0, 0);
       expect(result.detected).toBe(true);
       expect(result.matchedPhrase).toBe("vou verificar");
     });

@@ -3,7 +3,7 @@
  *
  * Cobre:
  *   - /help: lista de comandos com colunas alinhadas (cmd.padEnd(12))
- *   - /reset: chama history.resetHistory() + mensagem "Histórico resetado."
+ *   - /reset: chama history.resetHistory() + mensagem "History reset."
  *   - /effort: sem arg (mostra atual), low|medium|high|max (seta nível), invalid (erro)
  *   - /mode: sem arg (lista modos), roblox (ativa), off (desativa)
  *   - /tools: sem arg (lista todas), <categoria> (filtra), vazio (mensagem)
@@ -345,11 +345,11 @@ describe("Slash Commands — output organizado", () => {
   // ─── /reset ───────────────────────────────────────────────────────────────
 
   describe("/reset", () => {
-    it("mostra mensagem 'Histórico resetado.'", async () => {
+    it("mostra mensagem 'History reset.'", async () => {
       const { stdin, lastFrame } = render(<App />);
       await sendCommand(stdin, "/reset");
       const out = stripAnsi(lastFrame() ?? "");
-      expect(out).toContain("Histórico resetado.");
+      expect(out).toContain("History reset.");
     });
 
     it("chama history.resetHistory()", async () => {
@@ -358,11 +358,11 @@ describe("Slash Commands — output organizado", () => {
       expect(mockedResetHistory).toHaveBeenCalledTimes(1);
     });
 
-    it("acento 'Histórico' renderiza sem mojibake", async () => {
+    it("acento 'History' renderiza sem mojibake", async () => {
       const { stdin, lastFrame } = render(<App />);
       await sendCommand(stdin, "/reset");
       const out = stripAnsi(lastFrame() ?? "");
-      expect(out).toContain("Histórico");
+      expect(out).toContain("History");
       expect(out).not.toContain("├");
       expect(out).not.toContain("Ã");
     });
@@ -403,8 +403,8 @@ describe("Slash Commands — output organizado", () => {
       const { stdin, lastFrame } = render(<App />);
       await sendCommand(stdin, "/effort invalid");
       const out = stripAnsi(lastFrame() ?? "");
-      expect(out).toContain("Nível inválido: invalid");
-      expect(out).toContain("Opções: low, medium, high, max");
+      expect(out).toContain("Invalid level: invalid");
+      expect(out).toContain("Options: low, medium, high, max");
       // Acento correto, sem mojibake
       expect(out).not.toContain("├");
     });
@@ -421,7 +421,7 @@ describe("Slash Commands — output organizado", () => {
       const { stdin, lastFrame } = render(<App />);
       await sendCommand(stdin, "/mode");
       const out = stripAnsi(lastFrame() ?? "");
-      expect(out).toContain("Modos disponíveis");
+      expect(out).toContain("Available modes");
       expect(out).toContain("roblox");
       expect(out).toContain("devops");
       expect(out).toContain("Ativo: (nenhum)");
@@ -437,16 +437,16 @@ describe("Slash Commands — output organizado", () => {
       const out = stripAnsi(lastFrame() ?? "");
       expect(out).toContain("Ativando modo");
       expect(out).toContain("roblox");
-      expect(out).toContain("Escolha uma opção");
+      expect(out).toContain("Choose an option");
     });
 
-    it("off — desativa modo e chama deactivateMode()", async () => {
+    it("off - deactivates mode and calls deactivateMode()", async () => {
       const { stdin, lastFrame } = render(<App />);
       await sendCommand(stdin, "/mode off");
       expect(mockedDeactivateMode).toHaveBeenCalledTimes(1);
       const out = stripAnsi(lastFrame() ?? "");
-      expect(out).toContain("Modo desativado");
-      expect(out).toContain("Nenhuma validação automática ativa");
+      expect(out).toContain("Mode deactivated");
+      expect(out).toContain("No automatic validation active");
     });
   });
 
@@ -466,7 +466,7 @@ describe("Slash Commands — output organizado", () => {
       expect(out).toContain("2 OK");
       expect(out).toContain("rojo");
       expect(out).toContain("wally");
-      expect(out).toContain("Instaladas");
+      expect(out).toContain("Installeds");
     });
 
     it("com categoria — filtra tools por categoria", async () => {
@@ -483,12 +483,12 @@ describe("Slash Commands — output organizado", () => {
       expect(out).not.toContain("wally");
     });
 
-    it("sem tools — mostra 'Nenhuma tool disponível'", async () => {
+    it("sem tools — mostra 'No tools available'", async () => {
       mockedGetAll.mockReturnValue([]);
       const { stdin, lastFrame } = render(<App />);
       await sendCommand(stdin, "/tools");
       const out = stripAnsi(lastFrame() ?? "");
-      expect(out).toContain("Nenhuma tool disponível");
+      expect(out).toContain("No tools available");
     });
   });
 

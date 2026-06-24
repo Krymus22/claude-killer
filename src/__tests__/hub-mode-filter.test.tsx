@@ -4,7 +4,7 @@
  * Tests:
  *   - 'M' key toggles the mode filter on/off
  *   - When filter is on, only items from active mode are shown
- *   - Filter indicator "FILTRO: só do modo ativo" appears
+ *   - Filter indicator "FILTER: active mode only" appears
  *   - Shortcuts bar includes 'M' for filter
  *   - 'M' does nothing on Modes tab
  *   - 'M' does nothing when no mode is active
@@ -199,26 +199,26 @@ describe("Hub mode filter", () => {
   it("does NOT show filter indicator by default", () => {
     const { lastFrame } = render(<ExtensionHub onClose={() => {}} />);
     const out = stripAnsi(lastFrame() ?? "");
-    expect(out).not.toContain("FILTRO");
+    expect(out).not.toContain("FILTER");
   });
 
-  it("pressing 'M' toggles filter ON — shows FILTRO indicator", async () => {
+  it("pressing 'M' toggles filter ON — shows FILTER indicator", async () => {
     const { stdin, lastFrame } = render(<ExtensionHub onClose={() => {}} />);
     stdin.write("m");
     await delay(100);
     const out = stripAnsi(lastFrame() ?? "");
-    expect(out).toContain("FILTRO");
-    expect(out).toContain("só do modo ativo");
+    expect(out).toContain("FILTER");
+    expect(out).toContain("active mode only");
   });
 
-  it("pressing 'M' twice toggles filter OFF — removes FILTRO indicator", async () => {
+  it("pressing 'M' twice toggles filter OFF — removes FILTER indicator", async () => {
     const { stdin, lastFrame } = render(<ExtensionHub onClose={() => {}} />);
     stdin.write("m");
     await delay(50);
     stdin.write("m");
     await delay(100);
     const out = stripAnsi(lastFrame() ?? "");
-    expect(out).not.toContain("FILTRO");
+    expect(out).not.toContain("FILTER");
   });
 
   it("when filter is ON, only shows items from active mode (All tab)", async () => {
@@ -257,7 +257,7 @@ describe("Hub mode filter", () => {
     await delay(100);
     const out = stripAnsi(lastFrame() ?? "");
     // Filter indicator should NOT appear on Modes tab
-    expect(out).not.toContain("FILTRO");
+    expect(out).not.toContain("FILTER");
   });
 
   it("'M' does nothing when no mode is active", async () => {
@@ -268,7 +268,7 @@ describe("Hub mode filter", () => {
     stdin.write("m");
     await delay(100);
     const out = stripAnsi(lastFrame() ?? "");
-    expect(out).not.toContain("FILTRO");
+    expect(out).not.toContain("FILTER");
   });
 
   it("filter works on Tools tab too (not just All tab)", async () => {

@@ -58,7 +58,7 @@ function stripAnsi(s: string): string {
   return s.replace(/\x1b\[[0-9;]*m/g, "");
 }
 
-/** Delay mínimo para o useInput processar o stdin.write antes do assert. */
+/** Delay minimum para o useInput processar o stdin.write antes do assert. */
 function delay(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }

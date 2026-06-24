@@ -275,7 +275,7 @@ describe("E2E: QuestionPrompt + AskUser integration", () => {
     // Cenário: usuário escolhe "React" (número 1) → onRespond é chamado com
     // { value: "React", cancelled: false, fromAlternatives: true }.
     // Esse response é então alimentado em handleAskUser (como o agente faria)
-    // e o resultado formatado deve conter "[RESPOSTA DO USUÁRIO] React".
+    // e o resultado formatado deve conter "[USER RESPONSE] React".
     const onRespond = vi.fn();
     const { stdin } = render(
       <QuestionPrompt question={makeQuestion()} onRespond={onRespond} />,
@@ -300,13 +300,13 @@ describe("E2E: QuestionPrompt + AskUser integration", () => {
       pergunta: "Qual framework?",
       alternativas: ["React", "Vue", "Svelte"],
     });
-    expect(result.resultStr).toContain("[RESPOSTA DO USUÁRIO]");
+    expect(result.resultStr).toContain("[USER RESPONSE]");
     expect(result.resultStr).toContain("React");
-    // Não tem o sufixo "(texto livre)" porque veio de alternativa
+    // Não tem o sufixo "(free text)" porque veio de alternativa
     expect(result.resultStr).not.toContain("texto livre");
   });
 
-  it("usuário cancela (Esc) → [USUÁRIO CANCELOU A PERGUNTA]", async () => {
+  it("usuário cancela (Esc) → [USER CANCELLED QUESTION]", async () => {
     const onRespond = vi.fn();
     const { stdin } = render(
       <QuestionPrompt question={makeQuestion()} onRespond={onRespond} />,
@@ -329,10 +329,10 @@ describe("E2E: QuestionPrompt + AskUser integration", () => {
       pergunta: "Confirma?",
       alternativas: ["Sim", "Não"],
     });
-    expect(result.resultStr).toContain("[USUÁRIO CANCELOU A PERGUNTA]");
+    expect(result.resultStr).toContain("[USER CANCELLED QUESTION]");
   });
 
-  it("usuário digita resposta livre → [RESPOSTA DO USUÁRIO (texto livre)]", async () => {
+  it("usuário digita resposta livre → [USER RESPONSE (free text)]", async () => {
     const onRespond = vi.fn();
     const { stdin } = render(
       <QuestionPrompt question={makeQuestion()} onRespond={onRespond} />,
@@ -355,14 +355,14 @@ describe("E2E: QuestionPrompt + AskUser integration", () => {
     expect(response.cancelled).toBe(false);
     expect(response.fromAlternatives).toBe(false); // texto livre!
 
-    // Integração: handleAskUser formata com sufixo "(texto livre)"
+    // Integração: handleAskUser formata com sufixo "(free text)"
     const mockCb = vi.fn().mockResolvedValue(response);
     setAskUserCallback(mockCb, true);
     const result = await handleAskUser({
       pergunta: "Qual seu nome?",
       alternativas: ["Anônimo", "Não dizer"],
     });
-    expect(result.resultStr).toContain("[RESPOSTA DO USUÁRIO (texto livre)]");
+    expect(result.resultStr).toContain("[USER RESPONSE (free text)]");
     expect(result.resultStr).toContain("minha resposta custom");
   });
 
@@ -440,8 +440,8 @@ describe("E2E: ConfiguratorChat + toolConfigurator integration", () => {
     const out = stripAnsi(lastFrame() ?? "");
     // Mensagem de sucesso aparece
     expect(out).toContain("Tool configurada com sucesso!");
-    // Estado "Concluído" aparece
-    expect(out).toContain("Concluído");
+    // Estado "Done" aparece
+    expect(out).toContain("Done");
   });
 
   it("configureTool failure → mostra mensagem de erro", async () => {
@@ -455,14 +455,14 @@ describe("E2E: ConfiguratorChat + toolConfigurator integration", () => {
 
     // Resolve com success=false e mensagem de erro
     expect(resolveRef.current).not.toBeNull();
-    resolveRef.current!({ success: false, message: "Erro: tool não encontrada" });
+    resolveRef.current!({ success: false, message: "Erro: tool not found" });
     await delay(50);
 
     const out = stripAnsi(lastFrame() ?? "");
     // Mensagem de erro aparece
-    expect(out).toContain("Erro: tool não encontrada");
-    // Estado "Concluído" aparece (mesmo com falha — finished=true após resolver)
-    expect(out).toContain("Concluído");
+    expect(out).toContain("Erro: tool not found");
+    // Estado "Done" aparece (mesmo com falha — finished=true após resolver)
+    expect(out).toContain("Done");
   });
 
   it("Esc fecha configurador → estado limpo (onClose chamado)", async () => {

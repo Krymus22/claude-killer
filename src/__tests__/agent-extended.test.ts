@@ -528,7 +528,7 @@ describe("dispatchToolCallPublic — roteamento e gates", () => {
 
     const result = await dispatchToolCallPublic(tc);
 
-    expect(result.resultStr).toContain("[ERRO]");
+    expect(result.resultStr).toContain("[ERROR]");
     expect(result.resultStr).toContain("ferramenta_inexistente_xyz");
     expect(result.usedHeal).toBe(false);
   });
@@ -758,9 +758,9 @@ describe("Error handling", () => {
     expect(mockedChat).toHaveBeenCalledTimes(1);
   });
 
-  it.skip("Tool error é adicionado ao contexto como tool result (handler retorna [ERRO])", async () => {
+  it.skip("Tool error é adicionado ao contexto como tool result (handler retorna [ERROR])", async () => {
     // lerArquivo retorna uma string de erro estruturada (convenção usada pelos handlers)
-    mockedLerArquivo.mockResolvedValueOnce("[ERRO] arquivo não encontrado: /missing.ts");
+    mockedLerArquivo.mockResolvedValueOnce("[ERROR] arquivo not found: /missing.ts");
 
     const tc = makeToolCall("ler_arquivo", { caminho: "/missing.ts" }, "call_err_1");
 
@@ -773,7 +773,7 @@ describe("Error handling", () => {
 
     expect(result).toBe("recuperei do erro");
     // addToolResult deve ter sido chamado com a mensagem de erro
-    expect(mockedAddToolResult).toHaveBeenCalledWith("call_err_1", "[ERRO] arquivo não encontrado: /missing.ts");
+    expect(mockedAddToolResult).toHaveBeenCalledWith("call_err_1", "[ERROR] arquivo not found: /missing.ts");
   });
 
   it.skip("Self-healing: aplicar_diff com falha (aplicar_diff removed)", async () => {

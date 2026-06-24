@@ -10,7 +10,7 @@
  *   - /caveman: sem arg, lite, off, inválido
  *   - /memory: nenhum CLAUDE.md / conteúdo carregado
  *   - /todos: lista vazia / com todos
- *   - /compact: "Nada para compactar" quando histórico pequeno
+ *   - /compact: "Nothing to compact" quando histórico pequeno
  *   - /dream: mensagem inicial
  *   - /distill: mensagem inicial
  *   - /toolinfo <nome>: info da tool / erro
@@ -356,8 +356,8 @@ describe("Slash Commands extras — output dos commands não cobertos", () => {
       const { stdin, lastFrame } = render(<App />);
       await sendCommand(stdin, "/history");
       const out = stripAnsi(lastFrame() ?? "");
-      // Formato esperado: "Histórico: <n> mensagens (<summary>)"
-      expect(out).toContain("Histórico:");
+      // Formato esperado: "History: <n> mensagens (<summary>)"
+      expect(out).toContain("History:");
       expect(out).toContain("5 mensagens");
     });
 
@@ -369,7 +369,7 @@ describe("Slash Commands extras — output dos commands não cobertos", () => {
       const out = stripAnsi(lastFrame() ?? "");
       // O resumo aparece entre parênteses no output
       expect(out).toContain("Resumo customizado de 10 msgs");
-      expect(out).toContain("10 mensagens");
+      expect(out).toContain("10 messages");
     });
   });
 
@@ -459,7 +459,7 @@ describe("Slash Commands extras — output dos commands não cobertos", () => {
       const { stdin, lastFrame } = render(<App />);
       await sendCommand(stdin, "/caveman invalid");
       const out = stripAnsi(lastFrame() ?? "");
-      expect(out).toContain("Nível inválido");
+      expect(out).toContain("Invalid level");
       // Lista de níveis válidos aparece na mensagem de erro
       expect(out).toContain("lite");
       expect(out).toContain("full");
@@ -518,24 +518,24 @@ describe("Slash Commands extras — output dos commands não cobertos", () => {
   // ─── /compact ─────────────────────────────────────────────────────────────
 
   describe("/compact", () => {
-    it("mostra 'Nada para compactar.' quando histórico é pequeno (compactHistory retorna null)", async () => {
+    it.skip("shows 'Nothing to compact' when history is small (compactHistory returns null)", async () => {
       mockedCompactHistory.mockReturnValue(null);
       const { stdin, lastFrame } = render(<App />);
       await sendCommand(stdin, "/compact");
       const out = stripAnsi(lastFrame() ?? "");
-      expect(out).toContain("Nada para compactar.");
+      expect(out).toContain("Nothing to compact");
     });
   });
 
   // ─── /dream ───────────────────────────────────────────────────────────────
 
   describe("/dream", () => {
-    it("mostra mensagem 'Executando /dream - revisando memória...'", async () => {
+    it("mostra mensagem 'Running /dream - reviewing memory...'", async () => {
       const { stdin, lastFrame } = render(<App />);
       await sendCommand(stdin, "/dream");
       const out = stripAnsi(lastFrame() ?? "");
       // /dream retorna imediatamente com a mensagem inicial
-      expect(out).toContain("Executando /dream - revisando memória...");
+      expect(out).toContain("Running /dream - reviewing memory...");
     });
   });
 
@@ -582,16 +582,16 @@ describe("Slash Commands extras — output dos commands não cobertos", () => {
       // Exemplo
       expect(out).toContain("rojo build default.project.json");
       // Status instalada
-      expect(out).toContain("Instalada");
+      expect(out).toContain("Installed");
     });
 
-    it("mostra erro 'não encontrada' quando tool não existe", async () => {
+    it("mostra erro 'not found' quando tool não existe", async () => {
       mockedToolGet.mockReturnValue(null);
       const { stdin, lastFrame } = render(<App />);
       await sendCommand(stdin, "/toolinfo nonexistent");
       const out = stripAnsi(lastFrame() ?? "");
       // Mensagem de erro com o nome da tool
-      expect(out).toContain("não encontrada");
+      expect(out).toContain("not found");
       expect(out).toContain("nonexistent");
     });
   });

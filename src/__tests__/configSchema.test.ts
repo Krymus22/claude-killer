@@ -3,7 +3,7 @@
  *
  * Verifica que o validador:
  *   - Aceita configs válidos
- *   - Rejeita configs sem campos obrigatórios (name, label)
+ *   - Rejeita configs sem campos requireds (name, label)
  *   - Rejeita campos com tipo incorreto (validators não-array, etc)
  *   - Valida a estrutura de cada validator (tool, filePattern, blocking)
  *   - Valida a estrutura de cada hook (name, file, trigger)

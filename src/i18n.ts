@@ -77,7 +77,7 @@ export const COMMAND_I18N: Record<string, Record<Language, CommandI18n>> = {
   },
   "/hub": {
     en: { desc: "Extension Hub (control center)" },
-    "pt-BR": { desc: "Hub de Extensões (centro de controle)" },
+    "pt-BR": { desc: "Extension Hub (control center)" },
   },
   "/mode": {
     en: {
@@ -91,11 +91,11 @@ export const COMMAND_I18N: Record<string, Record<Language, CommandI18n>> = {
   },
   "/reset": {
     en: { desc: "Clear history" },
-    "pt-BR": { desc: "Limpar histórico" },
+    "pt-BR": { desc: "Clear history" },
   },
   "/history": {
     en: { desc: "History summary" },
-    "pt-BR": { desc: "Resumo do histórico" },
+    "pt-BR": { desc: "History summary" },
   },
   "/skills": {
     en: { desc: "List skills" },
@@ -119,7 +119,7 @@ export const COMMAND_I18N: Record<string, Record<Language, CommandI18n>> = {
       subcommands: ["low", "medium", "high", "max"],
     },
     "pt-BR": {
-      desc: "Definir nível de esforço (low/medium/high/max)",
+      desc: "Set effort level (low/medium/high/max)",
       subcommands: ["low", "medium", "high", "max"],
     },
   },
@@ -133,7 +133,7 @@ export const COMMAND_I18N: Record<string, Record<Language, CommandI18n>> = {
   },
   "/memory": {
     en: { desc: "Show project memory" },
-    "pt-BR": { desc: "Mostrar memória do projeto" },
+    "pt-BR": { desc: "Show project memory" },
   },
   "/todos": {
     en: { desc: "Show todo list" },
@@ -149,7 +149,7 @@ export const COMMAND_I18N: Record<string, Record<Language, CommandI18n>> = {
   },
   "/dream": {
     en: { desc: "Review & compress memory" },
-    "pt-BR": { desc: "Revisar e comprimir memória" },
+    "pt-BR": { desc: "Review and compress memory" },
   },
   "/distill": {
     en: { desc: "Extract workflow skills" },

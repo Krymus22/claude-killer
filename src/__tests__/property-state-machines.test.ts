@@ -233,7 +233,7 @@ describe("property-state-machines — Hub toggle cycle", () => {
 // ===========================================================================
 
 describe("property-state-machines — Retry backoff", () => {
-  it("4. withRetry com fn sempre falhando faz no máximo maxRetries+1 tentativas", async () => {
+  it("4. withRetry com fn sempre falhando faz no maximum maxRetries+1 tentativas", async () => {
     vi.useFakeTimers();
     try {
       await fc.assert(
@@ -386,7 +386,7 @@ describe("property-state-machines — History compact", () => {
         content: fc.string({ maxLength: 30 }),
       }),
     ),
-    // ≥10 mensagens garante history.length > COMPACT_KEEP_RECENT+1 (=7),
+    // ≥10 messages garante history.length > COMPACT_KEEP_RECENT+1 (=7),
     // então compactHistory() não retorna null por short-circuit.
     { minLength: 10, maxLength: 50 },
   );

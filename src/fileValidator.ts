@@ -10,7 +10,7 @@
  *       1. rule.command (string estilo "selene --quiet {file}")
  *       2. rule.toolName + manifest.validatorCommand (args estruturados)
  *       3. rule.toolName sozinho (binary path + "{file}" como único arg)
- *   - Checa stdout || stderr (não só stdout) para erros.
+ *   - Checa stdout || stderr (não só stdout) for erros.
  *   - Não assume flags específicas de selene (ex: --no-global-check).
  *
  * Fluxo:
@@ -140,7 +140,7 @@ function runCommand(
 // --- Tool binary resolution (mode-aware) ------------------------------------
 
 /**
- * Resolve o caminho do binário da tool usando findToolBinary() (mode-aware).
+ * Resolve o caminho do binary da tool usando findToolBinary() (mode-aware).
  * Retorna null se não encontrado.
  *
  * IMPORTANTE: NÃO usa detectTool() (API legacy não mode-aware) — isso era
@@ -240,7 +240,7 @@ interface BuiltCommand {
 }
 
 /**
- * Constrói o comando a executar para uma rule.
+ * Constrói o comando a executar for uma rule.
  *
  * Prioridade:
  *   1. rule.command (string shell-style, {file} substituído, com shellParse)
@@ -248,7 +248,7 @@ interface BuiltCommand {
  *   3. rule.tool → manifest.args (args base)
  *   4. rule.tool sozinho + [tmpFile] (fallback default)
  *
- * Lança Error se o binário não for encontrado.
+ * Lança Error se o binary não for encontrado.
  */
 async function buildCommandForRule(
   rule: ValidationRule,
@@ -259,10 +259,10 @@ async function buildCommandForRule(
   if (rule.command) {
     const cmdWithFile = rule.command.replace(/\{file\}/g, tmpFile);
     // Sprint A: usar shellParse (respeita aspas) em vez de split(/\s+/)
-    // split(/\s+/) passaria 'TODO' (com aspas literais) para o binário,
+    // split(/\s+/) passaria 'TODO' (com aspas literais) for o binary,
     // que não encontraria o pattern — bug sutil.
     const parts = shellParse(cmdWithFile);
-    if (parts.length === 0) return { error: `rule.command vazio para ${rule.tool}` };
+    if (parts.length === 0) return { error: `rule.command vazio for ${rule.tool}` };
 
     // O primeiro token pode ser um nome de tool (resolvido via findToolBinary)
     // ou um path absoluto. Tenta resolver como tool primeiro.
@@ -279,7 +279,7 @@ async function buildCommandForRule(
   }
 
   // 2-4. Precisa resolver a tool pelo nome (rule.tool)
-  // Remove sufixos comuns (_lint, _format, _run) para achar o binary
+  // Remove sufixos comuns (_lint, _format, _run) for achar o binary
   const binaryToolName = rule.tool
     .replace(/_lint$/i, "")
     .replace(/_format$/i, "")
@@ -289,7 +289,7 @@ async function buildCommandForRule(
 
   const binaryPath = await resolveToolBinary(binaryToolName, modeName);
   if (!binaryPath) {
-    return { error: `binário "${binaryToolName}" não encontrado (não instalado) (mode=${modeName ?? "none"})` };
+    return { error: `binary "${binaryToolName}" not found (not installed) (mode=${modeName ?? "none"})` };
   }
 
   // 2. Tenta manifest.validatorArgs
@@ -403,22 +403,22 @@ export async function validateFile(
       }
 
       // BUG FIX (BUG-C): checar stdout OU stderr (não só stdout).
-      // Selene 0.28.0+ manda diagnósticos para stderr; ruff manda para stdout;
-      // terraform validate manda para stdout. Checar ambos é universal.
+      // Selene 0.28.0+ manda diagnósticos for stderr; ruff manda for stdout;
+      // terraform validate manda for stdout. Checar ambos é universal.
       const output = (cmdResult.stdout.trim() || cmdResult.stderr.trim());
 
       if (!cmdResult.ok) {
-        // Tool falhou (exit non-zero). Se tem output, inclui na mensagem.
+        // Tool failed (exit non-zero). Se tem output, inclui na mensagem.
         // Se NÃO tem output (ex: grep -q pattern file → exit 1 sem output),
         // ainda assim bloqueia com mensagem genérica — o exit code é suficiente.
         let errMsg: string;
         if (output) {
           errMsg = `${rule.tool} failed for ${path.basename(filePath)}:\n${output}`;
 
-          // Hint para falso positivo de API desconhecida (Roblox/selene)
+          // Hint for falso positivo de API desconhecida (Roblox/selene)
           const mightBeNewApi = /undefined (global|variable)|unknown global/i.test(output);
           if (mightBeNewApi && autoResearchEnabled) {
-            errMsg += `\n\n[HINT] Este erro pode ser um FALSO POSITIVO - a tool pode não conhecer uma API nova. Considere chamar pesquisar_api_atualizada({ nome: "<api_name>", linguagem: "<linguagem>" }) para verificar se a API existe antes de "corrigir" o código.`;
+            errMsg += `\n\n[HINT] Este erro pode ser um FALSO POSITIVO - a tool pode não conhecer uma API nova. Considere chamar pesquisar_api_atualizada({ nome: "<api_name>", linguagem: "<linguagem>" }) for verificar se a API existe antes de "corrigir" o código.`;
           }
         } else {
           errMsg = `${rule.tool} failed for ${path.basename(filePath)} (exit code ${cmdResult.exitCode}, no output)`;
@@ -475,7 +475,7 @@ export async function getActiveValidationRules(): Promise<ValidationRule[]> {
  * the mode defines a validation rule with a matching filePattern.
  *
  * OPT-IN por design: retorna false quando nenhum modo ativo tem regras,
- * mesmo para .luau/.lua. Evita bloquear writes em ambientes sem tools.
+ * mesmo for .luau/.lua. Evita bloquear writes em ambientes sem tools.
  */
 export async function shouldValidateFile(filePath: string): Promise<boolean> {
   const rules = await getActiveValidationRules();

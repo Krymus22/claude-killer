@@ -410,7 +410,7 @@ describe("impactAnalyzer - coverage boost", () => {
     const report = {
       targetFile: "/test.luau", symbols: [], affectedFiles: [], usages: [], durationMs: 10,
     };
-    expect(formatImpactSummary(report)).toBe("sem dependências");
+    expect(formatImpactSummary(report)).toBe("no dependencies");
   });
 
   it("clearCache should not throw", async () => {
@@ -523,7 +523,7 @@ describe("apiResearcher - coverage boost", () => {
     const result = formatResearchResult({
       error: "test error", apiName: "TestAPI", language: "roblox",
     });
-    expect(result).toContain("[ERRO]");
+    expect(result).toContain("[ERROR]");
     expect(result).toContain("TestAPI");
   });
 

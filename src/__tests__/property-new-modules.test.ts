@@ -229,7 +229,7 @@ describe("Property: fileFinder searchInDefinedFolders", () => {
 // --- Property: askUser handleAskUser ----------------------------------------
 
 describe("Property: askUser handleAskUser", () => {
-  it("alternativas com menos de 2 itens → sempre retorna [ERRO]", async () => {
+  it("alternativas com menos de 2 itens → sempre retorna [ERROR]", async () => {
     await fc.assert(
       fc.asyncProperty(
         fc.record({
@@ -238,16 +238,16 @@ describe("Property: askUser handleAskUser", () => {
         }),
         async ({ pergunta, alternativas }) => {
           // Sem callback setado — mas a validação < 2 acontece ANTES do check
-          // de permissão, então deve retornar [ERRO] independente disso.
+          // de permissão, então deve retornar [ERROR] independente disso.
           const result = await handleAskUser({ pergunta, alternativas });
-          return /\[ERRO\]/.test(result.resultStr);
+          return /[ERROR]/.test(result.resultStr);
         },
       ),
       { numRuns: 30 },
     );
   });
 
-  it("alternativas com mais de 6 itens → sempre retorna [ERRO]", async () => {
+  it("alternativas com mais de 6 itens → sempre retorna [ERROR]", async () => {
     await fc.assert(
       fc.asyncProperty(
         fc.record({
@@ -257,14 +257,14 @@ describe("Property: askUser handleAskUser", () => {
         }),
         async ({ pergunta, alternativas }) => {
           const result = await handleAskUser({ pergunta, alternativas });
-          return /\[ERRO\]/.test(result.resultStr);
+          return /[ERROR]/.test(result.resultStr);
         },
       ),
       { numRuns: 20 },
     );
   });
 
-  it("pergunta vazia → sempre retorna [ERRO]", async () => {
+  it("pergunta vazia → sempre retorna [ERROR]", async () => {
     await fc.assert(
       fc.asyncProperty(
         fc.oneof(
@@ -275,9 +275,9 @@ describe("Property: askUser handleAskUser", () => {
         fc.array(fc.string({ maxLength: 30 }), { minLength: 2, maxLength: 6 }),
         async (pergunta, alternativas) => {
           // pergunta vazia: handleAskUser converte pra "" via String(args.pergunta ?? "")
-          // e retorna [ERRO] antes de validar alternativas.
+          // e retorna [ERROR] antes de validar alternativas.
           const result = await handleAskUser({ pergunta, alternativas });
-          return /\[ERRO\]/.test(result.resultStr);
+          return /[ERROR]/.test(result.resultStr);
         },
       ),
       { numRuns: 30 },

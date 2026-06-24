@@ -138,7 +138,7 @@ describe("Property: config schema", () => {
           label: fc.string({ minLength: 1, maxLength: 50 }),
         }),
         (base) => {
-          // Config mínimo válido (name + label strings não-vazias) é válido.
+          // Config minimum válido (name + label strings não-vazias) é válido.
           // Adiciona campos opcionais que NÃO invalidam o config.
           const config = { ...base, tools: [], skills: [], validators: [] };
           return isValidModeConfig(config) === true;

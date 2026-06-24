@@ -37,7 +37,7 @@ export interface ConfiguratorResult {
 
 // --- System Prompt -----------------------------------------------------------
 
-const CONFIGURATOR_SYSTEM_PROMPT = `Você é uma IA configuradora. Sua tarefa é ajudar o usuário a configurar tools, skills, hooks e MCPs para o modo ativo.
+const CONFIGURATOR_SYSTEM_PROMPT = `Você é uma IA configuradora. Sua tarefa é ajudar o usuário a configurar tools, skills, hooks e MCPs for o modo ativo.
 
 Você PODE:
 - Rodar comandos pra entender tools (apenas --help, --version, where, find, ls)
@@ -109,7 +109,7 @@ function getConfiguratorTools() {
       type: "function" as const,
       function: {
         name: "criar_manifest",
-        description: "Cria um arquivo manifest JSON para uma tool na pasta do modo ativo.",
+        description: "Cria um arquivo manifest JSON for uma tool na pasta do modo ativo.",
         parameters: {
           type: "object",
           properties: {
@@ -124,7 +124,7 @@ function getConfiguratorTools() {
       type: "function" as const,
       function: {
         name: "copiar_para_tools",
-        description: "Copia um arquivo encontrado para a pasta tools/ do modo ativo.",
+        description: "Copia um arquivo encontrado for a pasta tools/ do modo ativo.",
         parameters: {
           type: "object",
           properties: {
@@ -157,7 +157,7 @@ const DANGEROUS_CHARS = /[|;&<>`$]/;
 
 /**
  * Verifica se um comando é seguro (apenas --help, --version, where, find, ls, dir).
- * Exportado no Sprint 12 para permitir testes diretos.
+ * Exportado no Sprint 12 for permitir testes diretos.
  *
  * BUG FIX: agora rejeita comandos com pipes (|), redirects (>, <), chaining (&&, ;),
  * backticks (`), e variable expansion ($). Antes, 'rojo --help > /etc/passwd' passava.
@@ -182,7 +182,7 @@ async function handleConfiguratorTool(
     case "executar_comando_seguro": {
       const cmd = String(args.comando ?? "");
       if (!isSafeCommand(cmd)) {
-        return `[ERRO] Comando não permitido: "${cmd}". Só --help, --version, where, find, ls.`;
+        return `[ERROR] Comando não permitido: "${cmd}". Só --help, --version, where, find, ls.`;
       }
       try {
         const result = execSync(cmd, {
@@ -199,7 +199,7 @@ async function handleConfiguratorTool(
 
     case "buscar_arquivo": {
       const fileName = String(args.nome ?? "");
-      if (!fileName) return "[ERRO] nome é obrigatório";
+      if (!fileName) return "[ERROR] nome é obrigatório";
       const results = searchInDefinedFolders(fileName, modeName);
       if (results.length === 0) {
         return `Não encontrei "${fileName}" nas pastas padrão. O usuário pode ter o arquivo em outro lugar.`;
@@ -210,8 +210,8 @@ async function handleConfiguratorTool(
     case "criar_manifest": {
       const toolName = String(args.toolName ?? "");
       const manifest = args.manifest;
-      if (!toolName || !manifest) return "[ERRO] toolName e manifest são obrigatórios";
-      if (!modeName) return "[ERRO] nenhum modo ativo";
+      if (!toolName || !manifest) return "[ERROR] toolName e manifest são obrigatórios";
+      if (!modeName) return "[ERROR] nenhum modo ativo";
 
       const home = process.env.HOME ?? process.env.USERPROFILE ?? os.homedir();
       const manifestsDir = path.join(home, ".claude-killer", "modes", modeName, "manifests");
@@ -226,27 +226,27 @@ async function handleConfiguratorTool(
 
     case "copiar_para_tools": {
       const sourcePath = String(args.sourcePath ?? "");
-      if (!sourcePath) return "[ERRO] sourcePath é obrigatório";
-      if (!modeName) return "[ERRO] nenhum modo ativo";
-      if (!fs.existsSync(sourcePath)) return `[ERRO] Arquivo não encontrado: ${sourcePath}`;
+      if (!sourcePath) return "[ERROR] sourcePath é obrigatório";
+      if (!modeName) return "[ERROR] nenhum modo ativo";
+      if (!fs.existsSync(sourcePath)) return `[ERROR] File not found: ${sourcePath}`;
       const destPath = copyToModeTools(sourcePath, modeName);
       if (destPath) {
         return `Arquivo copiado para: ${destPath}`;
       }
-      return "[ERRO] Falha ao copiar arquivo";
+      return "[ERROR] Falha ao copiar arquivo";
     }
 
     case "perguntar_usuario": {
-      if (!onAskUser) return "[ERRO] perguntar_usuario não disponível neste contexto";
+      if (!onAskUser) return "[ERROR] perguntar_usuario não disponível in this context";
       const pergunta = String(args.pergunta ?? "");
       const alternativas = Array.isArray(args.alternativas) ? (args.alternativas as string[]) : [];
-      if (!pergunta || alternativas.length < 2) return "[ERRO] pergunta e alternativas (min 2) obrigatórios";
+      if (!pergunta || alternativas.length < 2) return "[ERROR] pergunta e alternativas (min 2) obrigatórios";
       const response = await onAskUser({ pergunta, alternativas });
       return response.cancelled ? "[USUÁRIO CANCELOU]" : `[RESPOSTA] ${response.value}`;
     }
 
     default:
-      return `[ERRO] Tool desconhecida: ${toolName}`;
+      return `[ERROR] Tool desconhecida: ${toolName}`;
   }
 }
 
@@ -274,15 +274,15 @@ export async function configureTool(
     return { success: false, message: "Nenhum modo ativo. Ative um modo primeiro." };
   }
 
-  onMessage?.(`Iniciando configuração de "${toolName}" para o modo "${modeName}"...`);
+  onMessage?.(`Iniciando configuração de "${toolName}" for o modo "${modeName}"...`);
 
   // Build initial message
-  const initialMessage = `Configure a tool "${toolName}" para o modo "${modeName}".
+  const initialMessage = `Configure a tool "${toolName}" for o modo "${modeName}".
 
 Passos:
-1. Tente rodar "${toolName} --help" e "${toolName} --version" para entender o que ela faz.
-2. Se não encontrar o binary, use buscar_arquivo para procurá-lo.
-3. Se encontrar, use copiar_para_tools para copiá-lo para a pasta do modo.
+1. Tente rodar "${toolName} --help" e "${toolName} --version" for entender o que ela faz.
+2. Se não encontrar o binary, use buscar_arquivo for procurá-lo.
+3. Se encontrar, use copiar_para_tools for copiá-lo for a pasta do modo.
 4. Com base no --help, crie um manifest usando criar_manifest.
 5. Se não tiver certeza de algo, use perguntar_usuario.
 
@@ -361,7 +361,7 @@ Comece agora.`;
       }
     } catch (err) {
       log.error(`[CONFIGURATOR] Error: ${(err as Error).message}`);
-      return { success: false, message: `Erro: ${(err as Error).message}` };
+      return { success: false, message: `Error: ${(err as Error).message}` };
     }
   }
 

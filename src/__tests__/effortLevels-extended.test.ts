@@ -55,7 +55,7 @@ describe("effortLevels-extended: setEffortLevel", () => {
     expect(getEffortLevel()).toBe("low");
   });
 
-  it("persiste valor em process.env.CLAUDE_KILLER_EFFORT_STORED quando localStorage não está disponível", () => {
+  it("persiste valor em process.env.CLAUDE_KILLER_EFFORT_STORED quando localStorage is not available", () => {
     // Em ambiente node (test), typeof localStorage === 'undefined'
     expect(typeof localStorage).toBe("undefined");
     setEffortLevel("high");

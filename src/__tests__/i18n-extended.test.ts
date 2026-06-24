@@ -115,7 +115,7 @@ describe("edge cases", () => {
   it("setLanguage persiste entre chamadas de getCommandI18n dentro da mesma instância", async () => {
     const { setLanguage, getCommandI18n } = await import("./../i18n.js");
     setLanguage("pt-BR");
-    expect(getCommandI18n("/memory").desc).toBe("Mostrar memória do projeto");
+    expect(getCommandI18n("/memory").desc).toBe("Show project memory");
     // Segunda chamada deve continuar em pt-BR (cacheado)
     expect(getCommandI18n("/todos").desc).toBe("Mostrar lista de tarefas");
     // Alterna para en

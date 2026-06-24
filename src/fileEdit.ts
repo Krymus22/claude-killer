@@ -135,7 +135,7 @@ export async function editFile(
     releaseLock = await acquireLock(resolved, holderId, 30_000, 60_000);
   } catch (err) {
     log.warn(`fileEdit: could not acquire lock for ${resolved}: ${(err as Error).message}`);
-    return `[ERRO] Não foi possível obter lock no arquivo: ${(err as Error).message}`;
+    return `[ERROR] Não foi possível obter lock no arquivo: ${(err as Error).message}`;
   }
 
   try {
@@ -145,7 +145,7 @@ export async function editFile(
     } else if (options?.createIfMissing) {
       // content is already ""
     } else {
-      return `[ERRO] Arquivo não encontrado: ${resolved}`;
+      return `[ERROR] File not found: ${resolved}`;
     }
 
     const original = content;
@@ -153,7 +153,7 @@ export async function editFile(
 
     if (!result.success) {
       log.toolResult("editar_arquivo", false, result.error);
-      return `[ERRO] Edição falhou: ${result.error}`;
+      return `[ERROR] Edit failed: ${result.error}`;
     }
 
   // --- Impact analysis (NEW) ---
@@ -203,7 +203,7 @@ export async function editFile(
 
       if (!validation.ok && validation.blockingError) {
         log.toolResult("editar_arquivo", false, "validation blocked");
-        return `[ERRO] Validação bloqueou a edição. Corrija os erros abaixo e tente novamente:\n\n${validation.blockingError}`;
+        return `[ERROR] Validação bloqueou a edição. Corrija os erros abaixo e tente novamente:\n\n${validation.blockingError}`;
       }
 
       // Log non-blocking warnings but proceed with the write
@@ -251,7 +251,7 @@ export async function editFile(
           if (review.risk === "high") {
             const msg = formatSafetyReview(review);
             log.toolResult("editar_arquivo", false, "safety review blocked");
-            return `[ERRO] Revisor de segurança bloqueou a edição.\n\n${msg}`;
+            return `[ERROR] Revisor de segurança bloqueou a edição.\n\n${msg}`;
           }
 
           // Log low/none reviews as info (not blocking)
@@ -294,7 +294,7 @@ export async function editFile(
     for (const hr of hookResults) {
       if (hr.blocking) {
         log.toolResult("editar_arquivo", false, "hook blocked");
-        return `[ERRO] Hook bloqueou: ${hr.message ?? "(no message)"}`;
+        return `[ERROR] Hook bloqueou: ${hr.message ?? "(no message)"}`;
       }
       if (hr.modifiedContent) {
         result.content = hr.modifiedContent;
@@ -387,18 +387,18 @@ export async function editFile(
 
   // Build success/warning message - append impact hint + hook results
   // Sprint C bug fix (BUG-U): quando 0 replacements, retorna WARNING em vez
-  // de SUCESSO. Antes, a IA via "SUCESSO 0 substituições" e achava que
+  // of SUCCESS. Before, IA saw "SUCCESS 0 replacements" e achava que
   // funcionou, mas nada foi alterado. Agora retorna erro claro pra IA
   // entender que o search string não foi encontrado.
   let msg: string;
   if (result.replacements === 0) {
-    msg = `[AVISO] 0 substituições aplicadas em ${resolved}. ` +
+    msg = `[AVISO] 0 replacements aplicadas em ${resolved}. ` +
       `Nenhuma ocorrência do texto de busca foi encontrada. ` +
       `Verifique se o 'search' corresponde exatamente ao conteúdo do arquivo. ` +
-      `Use ler_arquivo para ver o conteúdo atual antes de editar.`;
+      `Use ler_arquivo for ver o conteúdo atual antes de editar.`;
     log.warn(`fileEdit: 0 replacements for ${resolved} — search string not found`);
   } else {
-    msg = `[SUCESSO] ${result.replacements}substituições(s) aplicada(s) em ${resolved}`;
+    msg = `[SUCCESS] ${result.replacements}replacement(s) applied em ${resolved}`;
   }
   if (impactHint) {
     msg += `\n\n${impactHint}`;

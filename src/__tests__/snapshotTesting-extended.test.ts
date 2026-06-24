@@ -31,7 +31,7 @@ const snapState = vi.hoisted(() => ({
 
 vi.mock("node:child_process", () => ({
   spawn: vi.fn(() => {
-    // Throw sincrono simula ENOENT (binary não encontrado) — pego pelo catch
+    // Throw sincrono simula ENOENT (binary not found) — pego pelo catch
     if (snapState.spawnThrows) {
       throw new Error("spawn ENOENT: node binary not found");
     }

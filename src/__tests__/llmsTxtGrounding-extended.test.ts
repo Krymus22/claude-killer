@@ -102,7 +102,7 @@ describe("llmsTxtGrounding (extended)", () => {
     expect(stats.sizeBytes).toBeGreaterThanOrEqual(200);
   });
 
-  it("fetchLlmsTxt deve rejeitar conteúdo curto (<100 bytes) como não encontrado", async () => {
+  it("fetchLlmsTxt deve rejeitar conteúdo curto (<100 bytes) como not found", async () => {
     const { fetchLlmsTxt } = await import("./../llmsTxtGrounding.js");
     // Conteúdo muito curto — deve ser considerado inválido
     mockSpawn.stdout = "short";
@@ -198,7 +198,7 @@ describe("llmsTxtGrounding (extended)", () => {
     mockSpawn.code = 0;
     const result = await fetchLlmsTxt("react");
     expect(result.found).toBe(true);
-    // Deve ter sido truncado para no máximo 8000 caracteres
+    // Deve ter sido truncado para no maximum 8000 caracteres
     expect(result.content.length).toBeLessThanOrEqual(8000);
   });
 });

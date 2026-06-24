@@ -336,7 +336,7 @@ function handleActions(key: { return?: boolean }, inputChar: string) {
             Active mode: {activeModeLabel}
           </Text>
           {modeFilter && (
-            <Text color={colors.warning} bold> | FILTRO: só do modo ativo</Text>
+            <Text color={colors.warning} bold> | FILTER: active mode only</Text>
           )}
         </Box>
       )}
@@ -585,7 +585,7 @@ function ExtensionCard({ item, selected, cardWidth }: Readonly<{ item?: Extensio
       {/* Install hint for missing tools */}
       {isToolCategory && toolStatus === "missing" && selected && (
         <Box>
-          <Text color={colors.warning}> Pressione I para instalar</Text>
+          <Text color={colors.warning}> Pressione I for instalar</Text>
         </Box>
       )}
     </Box>

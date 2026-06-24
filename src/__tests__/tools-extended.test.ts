@@ -173,7 +173,7 @@ zzz
 
       const r = await executarComando({ comando: "sleep 30", timeoutMs: 50 });
       expect(r).toContain("timeout");
-      expect(r).toContain("[ERRO]");
+      expect(r).toContain("[ERROR]");
     });
 
     it("envia stdout + stderr combinados quando há ambos", async () => {
@@ -185,7 +185,7 @@ zzz
       const r = await executarComando({ comando: "echo" });
       expect(r).toContain("OUT_LINE");
       expect(r).toContain("ERR_LINE");
-      expect(r).toContain("[ERRO]");
+      expect(r).toContain("[ERROR]");
     });
   });
 
@@ -200,10 +200,10 @@ zzz
 
     it("executarComando propaga erro do evento 'error' do spawn", async () => {
       mockSpawn.mockImplementation(() => makeFakeChild({
-        error: new Error("ENOENT: binário não encontrado"),
+        error: new Error("ENOENT: binário not found"),
       }).child);
       const r = await executarComando({ comando: "binario_inexistente_xyz" });
-      expect(r).toContain("[ERRO]");
+      expect(r).toContain("[ERROR]");
       expect(r).toContain("ENOENT");
     });
 

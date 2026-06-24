@@ -157,7 +157,7 @@ describe("toolUpdater (extended)", () => {
 
   it("performUpdateCheck persiste cachedVersions após rodar", async () => {
     const { performUpdateCheck } = await import("./../toolUpdater.js");
-    // Configura todos tools para falhar (não instalado) — performUpdateCheck
+    // Configura todos tools para falhar (not installed) — performUpdateCheck
     // ainda persiste lastCheck
     await performUpdateCheck();
     const statePath = path.join(tmpHome, ".claude-killer", ".tool-updater.json");
@@ -181,7 +181,7 @@ describe("toolUpdater (extended)", () => {
     process.env.TOOL_UPDATER_AUTO_INSTALL = "true";
     // Configura rojo como instalado com versão antiga
     mockRun.responses.set("rojo", { stdout: "7.4.0\n", stderr: "", code: 0 });
-    // Outros tools não instalados (code != 0)
+    // Outros tools not installeds (code != 0)
     mockRun.responses.set("wally", { stdout: "", stderr: "", code: 1 });
     mockRun.responses.set("lune", { stdout: "", stderr: "", code: 1 });
     mockRun.responses.set("selene", { stdout: "", stderr: "", code: 1 });

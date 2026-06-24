@@ -7,7 +7,7 @@
  *   - confirmAndSaveMode() validação e persistência
  *   - saveUserMode() formato JSON + flag builtIn=false
  *   - deleteUserMode() erro e sucesso
- *   - applyMode() aplica esforço, strictMode via env var
+ *   - applyMode() aplica effort, strictMode via env var
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
@@ -76,7 +76,7 @@ describe("modes (extended)", () => {
       // Nome deve refletir python-custom (heurística do módulo)
       expect(suggestion.name).toBe("python-custom");
       expect(suggestion.label).toBe("Python");
-      // Por padrão esforço alto + strict mode
+      // Por padrão effort alto + strict mode
       expect(suggestion.effortLevel).toBe("high");
       expect(suggestion.strictMode).toBe(true);
       // Não deve sugerir ferramentas roblox
@@ -319,7 +319,7 @@ describe("modes (extended)", () => {
   // --- applyMode ------------------------------------------------------------
 
   describe("applyMode", () => {
-    it("aplica esforço do modo chamando setEffortLevel", async () => {
+    it("aplica effort do modo chamando setEffortLevel", async () => {
       const { saveUserMode, applyMode } = await import("./../modes.js");
       saveUserMode({
         name: "effort-test",

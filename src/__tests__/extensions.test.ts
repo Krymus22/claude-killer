@@ -251,13 +251,13 @@ describe("extensions.ts (real module)", () => {
     it("should return error for invalid tool name format", async () => {
       const { callMCPTool } = await loadModule();
       const result = await callMCPTool("noSeparator", {});
-      expect(result).toContain("[ERRO]");
+      expect(result).toContain("[ERROR]");
     });
 
     it("should return error for non-existent server", async () => {
       const { callMCPTool } = await loadModule();
       const result = await callMCPTool("nonexistent__tool", {});
-      expect(result).toContain("[ERRO]");
+      expect(result).toContain("[ERROR]");
     });
   });
 
@@ -392,13 +392,13 @@ describe("extensions.ts (real module)", () => {
     it("should handle tool name with multiple underscores", async () => {
       const { callMCPTool } = await loadModule();
       const result = await callMCPTool("server__sub__tool", {});
-      expect(result).toContain("[ERRO]");
+      expect(result).toContain("[ERROR]");
     });
 
     it("should handle empty arguments", async () => {
       const { callMCPTool } = await loadModule();
       const result = await callMCPTool("test__tool", {});
-      expect(result).toContain("[ERRO]");
+      expect(result).toContain("[ERROR]");
     });
   });
 });

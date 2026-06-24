@@ -240,7 +240,7 @@ describe("apiResearcher", () => {
         language: "roblox",
       };
       const formatted = formatResearchResult(error);
-      expect(formatted).toContain("[ERRO]");
+      expect(formatted).toContain("[ERROR]");
       expect(formatted).toContain("NonExistentAPI");
       expect(formatted).toContain("No search results");
     });

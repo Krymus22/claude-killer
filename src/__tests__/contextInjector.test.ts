@@ -42,7 +42,7 @@ describe("contextInjector", () => {
       expect(getContextInjection("aplicar_diff")).toBe("");
       // Call 3: returns (counter resets to 0)
       const result = getContextInjection("aplicar_diff");
-      expect(result).toContain("CONTEXTO ATUAL");
+      expect(result).toContain("CURRENT CONTEXT");
       expect(result).toContain("item 1");
       expect(result).toContain("item 2");
     });
@@ -89,7 +89,7 @@ Notes: random notes here`);
         getContextInjection(tool);
         getContextInjection(tool);
         const result = getContextInjection(tool);
-        expect(result).toContain("CONTEXTO ATUAL");
+        expect(result).toContain("CURRENT CONTEXT");
       }
     });
 
@@ -113,7 +113,7 @@ Notes: random notes here`);
       // After reset, counter starts over — first 2 calls skip
       expect(getContextInjection("aplicar_diff")).toBe("");
       expect(getContextInjection("aplicar_diff")).toBe("");
-      expect(getContextInjection("aplicar_diff")).toContain("CONTEXTO ATUAL");
+      expect(getContextInjection("aplicar_diff")).toContain("CURRENT CONTEXT");
     });
   });
 });

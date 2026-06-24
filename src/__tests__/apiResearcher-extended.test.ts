@@ -160,7 +160,7 @@ describe("apiResearcher (extended)", () => {
     it("timeout: quando spawn emite erro de spawn, retorna erro graciosamente", async () => {
       const { researchApi } = await import("./../apiResearcher.js");
 
-      // Faz o z-ai CLI falhar com erro de spawn (comando não encontrado)
+      // Faz o z-ai CLI falhar com erro de spawn (comando not found)
       mockSpawn.mockImplementation(() => makeFakeChild({ error: new Error("spawn z-ai ENOENT") }));
 
       const result = await researchApi({

@@ -142,7 +142,7 @@ describe("strictQualityGate (extended)", () => {
       expect(result.reason).toContain("validator(s) failed");
     });
 
-    it("spawn emite erro (comando não encontrado): gate bloqueia com erro de spawn", async () => {
+    it("spawn emite erro (comando not found): gate bloqueia com erro de spawn", async () => {
       process.env.STRICT_MODE = "true";
       mockSpawn.mockImplementation(() => makeFakeChild({ error: new Error("spawn npx ENOENT") }));
       const result = await runQualityGate([path.join(tmpProject, "foo.ts")]);

@@ -11,7 +11,7 @@
  *   - shutdownMCPServers: mata todos os child processes e envia notificação
  *     cancelled; idempotente
  *   - callMCPTool: chamada bem-sucedida com content array de texto, erro JSON-
- *     RPC retornado como string [ERRO]
+ *     RPC retornado como string [ERROR]
  *   - Edge cases: MCP server crash (spawn error e exit), skill com conteúdo
  *     unicode, extensions vazias
  *
@@ -202,9 +202,9 @@ describe("extensions (extended) - loadAllExtensions", () => {
     await loadAllExtensions();
     // Skill ainda foi carregada
     expect(getActiveSkills().find((s) => s.name === "bad-mcp-skill")).toBeDefined();
-    // Servidor não está inicializado: chamadas a tools retornam [ERRO]
+    // Servidor não está inicializado: chamadas a tools retornam [ERROR]
     const result = await callMCPTool("failing__someTool", {});
-    expect(result).toContain("[ERRO]");
+    expect(result).toContain("[ERROR]");
     expect(result).toContain("not available");
   });
 });
@@ -362,7 +362,7 @@ describe("extensions (extended) - callMCPTool", () => {
     shutdownMCPServers();
   });
 
-  it("retorna string [ERRO] quando tools/call recebe erro JSON-RPC", async () => {
+  it("retorna string [ERROR] quando tools/call recebe erro JSON-RPC", async () => {
     writeMcpPlugin(globalPluginsDir, "p", "srv", "echo");
     const child = fakeChild();
     child.stdin.write = vi.fn((data: string) => {
@@ -411,7 +411,7 @@ describe("extensions (extended) - callMCPTool", () => {
     initExtensionDirs();
     await loadAllExtensions();
     const result = await callMCPTool("srv__badTool", {});
-    expect(result).toContain("[ERRO]");
+    expect(result).toContain("[ERROR]");
     expect(result).toContain("MCP Error -32602");
     shutdownMCPServers();
   });

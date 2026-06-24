@@ -19,7 +19,7 @@ export function readFileAdvanced(opts: FileReadOptions): string {
   log.toolCall("ler_arquivo", { caminho: resolved, offset: opts.offset, limit: opts.limit });
 
   if (!fs.existsSync(resolved)) {
-    return `[ERRO] Arquivo não encontrado: ${resolved}`;
+    return `[ERROR] File not found: ${resolved}`;
   }
 
   const stat = fs.statSync(resolved);
@@ -54,7 +54,7 @@ export function readFileAdvanced(opts: FileReadOptions): string {
       log.toolResult("ler_arquivo", true, `${filtered.length} matching lines`);
       return result;
     } catch (e) {
-      return `[ERRO] Regex inválida: ${(e as Error).message}`;
+      return `[ERROR] Regex inválida: ${(e as Error).message}`;
     }
   }
 
@@ -80,7 +80,7 @@ function readDirectory(dirPath: string): string {
     return `[file] ${e.name}`;
   });
   log.toolResult("ler_arquivo", true, `dir ${items.length} items`);
-  return `[DIRETÓRIO: ${dirPath}]\n${items.join("\n")}`;
+  return `[DIRECTORY: ${dirPath}]\n${items.join("\n")}`;
 }
 
 export function readBinarySafe(filePath: string): string | null {

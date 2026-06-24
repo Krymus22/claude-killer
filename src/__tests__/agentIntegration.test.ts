@@ -215,7 +215,7 @@ const x = 2;
 
     // Now call desfazer_edicao
     const restoreResult = desfazerEdicao({ caminho: filePath });
-    expect(restoreResult).toContain("SUCESSO");
+    expect(restoreResult).toContain("SUCCESS");
     expect(fs.readFileSync(filePath, "utf8")).toContain("const x = 1;");
   });
 
@@ -233,8 +233,8 @@ const x = 2;
     const filePath = path.join(tmpProject, "no_backup.ts");
     fs.writeFileSync(filePath, "x", "utf8");
     const result = desfazerEdicao({ caminho: filePath });
-    expect(result).toContain("[ERRO]");
-    expect(result).toContain("Nenhum backup");
+    expect(result).toContain("[ERROR]");
+    expect(result).toContain("No backup");
   });
 });
 

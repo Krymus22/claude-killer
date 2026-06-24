@@ -165,13 +165,13 @@ function frame(renderResult: ReturnType<typeof render>): string {
 // ─── ChatDisplay tests ────────────────────────────────────────────────────
 
 describe("ChatDisplay — render snapshots", () => {
-  it("renders user message with 'você:' label (UTF-8)", () => {
+  it("renders user message with 'you:' label (UTF-8)", () => {
     const messages: ChatMessage[] = [
       { role: "user", content: "Olá, como vai?" },
     ];
     const { lastFrame } = render(<ChatDisplay messages={messages} />);
     const out = stripAnsi(lastFrame() ?? "");
-    expect(out).toContain("você:");
+    expect(out).toContain("you:");
     expect(out).toContain("Olá, como vai?");
   });
 
@@ -211,11 +211,11 @@ describe("ChatDisplay — render snapshots", () => {
 
   it("renders accented chars correctly (regression for voc├¬ bug)", () => {
     const messages: ChatMessage[] = [
-      { role: "user", content: "você coração São Paulo balão pão" },
+      { role: "user", content: "you coração São Paulo balão pão" },
     ];
     const { lastFrame } = render(<ChatDisplay messages={messages} />);
     const out = stripAnsi(lastFrame() ?? "");
-    expect(out).toContain("você");
+    expect(out).toContain("you");
     expect(out).toContain("coração");
     expect(out).toContain("São Paulo");
     expect(out).toContain("balão");
@@ -701,16 +701,16 @@ describe("Visual regression — full output contains expected text", () => {
     const messages: ChatMessage[] = [
       { role: "user", content: "Olá" },
       { role: "assistant", content: "Oi! Tudo bem?" },
-      { role: "user", content: "Sim, e você?" },
+      { role: "user", content: "Sim, e you?" },
     ];
     const { lastFrame } = render(<ChatDisplay messages={messages} />);
     const out = stripAnsi(lastFrame() ?? "");
     // Snapshot-like: verify all expected substrings are present
-    expect(out).toMatch(/você:/);
+    expect(out).toMatch(/you:/);
     expect(out).toMatch(/Claude-Killer:/);
     expect(out).toMatch(/Olá/);
     expect(out).toMatch(/Oi! Tudo bem\?/);
-    expect(out).toMatch(/Sim, e você\?/);
+    expect(out).toMatch(/Sim, e you\?/);
   });
 
   it("StatusBar with all features enabled produces stable output", () => {

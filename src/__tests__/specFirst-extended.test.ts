@@ -169,7 +169,7 @@ describe("specFirst — extended", () => {
       expect(boilerplate).toContain("- Idempotente");
     });
 
-    it("gera boilerplate mínimo quando spec tem arrays vazios (sem seções Inputs/Outputs/Edge/Constraints)", async () => {
+    it("gera boilerplate minimum quando spec tem arrays vazios (sem seções Inputs/Outputs/Edge/Constraints)", async () => {
       const { createSpec, formatSpec } = await import("./../specFirst.js");
       createSpec({
         name: "MinimalSpec",

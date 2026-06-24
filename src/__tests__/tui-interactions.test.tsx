@@ -367,15 +367,15 @@ describe("TUI interactions — message display", () => {
     expect(out).toContain("Hello world");
   });
 
-  it("user label 'você:' appears (UTF-8 regression)", async () => {
+  it("user label 'you:' appears (UTF-8 regression)", async () => {
     const { stdin, lastFrame } = render(<App />);
     stdin.write("test message");
     await delay(50);
     stdin.write("\r");
     await delay(500);
     const out = stripAnsi(lastFrame() ?? "");
-    // After submit, the user message is added with 'você:' label
-    expect(out).toContain("você:");
+    // After submit, the user message is added with 'you:' label
+    expect(out).toContain("you:");
     expect(out).not.toContain("voc├¬");
   });
 
@@ -419,7 +419,7 @@ describe("TUI interactions — error handling", () => {
 
   it("does not crash when typing accented chars", async () => {
     const { stdin, lastFrame } = render(<App />);
-    stdin.write("você coração São Paulo");
+    stdin.write("you coração São Paulo");
     await delay(50);
     const out = stripAnsi(lastFrame() ?? "");
     expect(typeof out).toBe("string");

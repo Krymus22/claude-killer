@@ -119,7 +119,7 @@ describe("multiFileEdit-extended: validateBatch (validação interna do prepareE
     expect(result.filesEdited).toHaveLength(0);
   });
 
-  it("agrega erros de múltiplas origens (arquivo inexistente + search não encontrado)", () => {
+  it("agrega erros de múltiplas origens (arquivo inexistente + search not found)", () => {
     const requests: FileEditRequest[] = [
       // Arquivo inexistente: "File not found"
       { filePath: path.join(TEST_DIR, "missing-3.ts"), edits: [{ search: "x", replace: "y" }] },

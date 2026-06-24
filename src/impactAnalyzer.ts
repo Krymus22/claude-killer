@@ -644,7 +644,7 @@ export function formatImpactHint(report: ImpactReport): string {
  * Get a short summary (for status bar / quick display).
  */
 export function formatImpactSummary(report: ImpactReport): string {
-  if (report.usages.length === 0) return "sem dependências";
+  if (report.usages.length === 0) return "no dependencies";
   return `${report.usages.length} uso(s) em ${report.affectedFiles.length} arquivo(s)`;
 }
 

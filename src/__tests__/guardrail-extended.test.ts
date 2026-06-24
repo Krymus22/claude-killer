@@ -96,7 +96,7 @@ describe("formatWarning — estrutura de errorMessage", () => {
   it("errorMessage de Java com classe pública nomeada corretamente — sucesso mesmo com warning", async () => {
     const r = await validateSyntax("HelloWorld.java",
       "public class HelloWorld { public static void main(String[] args) { System.out.println(\"hi\"); } }");
-    // Pode passar (javac disponível) ou falhar (javac não instalado)
+    // Pode passar (javac disponível) ou falhar (javac not installed)
     if (r.valid) {
       expect(r.errorMessage).toBeUndefined();
     } else {

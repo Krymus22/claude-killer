@@ -11,7 +11,7 @@
  *   - Resolução por extensão .ts, .tsx, .js, .json
  *   - Resolução de index.ts em diretório
  *   - Resolução de node_modules (mock — múltiplos bare imports)
- *   - Retorno de missing quando arquivo não encontrado (expandido)
+ *   - Retorno de missing quando arquivo not found (expandido)
  *   - Path absoluto (início com /)
  *   - Path relativo ./ e ../
  *   - tsconfig paths (aliases @/ são tratados como externos)
@@ -185,7 +185,7 @@ describe("importResolver — cobertura estendida", () => {
     expect(result.ok).toBe(true);
   });
 
-  it("resolveImport retorna missing quando arquivo relativo não encontrado", async () => {
+  it("resolveImport retorna missing quando arquivo relativo not found", async () => {
     const { checkImports } = await import("./../importResolver.js");
     const filePath = path.join(tmpDir, "main.ts");
     const content = "import { foo } from './inexistente';\n";

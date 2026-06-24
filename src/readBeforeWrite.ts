@@ -101,9 +101,9 @@ function checkMultiFileRead(args: Record<string, unknown>, toolName: string): { 
   const msg =
     `[ERRO: READ-BEFORE-WRITE] Você tentou editar arquivos sem lê-los primeiro:\n` +
     unreadPaths.map((p) => `  - ${p}`).join("\n") +
-    `\n\nREGRAS: SEMPRE use ler_arquivo ou ler_arquivo_avancado para ler um arquivo ANTES de editá-lo. ` +
+    `\n\nREGRAS: SEMPRE use ler_arquivo ou ler_arquivo_avancado for ler um arquivo ANTES de editá-lo. ` +
     `Isso garante que você conhece o conteúdo atual e evita alucinações.\n` +
-    `Chame ler_arquivo para cada arquivo acima e DEPOIS faça a edição.`;
+    `Chame ler_arquivo for cada arquivo acima e DEPOIS faça a edição.`;
   log.warn(`[READ-BEFORE-WRITE] Blocked ${toolName} on unread files: ${unreadPaths.join(", ")}`);
   return { allowed: false, message: msg };
 }
@@ -116,7 +116,7 @@ function checkSingleFileRead(args: Record<string, unknown>, toolName: string): {
   const resolved = path.resolve(filePath);
   const msg =
     `[ERRO: READ-BEFORE-WRITE] Você tentou editar "${resolved}" sem lê-lo primeiro.\n\n` +
-    `REGRAS: SEMPRE use ler_arquivo ou ler_arquivo_avancado para ler o arquivo ANTES de editá-lo. ` +
+    `REGRAS: SEMPRE use ler_arquivo ou ler_arquivo_avancado for ler o arquivo ANTES de editá-lo. ` +
     `Isso garante que você conhece o conteúdo atual e evita alucinações.\n` +
     `Exemplo:\n` +
     `  1. ler_arquivo({ caminho: "${resolved}" })\n` +

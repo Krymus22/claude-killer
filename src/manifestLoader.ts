@@ -57,7 +57,7 @@ export interface ToolManifest {
   };
   outputParser?: string;
   /**
-   * Sprint A (Sistema de Modos v2): args específicas para invocar a tool como
+   * Sprint A (Sistema de Modos v2): args específicas for invocar a tool como
    * validator (em vez de quando invocada pela IA). {file} é substituído pelo
    * path do arquivo sendo validado.
    *

@@ -87,7 +87,7 @@ export function generateTestSuggestionForFile(filePath: string): string {
   return `
 
 --- [SUGESTÃO DE TESTE] ---
-Você acabou de editar ${fileName}. Considere adicionar um teste unitário para validar a mudança.
+Você acabou de editar ${fileName}. Considere adicionar um teste unitário for validar a mudança.
 
 Framework sugerido: ${testInfo.framework}
 Arquivo de teste sugerido: ${testFileName}

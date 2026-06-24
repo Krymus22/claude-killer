@@ -67,7 +67,6 @@ You have direct access to the user's filesystem via tools.
 - editar_arquivo(path, search, replace, edits?, createIfMissing?): edit file via match/replace
 - editar_multi_arquivos(requests): atomic multi-file edits with rollback
 - desfazer_edicao(caminho): undo last edit (rollback)
-- listar_backups(caminho?): list available backups
 - executar_comando(comando, cwd?): run shell command (includes git, npm, etc)
 - executar_testes(dir?, path?): run tests (auto-detects vitest/jest/pytest/cargo/go)
 - sugerir_fixes(dir?): analyze test failures and suggest fixes
@@ -77,12 +76,9 @@ You have direct access to the user's filesystem via tools.
 - ler_url(url, maxLength?): read web page content
 - parse_ast(path): extract symbols (functions, classes, imports)
 - pensar(pensamento, categoria?): structured thinking — use BEFORE every write
-- todo_write(items): update todo list
 - atualizar_estado(...): update TASK_STATE.md (done/todo/decisions/bugs)
 - marcar_feito(item): mark todo item as done
 - ler_estado(): read TASK_STATE.md
-- escrever_spec(nome, descricao, ...): write technical spec before implementing
-- criar_tdd(arquivo_teste, arquivo_impl, linguagem, casos): register TDD
 - explorar_subagente(questao, cwd?): delegate to read-only sub-agent
 - listar_tools(category?): list external tools
 - perguntar_usuario(pergunta, alternativas): ask user a question
@@ -365,7 +361,7 @@ export interface CompactResult {
 }
 
 /**
- * Replace oldest middle of history with a single "[CONTEXT COMPACTADO]" sentinel
+ * Replace oldest middle of history with a single "[CONTEXT COMPACTED]" sentinel
  * to bring prompt under threshold. Always preserves:
  *   - index 0 (system prompt)
  *   - last COMPACT_KEEP_RECENT messages (recent context)
@@ -382,7 +378,7 @@ export function compactHistory(): CompactResult | null {
 
   const summary: Message = {
     role: "system",
-    content: `[CONTEXT COMPACTADO - ${dropped} mensagens antigas removidas para caber na janela. Mantive apenas as últimas ${COMPACT_KEEP_RECENT} mensagens recentes e o prompt de sistema. Os IDs de tool_call históricos ficaram desatualizados: se o modelo quiser referenciar ferramentas passadas, peça ao usuário para repetir a informação.]`,
+    content: `[CONTEXT COMPACTED - ${dropped} old messages removed to fit window. Kept only the last ${COMPACT_KEEP_RECENT} recent messages and system prompt. Historical tool_call IDs are now stale: if the model wants to reference past tools, ask the user to repeat.]`,
   };
 
   history = [system, summary, ...recent];
@@ -438,7 +434,7 @@ function isReadTool(toolName: string): boolean {
 }
 
 function isErrorMessage(content: string): boolean {
-  return content.includes("[ERRO]") || content.includes("[FALHA_GUARDRAIL]") || content.includes("Erro:");
+  return content.includes("[ERROR]") || content.includes("[GUARDRAIL_FAIL]") || content.includes("Error:");
 }
 
 function hasFlowAdvancedAfterIndex(fromIndex: number): boolean {
@@ -449,7 +445,7 @@ function hasFlowAdvancedAfterIndex(fromIndex: number): boolean {
       const futureToolCallId = (futureMsg as any).tool_call_id as string;
       const futureToolName = getToolName(futureToolCallId, k);
       const futureContent = (futureMsg as any).content as string;
-      if (futureToolName === "aplicar_diff" && futureContent?.includes("[SUCESSO]")) return true;
+      if (futureToolName === "aplicar_diff" && futureContent?.includes("[SUCCESS]")) return true;
     }
   }
   return false;
@@ -481,16 +477,16 @@ function optimizeToolMessage(i: number): boolean {
 
   const toolName = getToolName(toolCallId, i);
 
-  if (isReadTool(toolName) && content.length > 800 && !content.startsWith("[CONTEÚDO LIDO")) {
+  if (isReadTool(toolName) && content.length > 800 && !content.startsWith("[FILE READ")) {
     if (hasFlowAdvancedAfterIndex(i)) {
-      (history[i] as any).content = `[CONTEÚDO LIDO - OMITIDO PARA OTIMIZAÇÃO DE CONTEXTO. COMPRIMENTO ORIGINAL: ${content.length} CARACTERES]`;
+      (history[i] as any).content = `[FILE READ - OMITTED FOR CONTEXT OPTIMIZATION. ORIGINAL LENGTH: ${content.length} CHARS]`;
       return true;
     }
   }
 
   if (isErrorMessage(content) && !content.startsWith("[ERRO ANTERIOR")) {
     if (hasErrorBeenOvercomeAfterIndex(i, toolName)) {
-      (history[i] as any).content = `[ERRO ANTERIOR SUPERADO E OMITIDO PARA OTIMIZAÇÃO]`;
+      (history[i] as any).content = `[PREVIOUS ERROR OVERCOME AND OMITTED FOR OPTIMIZATION]`;
       return true;
     }
   }

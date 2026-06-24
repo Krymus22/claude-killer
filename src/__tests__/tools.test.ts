@@ -227,15 +227,15 @@ describe("lerArquivo", () => {
 
   it("returns error for non-existent file", async () => {
     const result = await lerArquivo({ caminho: path.join(testDir, "nope.txt") });
-    expect(result).toContain("[ERRO]");
-    expect(result).toContain("não encontrado");
+    expect(result).toContain("[ERROR]");
+    expect(result).toContain("not found");
   });
 
   it("lists directory contents when path is directory", async () => {
     fs.writeFileSync(path.join(testDir, "a.txt"), "a");
     fs.mkdirSync(path.join(testDir, "subdir"));
     const result = await lerArquivo({ caminho: testDir });
-    expect(result).toContain("[DIRETÓRIO:");
+    expect(result).toContain("[DIRECTORY:");
     expect(result).toContain("a.txt");
     expect(result).toContain("subdir/");
   });
@@ -245,7 +245,7 @@ describe("lerArquivo", () => {
     fs.writeFileSync(badPath, "data");
     // Try to read a path that will error
     const result = await lerArquivo({ caminho: "C:\\nonexistent\\path\\file.txt" });
-    expect(result).toContain("[ERRO]");
+    expect(result).toContain("[ERROR]");
   });
 
   it("handles read error when file exists but cannot be read", async () => {
@@ -264,8 +264,8 @@ describe("lerArquivo", () => {
       throw new Error("sync read error");
     });
     const result = await lerArquivo({ caminho: filePath });
-    expect(result).toContain("[ERRO]");
-    expect(result).toContain("Falha ao ler");
+    expect(result).toContain("[ERROR]");
+    expect(result).toContain("Failed to read");
     expect(result).toContain("sync read error");
     readSpy.mockRestore();
   });
@@ -328,7 +328,7 @@ describe("executarComando", () => {
       exitCode: 1,
     }).child);
     const result = await executarComando({ comando: "exit 1" });
-    expect(result).toContain("[ERRO]");
+    expect(result).toContain("[ERROR]");
     expect(result).toContain("error output");
   });
 
@@ -337,7 +337,7 @@ describe("executarComando", () => {
       error: new Error("ENOENT"),
     }).child);
     const result = await executarComando({ comando: "bad command" });
-    expect(result).toContain("[ERRO]");
+    expect(result).toContain("[ERROR]");
     expect(result).toContain("ENOENT");
   });
 
@@ -370,7 +370,7 @@ const x = 2;
 >>>>>>> REPLACE`;
     const result = await aplicarDiff({ caminho: filePath, bloco_diff: diff });
     expect(result.written).toBe(true);
-    expect(result.toolMessage).toContain("SUCESSO");
+    expect(result.toolMessage).toContain("SUCCESS");
   });
 
   it("returns error for no valid diff blocks", async () => {
@@ -391,7 +391,7 @@ replaced
 >>>>>>> REPLACE`;
     const result = await aplicarDiff({ caminho: filePath, bloco_diff: diff });
     expect(result.written).toBe(false);
-    expect(result.toolMessage).toContain("Bloco SEARCH não encontrado");
+    expect(result.toolMessage).toContain("Bloco SEARCH not found");
   });
 
   it("creates new file with empty search block", async () => {
@@ -402,7 +402,7 @@ brand new file
 >>>>>>> REPLACE`;
     const result = await aplicarDiff({ caminho: filePath, bloco_diff: diff });
     expect(result.written).toBe(true);
-    expect(result.toolMessage).toContain("SUCESSO");
+    expect(result.toolMessage).toContain("SUCCESS");
   });
 
   it("returns blocked message when pre-write hook blocks", async () => {
@@ -445,7 +445,7 @@ const x = 2;
     const result = await aplicarDiff({ caminho: filePath, bloco_diff: diff });
     expect(result.written).toBe(false);
     expect(result.toolMessage).toContain("ERRO");
-    expect(result.toolMessage).toContain("Falha ao escrever");
+    expect(result.toolMessage).toContain("Failed to write");
     // Restore default implementation for subsequent tests
     mockWriteFileSync.mockReset();
     mockWriteFileSync.mockImplementation((...args: any[]) => (getRealWriteFileSync() as any)(...args));
@@ -484,7 +484,7 @@ const x = 2;
     const result = await aplicarDiff({ caminho: filePath, bloco_diff: diff });
     expect(result.written).toBe(false);
     expect(result.toolMessage).toContain("ERRO");
-    expect(result.toolMessage).toContain("Falha ao ler arquivo existente");
+    expect(result.toolMessage).toContain("Failed to read arquivo existente");
   });
 
   it("returns rejected message when user declines diff preview", async () => {

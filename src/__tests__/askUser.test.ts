@@ -75,13 +75,13 @@ describe("AskUser", () => {
   describe("handleAskUser — validation", () => {
     it("returns error when pergunta is empty", async () => {
       const result = await handleAskUser({ pergunta: "", alternativas: ["A", "B"] });
-      expect(result.resultStr).toMatch(/\[ERRO\].*pergunta/i);
+      expect(result.resultStr).toMatch(/[ERROR].*pergunta/i);
       expect(result.usedHeal).toBe(false);
     });
 
     it("returns error when alternativas has less than 2 items", async () => {
       const result = await handleAskUser({ pergunta: "Qual?", alternativas: ["A"] });
-      expect(result.resultStr).toMatch(/\[ERRO\].*mínimo.*2/i);
+      expect(result.resultStr).toMatch(/[ERROR].*at least 2/i);
     });
 
     it("returns error when alternativas has more than 6 items", async () => {
@@ -89,26 +89,26 @@ describe("AskUser", () => {
         pergunta: "Qual?",
         alternativas: ["1", "2", "3", "4", "5", "6", "7"],
       });
-      expect(result.resultStr).toMatch(/\[ERRO\].*máximo.*6/i);
+      expect(result.resultStr).toMatch(/[ERROR].*at most 6/i);
     });
 
     it("returns error when alternativas is not an array", async () => {
       const result = await handleAskUser({ pergunta: "Qual?", alternativas: "not array" });
-      expect(result.resultStr).toMatch(/\[ERRO\]/i);
+      expect(result.resultStr).toMatch(/[ERROR]/i);
     });
   });
 
   describe("handleAskUser — permission", () => {
     it("returns error when no callback is set", async () => {
       const result = await handleAskUser({ pergunta: "Qual?", alternativas: ["A", "B"] });
-      expect(result.resultStr).toMatch(/não está disponível neste contexto/i);
+      expect(result.resultStr).toMatch(/is not available in this context/i);
     });
 
     it("returns error when allowUserQuestions is false", async () => {
       const mockCb: AskUserCallback = vi.fn();
       setAskUserCallback(mockCb, false);
       const result = await handleAskUser({ pergunta: "Qual?", alternativas: ["A", "B"] });
-      expect(result.resultStr).toMatch(/não está disponível neste contexto/i);
+      expect(result.resultStr).toMatch(/is not available in this context/i);
       expect(mockCb).not.toHaveBeenCalled();
     });
 
@@ -123,33 +123,33 @@ describe("AskUser", () => {
   });
 
   describe("handleAskUser — response formatting", () => {
-    it("formats alternative response with [RESPOSTA DO USUÁRIO]", async () => {
+    it("formats alternative response with [USER RESPONSE]", async () => {
       const mockCb: AskUserCallback = vi.fn().mockResolvedValue({
         value: "React", cancelled: false, fromAlternatives: true,
       });
       setAskUserCallback(mockCb, true);
       const result = await handleAskUser({ pergunta: "Framework?", alternativas: ["React", "Vue"] });
-      expect(result.resultStr).toContain("[RESPOSTA DO USUÁRIO]");
+      expect(result.resultStr).toContain("[USER RESPONSE]");
       expect(result.resultStr).toContain("React");
     });
 
-    it("formats free text response with [RESPOSTA DO USUÁRIO (texto livre)]", async () => {
+    it("formats free text response with [USER RESPONSE (free text)]", async () => {
       const mockCb: AskUserCallback = vi.fn().mockResolvedValue({
         value: "Minha resposta customizada", cancelled: false, fromAlternatives: false,
       });
       setAskUserCallback(mockCb, true);
       const result = await handleAskUser({ pergunta: "Qual?", alternativas: ["A", "B"] });
-      expect(result.resultStr).toContain("[RESPOSTA DO USUÁRIO (texto livre)]");
+      expect(result.resultStr).toContain("[USER RESPONSE (free text)]");
       expect(result.resultStr).toContain("Minha resposta customizada");
     });
 
-    it("formats cancelled response with [USUÁRIO CANCELOU]", async () => {
+    it("formats cancelled response with [USER CANCELLED]", async () => {
       const mockCb: AskUserCallback = vi.fn().mockResolvedValue({
         value: "", cancelled: true, fromAlternatives: false,
       });
       setAskUserCallback(mockCb, true);
       const result = await handleAskUser({ pergunta: "Qual?", alternativas: ["A", "B"] });
-      expect(result.resultStr).toContain("[USUÁRIO CANCELOU A PERGUNTA]");
+      expect(result.resultStr).toContain("[USER CANCELLED QUESTION]");
     });
 
     it("returns usedHeal: false for all responses", async () => {
@@ -167,7 +167,7 @@ describe("AskUser", () => {
       const mockCb: AskUserCallback = vi.fn().mockRejectedValue(new Error("UI crash"));
       setAskUserCallback(mockCb, true);
       const result = await handleAskUser({ pergunta: "Qual?", alternativas: ["A", "B"] });
-      expect(result.resultStr).toMatch(/\[ERRO\].*UI crash/i);
+      expect(result.resultStr).toMatch(/[ERROR].*UI crash/i);
     });
   });
 
@@ -207,7 +207,7 @@ describe("AskUser", () => {
       setAskUserCallback(mockCb, true);
       clearAskUserCallback();
       const result = await handleAskUser({ pergunta: "Qual?", alternativas: ["A", "B"] });
-      expect(result.resultStr).toMatch(/não está disponível/i);
+      expect(result.resultStr).toMatch(/is not available/i);
       expect(mockCb).not.toHaveBeenCalled();
     });
 

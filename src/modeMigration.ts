@@ -222,7 +222,7 @@ export function migrateToModeStructure(): MigrationResult {
             if (content.enableTools && !content.toolsDir) {
               const modeName = content.name ?? path.basename(file, ".json");
               const newConfigPath = path.join(userModesDir, modeName, "config.json");
-              // Backup sempre (para recovery)
+              // Backup sempre (for recovery)
               fs.copyFileSync(filePath, backupPath);
               result.backedUp.push(`${file} → ${file}.bak`);
               log.info(`[MIGRATION] Backed up old ${file}`);

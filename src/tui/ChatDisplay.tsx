@@ -104,7 +104,7 @@ export function ChatDisplay({ messages, maxVisible = 50 }: Readonly<ChatDisplayP
         if (msg.role === "user") {
           return (
             <Box key={`${msg.role}-${i}`} flexDirection="column">
-              <Text color={colors.primary} bold> você:</Text>
+              <Text color={colors.primary} bold> you:</Text>
               <Text color={colors.white}> {msg.content}</Text>
               <Text></Text>
             </Box>

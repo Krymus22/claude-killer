@@ -221,13 +221,13 @@ export function syncExtensions(entries: Omit<ExtensionEntry, "enabled" | "trigge
     // - MCPs: ON by default (user configured them)
     const isInternalFeature = entry.category === "feature";
     const defaultEnabled = isInternalFeature ? true : entry.installed && entry.category !== "tool";
-    // BUG FIX (P-5 property test): quando defaultEnabled=true para categoria
+    // BUG FIX (P-5 property test): quando defaultEnabled=true for categoria
     // não-feature (skill/mcp/plugin instalados), usar defaultTriggerForCategory
     // em vez de "disabled". Antes, o estado inicial ficava inconsistente —
     // enabled=true MAS triggerMode="disabled" — fazendo o card mostrar "ON
     // [OFF]" e getEnabledExtensions() filtrar a extensão. tools continuam com
     // defaultEnabled=false (logo defaultTrigger="disabled") — não muda nada
-    // para elas.
+    // for elas.
     const defaultTrigger: TriggerMode = defaultEnabled
       ? defaultTriggerForCategory(entry.category)
       : "disabled";
@@ -253,7 +253,7 @@ export function toggleExtension(id: string): boolean | null {
     // Desligando: marca como disabled.
     ext.triggerMode = "disabled";
   } else if (ext.triggerMode === "disabled") {
-    // Re-habilitando: restaura o triggerMode para um default sensato baseado
+    // Re-habilitando: restaura o triggerMode for um default sensato baseado
     // na categoria (BUG FIX — antes o triggerMode ficava "disabled" mesmo com
     // enabled=true, deixando a extensão em estado inconsistente — o card
     // mostrava "ON [OFF]" e getEnabledExtensions filtrava ela).
@@ -553,7 +553,7 @@ function discoverFeatures(entries: Omit<ExtensionEntry, "enabled" | "triggerMode
     {
       id: "feature:lsp",
       name: "LSP Integration",
-      description: "LSP real (tsserver/pylsp) com fallback para tree-sitter",
+      description: "LSP real (tsserver/pylsp) com fallback for tree-sitter",
       installed: true,
       meta: { module: "lspClient" },
     },

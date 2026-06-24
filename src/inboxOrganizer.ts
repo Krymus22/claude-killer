@@ -316,7 +316,7 @@ export function formatOrganizeResult(result: OrganizeResult): string {
     result.ignored.length === 0 &&
     result.errors.length === 0
   ) {
-    lines.push("Inbox vazio — nada para organizar.");
+    lines.push("Inbox vazio — nada for organizar.");
   }
 
   return lines.join("\n");

@@ -30,7 +30,7 @@
  *
  *   [Filter]
  *     - M toggles mode filter (only shows extensions from active mode)
- *     - Filter indicator "FILTRO: só do modo ativo" appears
+ *     - Filter indicator "FILTER: active mode only" appears
  *
  *   [Visual regression]
  *     - Active mode label appears when mode is active
@@ -382,10 +382,10 @@ describe("Hub E2E — complete user flows", () => {
       await delay(30);
       const out = stripAnsi(lastFrame() ?? "");
       // Filter indicator should not appear on Modes tab
-      expect(out).not.toContain("FILTRO");
+      expect(out).not.toContain("FILTER");
     });
 
-    it("FILTRO indicator appears when filter is ON and a mode is active", async () => {
+    it("FILTER indicator appears when filter is ON and a mode is active", async () => {
       mockedGetActiveModeName.mockReturnValue("roblox");
       mockedGetActiveMode.mockReturnValue({
         name: "roblox", label: "Roblox", description: "", builtIn: true, icon: "R",
@@ -395,7 +395,7 @@ describe("Hub E2E — complete user flows", () => {
       stdin.write("m");
       await delay(30);
       const out = stripAnsi(lastFrame() ?? "");
-      expect(out).toContain("FILTRO");
+      expect(out).toContain("FILTER");
     });
   });
 

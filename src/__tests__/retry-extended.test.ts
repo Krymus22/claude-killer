@@ -67,7 +67,7 @@ describe("withRetry (extended) — backoff", () => {
     expect(delays).toEqual([10, 20, 40]);
   });
 
-  it("maxDelayMs limita o delay máximo mesmo com backoff alto", async () => {
+  it("maxDelayMs limita o delay maximum mesmo com backoff alto", async () => {
     const delays: number[] = [];
     const fn = vi.fn().mockRejectedValue(new Error("fail"));
     await withRetry(fn, {

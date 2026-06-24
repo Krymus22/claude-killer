@@ -202,7 +202,7 @@ return M
   // === computeRiskScore — proxy via números de usages =========================
 
   describe("computeRiskScore (proxy via formatImpactSummary)", () => {
-    it("risco baixo: retorna 'sem dependências' quando 0 usages", async () => {
+    it("risco baixo: retorna 'no dependencies' quando 0 usages", async () => {
       const { formatImpactSummary } = await import("./../impactAnalyzer.js");
       const report = {
         targetFile: "/x.luau",
@@ -212,7 +212,7 @@ return M
         durationMs: 10,
       };
       const summary = formatImpactSummary(report);
-      expect(summary).toBe("sem dependências");
+      expect(summary).toBe("no dependencies");
     });
 
     it("risco alto: summary reflete corretamente contagem de usages e arquivos", async () => {

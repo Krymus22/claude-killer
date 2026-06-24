@@ -397,7 +397,7 @@ const toolHandlers: Record<string, ToolHandler> = {
   "buscar_web": async (args) => {
     const query = asString(args.query);
     if (!query) {
-      return { resultStr: "[ERRO] 'query' é obrigatório.", usedHeal: false };
+      return { resultStr: "[ERROR] 'query' é obrigatório.", usedHeal: false };
     }
     const maxResults = (args.maxResults as number) ?? 5;
     try {
@@ -409,16 +409,16 @@ const toolHandlers: Record<string, ToolHandler> = {
       const formatted = results.map((r: any, i: number) =>
         `${i + 1}. ${r.title ?? "(sem título)"}\n   URL: ${r.url}\n   ${r.snippet ?? r.description ?? ""}`
       ).join("\n\n");
-      return { resultStr: `[RESULTADOS WEB] ${results.length} resultado(s) para "${query}":\n\n${formatted}`, usedHeal: false };
+      return { resultStr: `[RESULTADOS WEB] ${results.length} resultado(s) for "${query}":\n\n${formatted}`, usedHeal: false };
     } catch (err) {
-      return { resultStr: `[ERRO] Falha na busca web: ${(err as Error).message}`, usedHeal: false };
+      return { resultStr: `[ERROR] Falha na busca web: ${(err as Error).message}`, usedHeal: false };
     }
   },
 
   "ler_url": async (args) => {
     const url = asString(args.url);
     if (!url) {
-      return { resultStr: "[ERRO] 'url' é obrigatório.", usedHeal: false };
+      return { resultStr: "[ERROR] 'url' é obrigatório.", usedHeal: false };
     }
     const maxLength = (args.maxLength as number) ?? 10000;
     try {
@@ -427,9 +427,9 @@ const toolHandlers: Record<string, ToolHandler> = {
       const truncated = content.length > maxLength
         ? content.slice(0, maxLength) + `\n\n[CONTEÚDO TRUNCADO — ${content.length} chars total, mostrando ${maxLength}]`
         : content;
-      return { resultStr: truncated || `[ERRO] Não foi possível extrair conteúdo de: ${url}`, usedHeal: false };
+      return { resultStr: truncated || `[ERROR] Não foi possível extrair conteúdo de: ${url}`, usedHeal: false };
     } catch (err) {
-      return { resultStr: `[ERRO] Falha ao ler URL: ${(err as Error).message}`, usedHeal: false };
+      return { resultStr: `[ERROR] Failed to read URL: ${(err as Error).message}`, usedHeal: false };
     }
   },
 
@@ -462,13 +462,13 @@ const toolHandlers: Record<string, ToolHandler> = {
   "editar_multi_arquivos": async (args) => {
     const requests = args.requests as FileEditRequest[] | undefined;
     if (!requests || !Array.isArray(requests)) {
-      return { resultStr: "[ERRO] 'requests' array is required", usedHeal: false };
+      return { resultStr: "[ERROR] 'requests' array is required", usedHeal: false };
     }
     const result = multiFileEdit(requests);
     const errorList = result.errors.map((e) => `${e.file}: ${e.error}`).join("; ");
     const output = result.success
-      ? `[SUCESSO] Editados: ${result.filesEdited.join(", ")}`
-      : `[ERRO] Falhas: ${errorList}`;
+      ? `[SUCCESS] Editados: ${result.filesEdited.join(", ")}`
+      : `[ERROR] Falhas: ${errorList}`;
     return { resultStr: output, usedHeal: false };
   },
 
@@ -511,8 +511,8 @@ const toolHandlers: Record<string, ToolHandler> = {
     
     const output = [
       `G Total: ${tools.length} tools`,
-      `OK Instaladas: ${installed.length}`,
-      `X Não instaladas: ${notInstalled.length}`,
+      `OK Installeds: ${installed.length}`,
+      `X Not installed: ${notInstalled.length}`,
       "",
       "Tools instaladas:",
       ...installed.map(t => `  * ${t.name} (${t.category}) - ${t.description}`),
@@ -556,7 +556,7 @@ const toolHandlers: Record<string, ToolHandler> = {
     const suggestions = suggester.suggest(message);
     
     if (suggestions.length === 0) {
-      return { resultStr: "Nenhuma tool sugerida para esta mensagem.", usedHeal: false };
+      return { resultStr: "Nenhuma tool sugerida for esta mensagem.", usedHeal: false };
     }
     
     const output = [
@@ -612,11 +612,6 @@ const toolHandlers: Record<string, ToolHandler> = {
     return { resultStr: result, usedHeal: false };
   },
 
-  "listar_backups": async (args) => {
-    const result = listarBackups({ caminho: args.caminho ? asString(args.caminho) : undefined });
-    return { resultStr: result, usedHeal: false };
-  },
-
   // --- Task State Tools (3.7) ----------------------------------------------
   "atualizar_estado": async (args) => {
     const patch: Partial<TaskState> = {};
@@ -629,7 +624,7 @@ const toolHandlers: Record<string, ToolHandler> = {
     if (args.notes) patch.notes = asString(args.notes);
     const updated = updateTaskState(patch);
     return {
-      resultStr: `[SUCESSO] TASK_STATE.md atualizado em ${updated.updatedAt}.\n` +
+      resultStr: `[SUCCESS] TASK_STATE.md atualizado em ${updated.updatedAt}.\n` +
         `Done: ${updated.done.length} | Todo: ${updated.todo.length} | Decisions: ${updated.decisions.length} | Bugs: ${updated.bugs.length}`,
       usedHeal: false,
     };
@@ -638,50 +633,20 @@ const toolHandlers: Record<string, ToolHandler> = {
   "marcar_feito": async (args) => {
     const item = asString(args.item);
     if (!item) {
-      return { resultStr: "[ERRO] 'item' é obrigatório (substring do item em todo).", usedHeal: false };
+      return { resultStr: "[ERROR] 'item' é obrigatório (substring do item em todo).", usedHeal: false };
     }
     const { markTaskItemDone } = await import("./taskState.js");
     const updated = markTaskItemDone(item);
     return {
-      resultStr: `[SUCESSO] Item movido para 'done': "${item}".\nTodo restante: ${updated.todo.length}`,
+      resultStr: `[SUCCESS] Item movido for 'done': "${item}".\nTodo restante: ${updated.todo.length}`,
       usedHeal: false,
     };
-  },
-
-  "escrever_spec": async (args) => {
-    const nome = asString(args.nome);
-    const descricao = asString(args.descricao);
-    if (!nome || !descricao) {
-      return { resultStr: "[ERRO] 'nome' e 'descricao' são obrigatórios.", usedHeal: false };
-    }
-    const { createSpec, formatSpec } = await import("./specFirst.js");
-    createSpec({
-      name: nome,
-      description: descricao,
-      inputs: (args.inputs as any[]) ?? [],
-      outputs: (args.outputs as any[]) ?? [],
-      edgeCases: (args.edgeCases as string[]) ?? [],
-      constraints: (args.constraints as string[]) ?? [],
-    });
-    return { resultStr: `[SUCESSO] Spec criada.\n\n${formatSpec()}`, usedHeal: false };
-  },
-
-  "criar_tdd": async (args) => {
-    const arquivoTeste = asString(args.arquivo_teste);
-    const arquivoImpl = asString(args.arquivo_impl);
-    const linguagem = asString(args.linguagem);
-    if (!arquivoTeste || !arquivoImpl || !linguagem) {
-      return { resultStr: "[ERRO] 'arquivo_teste', 'arquivo_impl' e 'linguagem' são obrigatórios.", usedHeal: false };
-    }
-    const { registerTDD, formatTDD } = await import("./tddMode.js");
-    registerTDD(arquivoTeste, arquivoImpl, linguagem, (args.casos as string[]) ?? []);
-    return { resultStr: `[SUCESSO] TDD registrado.\n\n${formatTDD()}`, usedHeal: false };
   },
 
   "ler_estado": async () => {
     const summary = getTaskStateSummary();
     return {
-      resultStr: summary ?? "[INFO] Nenhum TASK_STATE.md encontrado. Use atualizar_estado para criar.",
+      resultStr: summary ?? "[INFO] Nenhum TASK_STATE.md encontrado. Use atualizar_estado for criar.",
       usedHeal: false,
     };
   },
@@ -690,7 +655,7 @@ const toolHandlers: Record<string, ToolHandler> = {
   "explorar_subagente": async (args) => {
     const question = asString(args.questao ?? args.question);
     if (!question) {
-      return { resultStr: "[ERRO] 'questao' é obrigatória (pergunta para o sub-agente explorar).", usedHeal: false };
+      return { resultStr: "[ERROR] 'questao' é obrigatória (pergunta for o sub-agente explorar).", usedHeal: false };
     }
     const cwd = args.cwd ? asString(args.cwd) : undefined;
     const maxCalls = args.max_tool_calls as number | undefined;
@@ -704,7 +669,7 @@ const toolHandlers: Record<string, ToolHandler> = {
       const result = await runSubAgent({ question, cwd, maxToolCalls: maxCalls });
     if (result === null) {
       return {
-        resultStr: "[INFO] Sub-agente não executou (effort level muito baixo ou falhou). Use effort=high ou max para habilitar.",
+        resultStr: "[INFO] Sub-agente não executou (effort level muito baixo ou failed). Use effort=high ou max for habilitar.",
         usedHeal: false,
       };
     }
@@ -717,17 +682,7 @@ const toolHandlers: Record<string, ToolHandler> = {
   // --- Multi-key pool status (IDEIA Fase 1) ------------------------------
   // Sprint C bug fix (BUG-S): todo_write estava definido em TOOL_DEFINITIONS
   // mas NÃO tinha handler. IA via a tool, chamava, e recebia "Ferramenta
-  // desconhecida". Agora delega para todo.todoWrite().
-  "todo_write": async (args) => {
-    const { todoWrite } = await import("./todo.js");
-    const items = args.items;
-    if (!Array.isArray(items)) {
-      return { resultStr: "[ERRO] 'items' deve ser um array.", usedHeal: false };
-    }
-    const result = todoWrite(items as any);
-    return { resultStr: result, usedHeal: false };
-  },
-
+  // desconhecida". Agora delega for todo.todoWrite().
 };
 
 // --- Tool Dispatcher ----------------------------------------------------------
@@ -988,7 +943,7 @@ async function executeHandler(name: string, args: Record<string, unknown>, toolC
     try {
       return await handler(args, toolCall, healRetry);
     } catch (err) {
-      const errMsg = `[ERRO] ${(err as Error).message ?? String(err)}`;
+      const errMsg = `[ERROR] ${(err as Error).message ?? String(err)}`;
       log.error(`Handler "${name}" lançou exceção: ${(err as Error).message ?? String(err)}`);
       return { resultStr: errMsg, usedHeal: false };
     }
@@ -1006,7 +961,7 @@ async function executeHandler(name: string, args: Record<string, unknown>, toolC
       ].filter(Boolean).join("\n");
       return { resultStr: output, usedHeal: false };
     } catch (err) {
-      const errMsg = `[ERRO] Manifest tool "${name}" falhou: ${(err as Error).message ?? String(err)}`;
+      const errMsg = `[ERROR] Manifest tool "${name}" failed: ${(err as Error).message ?? String(err)}`;
       log.error(errMsg);
       return { resultStr: errMsg, usedHeal: false };
     }
@@ -1015,12 +970,12 @@ async function executeHandler(name: string, args: Record<string, unknown>, toolC
     try {
       return { resultStr: await callMCPTool(name, args), usedHeal: false };
     } catch (err) {
-      const errMsg = `[ERRO] ${(err as Error).message ?? String(err)}`;
+      const errMsg = `[ERROR] ${(err as Error).message ?? String(err)}`;
       log.error(`MCP tool "${name}" lançou exceção: ${(err as Error).message ?? String(err)}`);
       return { resultStr: errMsg, usedHeal: false };
     }
   }
-  const unknown = `[ERRO] Ferramenta desconhecida: "${name}"`;
+  const unknown = `[ERROR] Unknown tool: "${name}"`;
   log.error(unknown);
   return { resultStr: unknown, usedHeal: false };
 }

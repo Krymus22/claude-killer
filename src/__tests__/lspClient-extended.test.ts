@@ -7,7 +7,7 @@
  * testando indiretamente via analyzeFileWithLsp e shutdownLspServers:
  *
  *   - start() inicializa LSP server (mock spawn)
- *   - start() lida com binary não encontrado (spawn throw)
+ *   - start() lida com binary not found (spawn throw)
  *   - start() envia initialize request (verifica stdin)
  *   - start() aguarda initialized response
  *   - stop() fecha processo graciosamente (kill SIGTERM)
@@ -188,7 +188,7 @@ describe("lspClient — cobertura estendida", () => {
     expect(result.durationMs).toBeGreaterThanOrEqual(0);
   });
 
-  it("start() lida com binary não encontrado (spawn throw → tree-sitter)", async () => {
+  it("start() lida com binary not found (spawn throw → tree-sitter)", async () => {
     lspState.spawnShouldThrow = true;
     const result = await analyzeFileWithLsp(tmpTsFile);
     expect(result.source).toBe("tree-sitter");

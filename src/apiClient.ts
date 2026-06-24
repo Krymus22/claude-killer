@@ -303,45 +303,6 @@ export const TOOL_DEFINITIONS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
   {
     type: "function",
     function: {
-      name: "todo_write",
-      description:
-        "Update the todo list.",
-      parameters: {
-        type: "object",
-        properties: {
-          items: {
-            type: "array",
-            description: "Full replacement list of todos.",
-            items: {
-              type: "object",
-              properties: {
-                status: {
-                  type: "string",
-                  enum: ["pending", "in_progress", "completed"],
-                  description: "Current status of this todo item.",
-                },
-                content: {
-                  type: "string",
-                  description: "Imperative form describing what was done.",
-                  maxLength: 200,
-                },
-                active_form: {
-                  type: "string",
-                  description: "Present continuous form shown when status is in_progress.",
-                  maxLength: 200,
-                },
-              },
-              required: ["status", "content"],
-            },
-          },
-        },
-        required: ["items"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
       name: "executar_comando",
       description:
         "Run a shell command.",
@@ -401,32 +362,18 @@ export const TOOL_DEFINITIONS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
   {
     type: "function",
     function: {
-      name: "listar_backups",
-      description:
-        "List available rollback backups.",
-      parameters: {
-        type: "object",
-        properties: {
-          caminho: { type: "string", description: "Caminho absoluto opcional para filtrar backups de um arquivo específico." },
-        },
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
       name: "atualizar_estado",
       description:
         "Update TASK_STATE.md (done/todo/decisions/bugs).",
       parameters: {
         type: "object",
         properties: {
-          title: { type: "string", description: "Título curto da tarefa atual." },
-          done: { type: "array", items: { type: "string" }, description: "Lista de itens concluídos (substitui a atual)." },
-          todo: { type: "array", items: { type: "string" }, description: "Lista de itens pendentes (substitui a atual)." },
-          decisions: { type: "array", items: { type: "string" }, description: "Decisões tomadas (com justificativa breve)." },
-          bugs: { type: "array", items: { type: "string" }, description: "Bugs encontrados (com arquivo:linha se possível)." },
-          dependencies: { type: "array", items: { type: "string" }, description: "Dependências ou bloqueadores." },
+          title: { type: "string", description: "Short title of current task." },
+          done: { type: "array", items: { type: "string" }, description: "List of completed items (replaces current)." },
+          todo: { type: "array", items: { type: "string" }, description: "List of pending items (replaces current)." },
+          decisions: { type: "array", items: { type: "string" }, description: "Decisions made (with brief justification)." },
+          bugs: { type: "array", items: { type: "string" }, description: "Bugs found (with file:line if possible)." },
+          dependencies: { type: "array", items: { type: "string" }, description: "Dependencies or blockers." },
           notes: { type: "string", description: "Notas livres." },
         },
       },
@@ -450,71 +397,10 @@ export const TOOL_DEFINITIONS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
   {
     type: "function",
     function: {
-      name: "escrever_spec",
-      description:
-        "Write a technical spec before implementing.",
-      parameters: {
-        type: "object",
-        properties: {
-          nome: { type: "string", description: "Nome da função/feature" },
-          descricao: { type: "string", description: "Descrição do que faz" },
-          inputs: {
-            type: "array",
-            items: {
-              type: "object",
-              properties: {
-                name: { type: "string" },
-                type: { type: "string" },
-                required: { type: "boolean" },
-                description: { type: "string" },
-              },
-            },
-            description: "Lista de inputs da função",
-          },
-          outputs: {
-            type: "array",
-            items: {
-              type: "object",
-              properties: {
-                name: { type: "string" },
-                type: { type: "string" },
-                description: { type: "string" },
-              },
-            },
-            description: "Lista de outputs",
-          },
-          edgeCases: { type: "array", items: { type: "string" }, description: "Casos limítrofes a tratar" },
-          constraints: { type: "array", items: { type: "string" }, description: "Restrições" },
-        },
-        required: ["nome", "descricao"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "criar_tdd",
-      description:
-        "Register TDD spec.",
-      parameters: {
-        type: "object",
-        properties: {
-          arquivo_teste: { type: "string", description: "Caminho do arquivo de teste" },
-          arquivo_impl: { type: "string", description: "Caminho do arquivo de implementação" },
-          linguagem: { type: "string", description: "Linguagem (typescript, python, rust, luau, etc)" },
-          casos: { type: "array", items: { type: "string" }, description: "Lista de casos de teste" },
-        },
-        required: ["arquivo_teste", "arquivo_impl", "linguagem"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
       name: "ler_estado",
       description:
         "Read TASK_STATE.md." +
-        "Use após context compaction para recuperar o estado da tarefa.",
+        "Use after context compaction to recover task state.",
       parameters: { type: "object", properties: {} },
     },
   },
@@ -527,9 +413,9 @@ export const TOOL_DEFINITIONS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
       parameters: {
         type: "object",
         properties: {
-          questao: { type: "string", description: "Pergunta específica que o sub-agente deve responder." },
-          cwd: { type: "string", description: "Diretório base para a exploração (default: cwd atual)." },
-          max_tool_calls: { type: "number", description: "Máximo de tool calls do sub-agente (default: 8)." },
+          questao: { type: "string", description: "Specific question the sub-agent should answer." },
+          cwd: { type: "string", description: "Base directory for exploration (default: current cwd)." },
+          max_tool_calls: { type: "number", description: "Max tool calls for sub-agent (default: 8)." },
         },
         required: ["questao"],
       },
@@ -645,11 +531,11 @@ function createStreamRequest(
 
 // BUG FIX (BUG 5): processReasoningChunk antes retornava `!wasFirst` (boolean
 // indicando se NÃO foi o primeiro chunk), mas `processStreamChunk` ignorava o
-// retorno — código morto. Mudado para `void` e o retorno foi removido.
+// retorno — código morto. Mudado for `void` e o retorno foi removido.
 //
 // BUG FIX (BUG 3 complemento): antes, esta função também consumia o flag
-// `isFirstChunk` (setava para false). Mas `isFirstChunk` é usado por
-// `processContentChunk` para disparar `onStreamStart` no PRIMEIRO chunk de
+// `isFirstChunk` (setava for false). Mas `isFirstChunk` é usado por
+// `processContentChunk` for disparar `onStreamStart` no PRIMEIRO chunk de
 // CONTEÚDO. Como `processReasoningChunk` NÃO chama `onStreamStart`, consumir o
 // flag aqui fazia com que `onStreamStart` nunca fosse chamado quando o stream
 // começava com reasoning. Removida a manipulação de `isFirstChunk` — o flag
@@ -658,7 +544,7 @@ function processReasoningChunk(
   state: StreamState,
   onThinking?: () => void,
 ): void {
-  // state é recebido apenas para manter a assinatura consistente com as outras
+  // state é recebido apenas for manter a assinatura consistente com as outras
   // funções processXxxChunk. Não há estado a mutar aqui.
   void state;
   onThinking?.();
@@ -754,9 +640,9 @@ function processStreamChunk(
     processToolCallDelta(state.toolCallsAccumulator, delta.tool_calls);
   }
 
-  // BUG FIX (BUG 2): antes era `if (delta.content)` (falsy para string vazia),
+  // BUG FIX (BUG 2): antes era `if (delta.content)` (falsy for string vazia),
   // então chunks com content="" nunca chamavam onToken. Agora testamos
-  // `typeof delta.content === "string"` para que chunks vazios (heartbeats)
+  // `typeof delta.content === "string"` for que chunks vazios (heartbeats)
   // também sejam processados. O acúmulo em totalContent não é afetado porque
   // somar "" é no-op.
   if (typeof delta.content === "string") {
@@ -806,7 +692,7 @@ function buildChatResponse(state: StreamState): ChatResponse {
         // explícito, o default era "stop" — isso mascarava streams que
         // terminaram abruptamente. Agora o default é null, e o caller é
         // responsável por interpretar a ausência de finish_reason. O tipo
-        // ChatCompletion do OpenAI SDK aceita null para finish_reason.
+        // ChatCompletion do OpenAI SDK aceita null for finish_reason.
         finish_reason: (state.finishReason as any) ?? null,
         logprobs: null,
       },
@@ -857,7 +743,7 @@ function buildQuotaExhaustedMessage(retryAfterS: number, errBody: string): strin
   const isQuotaExhausted = Number.isNaN(retryAfterS) || retryAfterS > MAX_RETRY_AFTER_S;
   const retryAfterLabel = Number.isNaN(retryAfterS) ? "N/A" : retryAfterS + "s";
   const hint = isQuotaExhausted
-    ? `Retry-After ausente ou muito longo (${retryAfterLabel}) - provável quota diária/mensal esgotada.`
+    ? `Retry-After missing or too long (${retryAfterLabel}) - likely daily/monthly quota exhausted.`
     : `Limite de ${MAX_429_RETRIES} retentativas atingido.`;
 
   return (
@@ -943,7 +829,7 @@ async function retryWithDelay(retryAfterS: number, attempt: number): Promise<{ r
   return { retried: true, newAttempt };
 }
 
-// BUG FIX (BUG 1): handler de retry para 502/503 (transientes). Usa o mesmo
+// BUG FIX (BUG 1): handler de retry for 502/503 (transientes). Usa o mesmo
 // limite e backoff de erros de rede (MAX_NETWORK_RETRIES = 8, 500ms..3000ms),
 // porque 5xx transiente tem perfil de recuperação similar a um erro de rede.
 async function handle5xxRetryableError(
@@ -1020,7 +906,7 @@ export async function chat(
   return chatSingleKey(messages, tools, onStreamStart, onToken, onThinking);
 }
 
-// BUG FIX (BUG 6): helper para cancelar/abortar um stream perdedor do hedging.
+// BUG FIX (BUG 6): helper for cancelar/abortar um stream perdedor do hedging.
 // Tenta várias APIs comuns: OpenAI SDK Stream expõe `.controller` (AbortController);
 // Node streams têm `.destroy()`; alguns objetos têm `.abort()`. Se nada for
 // disponível (ex: mock async iterable em testes), a função é no-op.
@@ -1125,7 +1011,7 @@ async function chatWithPool(
           const winner = await Promise.race([primaryPromise, hedgeStreamPromise]);
           hedgeWinner = winner as "primary" | "hedge";
 
-          // BUG FIX (BUG 6): cancelar/abortar o stream perdedor para evitar
+          // BUG FIX (BUG 6): cancelar/abortar o stream perdedor for evitar
           // leak. Tenta chamar `.abort()` / `.destroy()` / `.controller.abort()`
           // se disponível (OpenAI SDK Stream expõe `.controller`). Se o stream
           // for um mock/async iterable sem esses métodos, nada acontece.

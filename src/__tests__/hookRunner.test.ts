@@ -5,7 +5,7 @@
  *   1.  loadHooks() carrega hooks da pasta do modo
  *   2.  loadHooks() retorna vazio quando pasta não existe
  *   3.  loadHooks() ignora JSON inválido
- *   4.  loadHooksFromDir pula configs sem campos obrigatórios (name/file/trigger)
+ *   4.  loadHooksFromDir pula configs sem campos requireds (name/file/trigger)
  *   5.  loadHooks(null) retorna []
  *   6.  runHooks() roda hooks com trigger correto
  *   7.  runHooks() não roda hooks com trigger diferente
@@ -146,7 +146,7 @@ describe("loadHooks", () => {
     expect(hooks[0]!.name).toBe("good");
   });
 
-  it("4. loadHooksFromDir pula configs sem campos obrigatórios", () => {
+  it("4. loadHooksFromDir pula configs sem campos requireds", () => {
     const dir = makeBundledHooksDir("partial");
     writeJson(dir, "no-name.json", { file: "a.js", trigger: "on_file" });
     writeJson(dir, "no-file.json", { name: "b", trigger: "on_file" });

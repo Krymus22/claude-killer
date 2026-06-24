@@ -33,9 +33,9 @@ import { render } from "ink-testing-library";
 // Usamos vi.hoisted para que o mockStdout esteja disponível quando o factory
 // do vi.mock rodar (ele é hoisted para o topo do arquivo). Não podemos usar
 // `EventEmitter` de node:events aqui porque imports ainda não rodaram —
-// implementamos um emitter mínimo inline.
+// implementamos um emitter minimum inline.
 const { mockStdout, mockState } = vi.hoisted(() => {
-  // Emitter mínimo: só o que o useTerminal precisa (on/off/emit).
+  // Emitter minimum: só o que o useTerminal precisa (on/off/emit).
   class MockStdout {
     private listeners = new Map<string, Set<(...args: unknown[]) => void>>();
     columns: number | undefined = 80;
@@ -132,7 +132,7 @@ describe("useTerminal hooks", () => {
     });
 
     it("sempre retorna pelo menos MIN_TERMINAL_WIDTH mesmo com columns muito baixo", () => {
-      mockStdout.columns = 10; // abaixo do mínimo
+      mockStdout.columns = 10; // abaixo do minimum
       const { lastFrame } = render(<WidthProbe />);
       const out = stripAnsi(lastFrame() ?? "");
       const match = out.match(/W=(\d+)/);
@@ -334,7 +334,7 @@ describe("useTerminal hooks", () => {
       expect(out).toContain("...");
     });
 
-    it("sempre permite pelo menos 20 chars (clamp mínimo)", () => {
+    it("sempre permite pelo menos 20 chars (clamp minimum)", () => {
       // prefixLen maior que terminalWidth → maxChars = max(20, ...)
       mockStdout.columns = 60;
       const longStr = "C".repeat(100);

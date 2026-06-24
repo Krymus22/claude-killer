@@ -8,7 +8,7 @@
  *   - generateFunctionCallsFromManifests: 1 call por tool, ignora sem binary,
  *     inclui flags no schema
  *   - isManifestTool: true/false corretamente
- *   - executeFromManifest: erros quando tool não encontrada ou binary não encontrado
+ *   - executeFromManifest: erros quando tool not found ou binary not found
  *
  * Mocka: logger, modes.js (getActiveMode), toolDetector.js (findToolBinary),
  *        node:child_process (executeFromManifest).
@@ -284,7 +284,7 @@ describe("manifestLoader", () => {
   });
 
   describe("executeFromManifest", () => {
-    it("retorna erro quando tool não encontrada nos manifests", async () => {
+    it("retorna erro quando tool not found nos manifests", async () => {
       const manifests: ToolManifest[] = [
         { name: "rojo_build", description: "Build", category: "x", command: "rojo", args: [] },
       ];
@@ -294,7 +294,7 @@ describe("manifestLoader", () => {
       expect(result.errors[0]).toMatch(/not found in manifests/);
     });
 
-    it("retorna erro quando binary não encontrado", async () => {
+    it("retorna erro quando binary not found", async () => {
       toolDetectorMock.findToolBinary.mockReturnValue(null);
       const manifests: ToolManifest[] = [
         { name: "rojo_build", description: "Build", category: "x", command: "rojo", args: ["build"] },

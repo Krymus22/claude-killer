@@ -5,7 +5,7 @@
  *   - loadHooks com hooks.json sem campo file → ignora
  *   - loadHooks com hooks.json sem campo trigger → ignora
  *   - loadHooks com trigger inválido → ignora (não valida trigger, mas
- *     campos obrigatórios são name/file/trigger)
+ *     campos requireds são name/file/trigger)
  *   - runHooks com context.toolExecutor → N/A (HookContext não tem toolExecutor,
  *     mas testamos que context campos extras são ignorados sem erro)
  *   - runHooks com múltiplos hooks do mesmo trigger → roda em sequência

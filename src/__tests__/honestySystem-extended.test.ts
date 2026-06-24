@@ -223,7 +223,7 @@ describe("honestySystem (extended)", () => {
       expect(extractConfidence("confianca: 100")).toBe(10);
     });
 
-    it("limita valor abaixo de 1 para 1 (clamping mínimo)", async () => {
+    it("limita valor abaixo de 1 para 1 (clamping minimum)", async () => {
       const { extractConfidence } = await import("./../honestySystem.js");
       expect(extractConfidence("confianca: 0")).toBe(1);
     });
@@ -412,7 +412,7 @@ describe("honestySystem (extended)", () => {
       featureState.enable("feature:confidence_mapping");
       const result = await checkConfidenceAction(0, "write");
       expect(result.blocked).toBe(false);
-      expect(result.message).toContain("não forneceu");
+      expect(result.message).toContain("did not provide");
     });
   });
 

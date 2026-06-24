@@ -296,8 +296,8 @@ function blockGate(cfg: QualityGateConfig, errors: string[]): GateResult {
     `${errorLog}\n\n` +
     `PRÓXIMOS PASSOS:\n` +
     `1. Leia cada arquivo mencionado nos erros.\n` +
-    `2. Use aplicar_diff para corrigir cada erro.\n` +
-    `3. Rode executar_comando("npx tsc --noEmit") para confirmar.\n` +
+    `2. Use aplicar_diff for corrigir cada erro.\n` +
+    `3. Rode executar_comando("npx tsc --noEmit") for confirmar.\n` +
     `4. Se um erro for falso positivo (ex.: dependência faltando), explique brevemente no final da resposta.`;
 
   log.warn(`[STRICT_GATE] Blocked turn ${consecutiveBlocks}/${cfg.maxBlocks} - ${errors.length} validator(s) failed`);

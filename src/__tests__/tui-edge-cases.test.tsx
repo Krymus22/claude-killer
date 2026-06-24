@@ -521,17 +521,17 @@ describe("UTF-8 encoding edge cases", () => {
     expect(out).not.toContain("├");
   });
 
-  it("renders user label 'você:' with correct UTF-8 bytes", () => {
+  it("renders user label 'you:' with correct UTF-8 bytes", () => {
     const messages: ChatMessage[] = [
       { role: "user", content: "test" },
     ];
     const { lastFrame } = render(<ChatDisplay messages={messages} />);
     const out = lastFrame() ?? "";
-    // Verify the raw bytes include correct UTF-8 for "você:"
+    // Verify the raw bytes include correct UTF-8 for "you:"
     // ê in UTF-8 = 0xC3 0xAA
     const buf = Buffer.from(out, "utf8");
     const text = buf.toString("utf8");
-    expect(text).toContain("você:");
+    expect(text).toContain("you:");
   });
 });
 

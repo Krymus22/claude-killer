@@ -99,7 +99,7 @@ describe("editFile — operações de criação e sobrescrita", () => {
       { createIfMissing: true }
     );
 
-    expect(result).toContain("[SUCESSO]");
+    expect(result).toContain("[SUCCESS]");
     expect(fs.existsSync(newFile)).toBe(true);
     expect(fs.readFileSync(newFile, "utf8")).toBe("export const x = 1;\n");
   });
@@ -113,7 +113,7 @@ describe("editFile — operações de criação e sobrescrita", () => {
       { search: "const extra = 5;", replace: "const extra = 15;" },
     ]);
 
-    expect(result).toContain("[SUCESSO]");
+    expect(result).toContain("[SUCCESS]");
     expect(fs.readFileSync(file, "utf8")).toBe("const valor = 20;\nconst extra = 15;\n");
   });
 
@@ -165,7 +165,7 @@ describe("editFile — operações de criação e sobrescrita", () => {
 
     const result = await editFile(file, [{ search: "", replace: "novo conteúdo" }]);
 
-    expect(result).toContain("[SUCESSO]");
+    expect(result).toContain("[SUCCESS]");
     expect(fs.readFileSync(file, "utf8")).toBe("novo conteúdo");
   });
 
@@ -178,7 +178,7 @@ describe("editFile — operações de criação e sobrescrita", () => {
       { search: "x".repeat(100), replace: "y".repeat(100), all: true },
     ]);
 
-    expect(result).toContain("[SUCESSO]");
+    expect(result).toContain("[SUCCESS]");
     const newContent = fs.readFileSync(file, "utf8");
     // Tamanho total permanece o mesmo (mesmo número de substituições)
     expect(newContent.length).toBe(bigContent.length);
@@ -199,7 +199,7 @@ describe("editFile — operações de criação e sobrescrita", () => {
       { search: "🎉", replace: "🚀" },
     ]);
 
-    expect(result).toContain("[SUCESSO]");
+    expect(result).toContain("[SUCCESS]");
     const newContent = fs.readFileSync(file, "utf8");
     expect(newContent).toContain("CAFÉ");
     expect(newContent).toContain("🚀");
@@ -253,7 +253,7 @@ describe("editFile — validação de path", () => {
       const result = await editFile("../traversal_alvo.ts", [
         { search: "original", replace: "modificado" },
       ]);
-      expect(result).toContain("[SUCESSO]");
+      expect(result).toContain("[SUCCESS]");
       // O arquivo no diretório pai foi modificado
       expect(fs.readFileSync(targetFile, "utf8")).toContain("modificado");
     } finally {
@@ -270,7 +270,7 @@ describe("editFile — validação de path", () => {
       { search: "const a = 1;", replace: "const a = 2;" },
     ]);
 
-    expect(result).toContain("[SUCESSO]");
+    expect(result).toContain("[SUCCESS]");
     expect(fs.readFileSync(file, "utf8")).toBe("const a = 2;\n");
   });
 
@@ -286,7 +286,7 @@ describe("editFile — validação de path", () => {
       const result = await editFile("./relativo_dir/relativo.ts", [
         { search: "const r = 1;", replace: "const r = 2;" },
       ]);
-      expect(result).toContain("[SUCESSO]");
+      expect(result).toContain("[SUCCESS]");
       expect(fs.readFileSync(file, "utf8")).toBe("const r = 2;\n");
     } finally {
       process.chdir(cwdOriginal);

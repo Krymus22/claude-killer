@@ -89,12 +89,12 @@ describe("E2E: AskUser no agent loop", () => {
     expect(question.alternativas).toEqual(["React", "Vue"]);
 
     // Resultado voltou formatado pra IA continuar
-    expect(result.resultStr).toContain("[RESPOSTA DO USUÁRIO]");
+    expect(result.resultStr).toContain("[USER RESPONSE]");
     expect(result.resultStr).toContain("React");
     expect(result.usedHeal).toBe(false);
   });
 
-  it("resposta de alternativa formatada com [RESPOSTA DO USUÁRIO]", async () => {
+  it("resposta de alternativa formatada com [USER RESPONSE]", async () => {
     const mockCb: AskUserCallback = vi.fn().mockResolvedValue({
       value: "Option A",
       cancelled: false,
@@ -103,16 +103,16 @@ describe("E2E: AskUser no agent loop", () => {
     setAskUserCallback(mockCb, true);
 
     const result = await handleAskUser({
-      pergunta: "Escolha uma opção",
+      pergunta: "Choose an option",
       alternativas: ["Option A", "Option B"],
     });
 
-    expect(result.resultStr).toContain("[RESPOSTA DO USUÁRIO]");
+    expect(result.resultStr).toContain("[USER RESPONSE]");
     expect(result.resultStr).not.toContain("texto livre");
     expect(result.resultStr).toContain("Option A");
   });
 
-  it("resposta livre formatada com [RESPOSTA DO USUÁRIO (texto livre)]", async () => {
+  it("resposta livre formatada com [USER RESPONSE (free text)]", async () => {
     const mockCb: AskUserCallback = vi.fn().mockResolvedValue({
       value: "minha resposta customizada",
       cancelled: false,
@@ -125,11 +125,11 @@ describe("E2E: AskUser no agent loop", () => {
       alternativas: ["Não dizer", "Anônimo"],
     });
 
-    expect(result.resultStr).toContain("[RESPOSTA DO USUÁRIO (texto livre)]");
+    expect(result.resultStr).toContain("[USER RESPONSE (free text)]");
     expect(result.resultStr).toContain("minha resposta customizada");
   });
 
-  it("cancelamento formatado com [USUÁRIO CANCELOU A PERGUNTA]", async () => {
+  it("cancellation formatted with [USER CANCELLED QUESTION]", async () => {
     const mockCb: AskUserCallback = vi.fn().mockResolvedValue({
       value: "",
       cancelled: true,
@@ -142,8 +142,8 @@ describe("E2E: AskUser no agent loop", () => {
       alternativas: ["Sim", "Não"],
     });
 
-    expect(result.resultStr).toContain("[USUÁRIO CANCELOU A PERGUNTA]");
-    expect(result.resultStr).toMatch(/melhor julgamento|não optou/i);
+    expect(result.resultStr).toContain("[USER CANCELLED QUESTION]");
+    expect(result.resultStr).toMatch(/best judgment|chose not/i);
   });
 
   it("IA sem permissão (allowUserQuestions=false) recebe erro", async () => {
@@ -156,8 +156,8 @@ describe("E2E: AskUser no agent loop", () => {
       alternativas: ["Sim", "Não"],
     });
 
-    expect(result.resultStr).toMatch(/\[ERRO\]/);
-    expect(result.resultStr).toMatch(/não está disponível neste contexto/i);
+    expect(result.resultStr).toMatch(/[ERROR]/);
+    expect(result.resultStr).toMatch(/is not available in this context/i);
     // Callback NÃO foi chamado (permissão negada antes)
     expect(mockCb).not.toHaveBeenCalled();
   });
@@ -181,13 +181,13 @@ describe("E2E: AskUser no agent loop", () => {
     const r4 = await handleAskUser({ pergunta: "Q4", alternativas: ["A", "B"] });
 
     expect(mockCb).toHaveBeenCalledTimes(4);
-    expect(r1.resultStr).toContain("[RESPOSTA DO USUÁRIO] A");
-    expect(r2.resultStr).toContain("[RESPOSTA DO USUÁRIO] B");
-    expect(r3.resultStr).toContain("[RESPOSTA DO USUÁRIO (texto livre)] texto livre");
-    expect(r4.resultStr).toContain("[USUÁRIO CANCELOU A PERGUNTA]");
+    expect(r1.resultStr).toContain("[USER RESPONSE] A");
+    expect(r2.resultStr).toContain("[USER RESPONSE] B");
+    expect(r3.resultStr).toContain("[USER RESPONSE (free text)] texto livre");
+    expect(r4.resultStr).toContain("[USER CANCELLED QUESTION]");
   });
 
-  it("perguntar_usuario sem callback setado → erro graceful", async () => {
+  it("perguntar_usuario without callback set -> graceful error", async () => {
     // Não chama setAskUserCallback (callback undefined + allow=true default)
     // Simula sub-agent que não setou callback
     clearAskUserCallback();
@@ -197,10 +197,10 @@ describe("E2E: AskUser no agent loop", () => {
       alternativas: ["A", "B"],
     });
 
-    expect(result.resultStr).toMatch(/\[ERRO\]/);
-    expect(result.resultStr).toMatch(/não está disponível neste contexto/i);
-    // Mensagem orienta a IA a usar seu melhor julgamento
-    expect(result.resultStr).toMatch(/melhor julgamento|continue sem perguntar/i);
+    expect(result.resultStr).toMatch(/[ERROR]/);
+    expect(result.resultStr).toMatch(/is not available in this context/i);
+    // Mensagem orienta a IA a usar seu best judgment
+    expect(result.resultStr).toMatch(/best judgment|continue without askntar/i);
     expect(result.usedHeal).toBe(false);
   });
 
@@ -233,13 +233,13 @@ describe("E2E: AskUser no agent loop", () => {
 
     // Array vazio
     const r0 = await handleAskUser({ pergunta: "Q?", alternativas: [] });
-    expect(r0.resultStr).toMatch(/\[ERRO\]/);
-    expect(r0.resultStr).toMatch(/mínimo.*2|mínimo 2/i);
+    expect(r0.resultStr).toMatch(/[ERROR]/);
+    expect(r0.resultStr).toMatch(/at least 2/i);
 
     // Array com 1 item
     const r1 = await handleAskUser({ pergunta: "Q?", alternativas: ["única"] });
-    expect(r1.resultStr).toMatch(/\[ERRO\]/);
-    expect(r1.resultStr).toMatch(/mínimo.*2|mínimo 2/i);
+    expect(r1.resultStr).toMatch(/[ERROR]/);
+    expect(r1.resultStr).toMatch(/at least 2/i);
 
     // Callback não foi chamado (validação rejeita antes)
     expect(mockCb).not.toHaveBeenCalled();
@@ -254,8 +254,8 @@ describe("E2E: AskUser no agent loop", () => {
       alternativas: ["1", "2", "3", "4", "5", "6", "7", "8"],
     });
 
-    expect(result.resultStr).toMatch(/\[ERRO\]/);
-    expect(result.resultStr).toMatch(/máximo.*6|máximo 6/i);
+    expect(result.resultStr).toMatch(/[ERROR]/);
+    expect(result.resultStr).toMatch(/at most 6/i);
     expect(mockCb).not.toHaveBeenCalled();
   });
 });

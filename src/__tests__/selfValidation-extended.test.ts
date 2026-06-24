@@ -75,7 +75,7 @@ describe("selfValidation (extended) — formatIssues / conteúdo do prompt", () 
 
   it("prompt instrui a corrigir problemas antes de responder", () => {
     const prompt = injectSelfValidationPrompt(["x.ts"]);
-    expect(prompt).toContain("CORRIJA");
+    expect(prompt).toContain("FIX");
     expect(prompt).toContain("Não pule esta validação");
   });
 });

@@ -107,7 +107,7 @@ describe("i18n", () => {
       process.env.LANG = "pt_BR.UTF-8";
       const { getCommandI18n } = await import("./../i18n.js");
       const i18n = getCommandI18n("/effort");
-      expect(i18n.desc).toContain("esforço");
+      expect(i18n.desc).toContain("effort");
     });
 
     it("should return PT-BR description for /hub", async () => {

@@ -389,7 +389,7 @@ describe("Integration: ExtensionHub + Modes + EffortLevels flow", () => {
     delete process.env.CLAUDE_KILLER_EFFORT;
     delete process.env.CLAUDE_KILLER_EFFORT_STORED;
 
-    // Reseta o nível de esforço para o default (medium)
+    // Reseta o nível de effort para o default (medium)
     setEffortLevel("medium");
 
     // Recria o estado das extensões
@@ -463,7 +463,7 @@ describe("Integration: ExtensionHub + Modes + EffortLevels flow", () => {
       expect(result.errors.length).toBeGreaterThan(0);
       expect(result.errors[0]).toMatch(/not found/i);
 
-      // Nenhum modo foi ativado
+      // No modes foi ativado
       expect(getActiveModeName()).toBeNull();
 
       // effortLevel não mudou (continua medium)
@@ -589,16 +589,16 @@ describe("Integration: ExtensionHub + Modes + EffortLevels flow", () => {
       let frame = stripAnsi(lastFrame() ?? "");
       expect(frame).toContain("darklua"); // não-roblox
       expect(frame).toContain("terraform"); // não-roblox
-      expect(frame).not.toContain("FILTRO");
+      expect(frame).not.toContain("FILTER");
 
       // Liga o filtro com M
       stdin.write("m");
       await delay(50);
 
-      // FILTRO indicador aparece
+      // FILTER indicador aparece
       frame = stripAnsi(lastFrame() ?? "");
-      expect(frame).toContain("FILTRO");
-      expect(frame).toContain("só do modo ativo");
+      expect(frame).toContain("FILTER");
+      expect(frame).toContain("active mode only");
 
       // Extensions não-roblox desaparecem (darklua, terraform)
       expect(frame).not.toContain("darklua");
@@ -614,14 +614,14 @@ describe("Integration: ExtensionHub + Modes + EffortLevels flow", () => {
       await delay(50);
 
       frame = stripAnsi(lastFrame() ?? "");
-      expect(frame).not.toContain("FILTRO");
+      expect(frame).not.toContain("FILTER");
       // Todas as extensions voltam a ser visíveis
       expect(frame).toContain("darklua");
       expect(frame).toContain("terraform");
     });
 
-    it("variação: M sem modo ativo não tem efeito (não aparece FILTRO)", async () => {
-      // Nenhum modo ativo (resetado no beforeEach)
+    it("variação: M sem modo ativo não tem efeito (não aparece FILTER)", async () => {
+      // No modes active (resetado no beforeEach)
       expect(getActiveModeName()).toBeNull();
 
       const { stdin, lastFrame } = render(<ExtensionHub onClose={() => {}} />);
@@ -631,9 +631,9 @@ describe("Integration: ExtensionHub + Modes + EffortLevels flow", () => {
       stdin.write("m");
       await delay(50);
 
-      // FILTRO não aparece (não há modo ativo pra filtrar)
+      // FILTER não aparece (não há modo ativo pra filtrar)
       const frame = stripAnsi(lastFrame() ?? "");
-      expect(frame).not.toContain("FILTRO");
+      expect(frame).not.toContain("FILTER");
       // Todas as extensions continuam visíveis
       expect(frame).toContain("darklua");
       expect(frame).toContain("rojo_build");
@@ -833,8 +833,8 @@ describe("Integration: ExtensionHub + Modes + EffortLevels flow", () => {
   // ═══════════════════════════════════════════════════════════════════════
 
   describe("Cross-module state sanity", () => {
-    it("estado inicial: nenhum modo ativo, esforço medium, 9 extensões carregadas", () => {
-      // Nenhum modo ativo
+    it("estado inicial: nenhum modo ativo, effort medium, 9 extensões carregadas", () => {
+      // No modes active
       expect(getActiveModeName()).toBeNull();
 
       // Esforço medium (default)

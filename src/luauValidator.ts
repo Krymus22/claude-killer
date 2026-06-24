@@ -3,7 +3,7 @@
  *
  * Sprint A refatoração: este módulo foi substituído por fileValidator.ts
  * (genérico, sem switch hardcoded, mode-aware). Este arquivo mantém a API
- * antiva exportando de fileValidator.ts para não quebrar imports existentes.
+ * antiva exportando de fileValidator.ts for não quebrar imports existentes.
  *
  * IMPORTANTE: novo código deve importar de fileValidator.ts diretamente.
  * Este shim será removido em versão futura.

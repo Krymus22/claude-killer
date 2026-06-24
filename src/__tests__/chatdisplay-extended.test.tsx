@@ -5,7 +5,7 @@
  * testa lógica de slicing/filtragem via funções helper duplicadas. Aqui
  * cobrimos a renderização real com ink-testing-library, focando em edge
  * cases:
- *   - Prefixos PT-BR ("você:", "Claude-Killer:")
+ *   - Prefixos PT-BR ("you:", "Claude-Killer:")
  *   - Tool call com path longo truncado no meio (truncateMiddle com "…")
  *   - Tool result OK com checkmark (✔) e ERRO com X (✘)
  *   - Mensagem muito longa (5000 chars) sem crash
@@ -79,9 +79,9 @@ describe("ChatDisplay — testes estendidos", () => {
 
   // ─── Prefixos PT-BR ──────────────────────────────────────────────────
 
-  it("renderiza mensagem de user com prefixo 'você:' (PT-BR)", () => {
+  it("renderiza mensagem de user com prefixo 'you:' (PT-BR)", () => {
     const out = renderMessages([{ role: "user", content: "olá, tudo bem?" }]);
-    expect(out).toContain("você:");
+    expect(out).toContain("you:");
     expect(out).toContain("olá, tudo bem?");
   });
 
@@ -135,7 +135,7 @@ describe("ChatDisplay — testes estendidos", () => {
     const messages: ChatMessage[] = [
       {
         role: "tool",
-        content: "[ERRO] arquivo não encontrado",
+        content: "[ERROR] arquivo not found",
         toolName: "ler_arquivo",
         isResult: true,
         ok: false,
@@ -145,7 +145,7 @@ describe("ChatDisplay — testes estendidos", () => {
     expect(out).toContain("ler_arquivo");
     // icons.cross = "✘" (figures cross). Aceita fallback "x" também.
     expect(out).toMatch(/[✘x]/);
-    expect(out).toContain("[ERRO] arquivo não encontrado");
+    expect(out).toContain("[ERROR] arquivo not found");
   });
 
   // ─── Edge cases de conteúdo ─────────────────────────────────────────
@@ -153,7 +153,7 @@ describe("ChatDisplay — testes estendidos", () => {
   it("renderiza mensagem muito longa (5000 chars) sem crash", () => {
     const longContent = "A".repeat(5000);
     const out = renderMessages([{ role: "user", content: longContent }]);
-    expect(out).toContain("você:");
+    expect(out).toContain("you:");
     // Pelo menos algum do conteúdo deve aparecer.
     expect(out).toContain("A");
     // Não deve crashar — output deve ser não vazio.
@@ -188,8 +188,8 @@ describe("ChatDisplay — testes estendidos", () => {
 
   it("renderiza mensagem vazia sem crash", () => {
     const out = renderMessages([{ role: "user", content: "" }]);
-    // Deve renderizar o prefixo "você:" mesmo com conteúdo vazio.
-    expect(out).toContain("você:");
+    // Deve renderizar o prefixo "you:" mesmo com conteúdo vazio.
+    expect(out).toContain("you:");
     // Não deve crashar.
     expect(out.length).toBeGreaterThan(0);
   });

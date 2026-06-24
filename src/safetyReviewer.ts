@@ -322,7 +322,7 @@ export function formatSafetyReview(result: SafetyReviewResult): string {
   const lines: string[] = [];
 
   if (result.risk === "high") {
-    lines.push("[BLOQUEIO DE SEGURANÇA] Revisor detectou risco ALTO para dados:");
+    lines.push("[BLOQUEIO DE SEGURANÇA] Revisor detectou risco ALTO for dados:");
     lines.push("");
     lines.push(`Risco: HIGH`);
     lines.push(`Justificativa: ${result.reasoning}`);

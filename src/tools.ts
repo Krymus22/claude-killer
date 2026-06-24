@@ -33,8 +33,8 @@ export async function lerArquivo(args: LerArquivoArgs): Promise<string> {
 
   try {
     if (!fs.existsSync(resolved)) {
-      const msg = `[ERRO] Arquivo não encontrado: ${resolved}`;
-      log.toolResult("ler_arquivo", false, "arquivo não encontrado");
+      const msg = `[ERROR] File not found: ${resolved}`;
+      log.toolResult("ler_arquivo", false, "file not found");
       return msg;
     }
 
@@ -46,15 +46,15 @@ export async function lerArquivo(args: LerArquivoArgs): Promise<string> {
         return fs.statSync(full).isDirectory() ? `[dir]  ${e}/` : `[file] ${e}`;
       });
       const listing = entries.join("\n");
-      log.toolResult("ler_arquivo", true, `listagem de diretório (${entries.length} itens)`);
-      return `[DIRETÓRIO: ${resolved}]\n${listing}`;
+      log.toolResult("ler_arquivo", true, `directory listing (${entries.length} itens)`);
+      return `[DIRECTORY: ${resolved}]\n${listing}`;
     }
 
     const content = fs.readFileSync(resolved, "utf8");
     log.toolResult("ler_arquivo", true, `${content.length} chars`);
     return content;
   } catch (err) {
-    const msg = `[ERRO] Falha ao ler ${resolved}: ${(err as Error).message}`;
+    const msg = `[ERROR] Failed to read ${resolved}: ${(err as Error).message}`;
     log.toolResult("ler_arquivo", false, (err as Error).message);
     return msg;
   }
@@ -216,7 +216,7 @@ export async function aplicarDiff(
     try {
       originalContent = fs.readFileSync(resolved, "utf8");
     } catch (err) {
-      const msg = `[ERRO] Falha ao ler arquivo existente ${resolved}: ${(err as Error).message}`;
+      const msg = `[ERROR] Failed to read arquivo existente ${resolved}: ${(err as Error).message}`;
       log.toolResult("aplicar_diff", false, (err as Error).message);
       return { written: false, toolMessage: msg };
     }
@@ -225,7 +225,7 @@ export async function aplicarDiff(
   // -- Step 2: Parse diff blocks ---------------------------------------------
   const blocks = parseDiffBlocks(args.bloco_diff);
   if (blocks.length === 0) {
-    const msg = `Erro: Nenhum bloco SEARCH/REPLACE válido encontrado no bloco_diff. Certifique-se de usar a estrutura:\n<<<<<<< SEARCH\n[código antigo]\n=======\n[código novo]\n>>>>>>> REPLACE`;
+    const msg = `Error: Nenhum bloco SEARCH/REPLACE válido encontrado no bloco_diff. Certifique-se de usar a estrutura:\n<<<<<<< SEARCH\n[código antigo]\n=======\n[código novo]\n>>>>>>> REPLACE`;
     log.toolResult("aplicar_diff", false, "nenhum bloco parseado");
     return { written: false, toolMessage: msg };
   }
@@ -234,8 +234,8 @@ export async function aplicarDiff(
   const patchResult = applyDiffs(originalContent, blocks);
   if (!patchResult.success) {
     const searchPart = patchResult.errorBlock ?? "";
-    const msg = `Erro: Bloco SEARCH não encontrado no arquivo original. Certifique-se de copiar o trecho exatamente como ele é.\n\nBloco SEARCH que falhou:\n${searchPart}`;
-    log.toolResult("aplicar_diff", false, "SEARCH não encontrado");
+    const msg = `Error: Bloco SEARCH not found no arquivo original. Certifique-se de copiar o trecho exatamente como ele é.\n\nBloco SEARCH que failed:\n${searchPart}`;
+    log.toolResult("aplicar_diff", false, "SEARCH not found");
     return { written: false, toolMessage: msg };
   }
 
@@ -245,7 +245,7 @@ export async function aplicarDiff(
   const approved = await previewAndApprove(resolved, originalContent, newContent);
   if (!approved) {
     const msg = `[REJEITADO] Diff não aplicado - usuário rejeitou a alteração no preview.`;
-    log.toolResult("aplicar_diff", false, "diff rejeitado pelo usuário");
+    log.toolResult("aplicar_diff", false, "diff rejected by user");
     return { written: false, toolMessage: msg };
   }
 
@@ -272,7 +272,7 @@ export async function aplicarDiff(
     fs.writeFileSync(resolved, contentToWrite, "utf8");
     log.success(`Arquivo gravado: ${resolved} (${contentToWrite.length} bytes)`);
   } catch (err) {
-    const msg = `[ERRO] Falha ao escrever ${resolved}: ${(err as Error).message}`;
+    const msg = `[ERROR] Failed to write ${resolved}: ${(err as Error).message}`;
     log.toolResult("aplicar_diff", false, (err as Error).message);
     return { written: false, toolMessage: msg };
   }
@@ -288,13 +288,13 @@ export async function aplicarDiff(
       `[AVISO_POS_ESCRITA] Arquivo salvo com sucesso, mas a validação pós-escrita detectou problemas.\n` +
       `Arquivo: ${resolved}\n\n` +
       `Log de erros do validador:\n${validation.errorMessage}\n\n` +
-      `O arquivo JÁ FOI SALVO no disco. Analise os erros acima no contexto real do projeto ` +
+      `The file HAS BEEN SAVED to disk. Analyze the errors above in the real project context ` +
       `e decida se precisa aplicar um diff de correção ou se o erro pode ser ignorado como falso positivo.`;
 
     log.toolResult(
       "aplicar_diff",
       false,
-      `validação pós-escrita: ${validation.errorMessage?.slice(0, 80)}`
+      `post-write validation: ${validation.errorMessage?.slice(0, 80)}`
     );
     // written = true because the file IS on disk; toolMessage carries the advisory warning
     return { written: true, toolMessage: warnMsg };
@@ -302,7 +302,7 @@ export async function aplicarDiff(
 
   // -- All good --------------------------------------------------------------
   const backupInfo = backupId ? ` Backup salvo: ${backupId}.` : "";
-  const msg = `[SUCESSO] Diff aplicado e arquivo salvo: ${resolved} (${newContent.length} bytes). Validação pós-escrita: OK.${backupInfo}`;
+  const msg = `[SUCCESS] Diff applied and file saved: ${resolved} (${newContent.length} bytes). Post-write validation: OK.${backupInfo}`;
   log.toolResult("aplicar_diff", true, `${newContent.length} bytes`);
   return { written: true, toolMessage: msg };
 }
@@ -324,19 +324,19 @@ export function desfazerEdicao(args: DesfazerEdicaoArgs): string {
 
   const ok = restoreBackup(resolved);
   if (ok) {
-    return `[SUCESSO] Arquivo restaurado a partir do backup: ${resolved}`;
+    return `[SUCCESS] Arquivo restaurado a partir do backup: ${resolved}`;
   }
 
   // List available backups for diagnostics
   const backups = listBackups(resolved);
   if (backups.length === 0) {
-    return `[ERRO] Nenhum backup disponível para ${resolved}. ` +
+    return `[ERROR] No backup available for ${resolved}. ` +
       `Backups são criados automaticamente antes de cada aplicar_diff / editar_arquivo bem-sucedido em arquivos existentes, ` +
       `e expiram após 5 minutos.`;
   }
 
-  return `[ERRO] Falha ao restaurar backup para ${resolved}. ` +
-    `Existem ${backups.length} backup(s) registrado(s) mas a restauração falhou (arquivo de backup pode estar corrompido ou ausente).`;
+  return `[ERROR] Falha ao restaurar backup for ${resolved}. ` +
+    `Existem ${backups.length} backup(s) registrado(s) mas a restauração failed (arquivo de backup pode estar corrompido ou ausente).`;
 }
 
 // --- listar_backups -----------------------------------------------------------
@@ -355,15 +355,15 @@ export function listarBackups(args: ListarBackupsArgs): string {
 
   const backups = listBackups(filter);
   if (backups.length === 0) {
-    const suffix = filter ? ` para ${filter}` : "";
-    return `[INFO] Nenhum backup disponível${suffix}.`;
+    const suffix = filter ? ` for ${filter}` : "";
+    return `[INFO] No backup available${suffix}.`;
   }
 
   const lines = backups.map((b, i) => {
     const time = b.timestamp;
     return `  ${i + 1}. [${b.id}] ${b.originalPath} - ${b.size} bytes - ${b.toolName} - ${time}`;
   });
-  return `[INFO] ${backups.length} backup(s) disponível(eis):\n${lines.join("\n")}`;
+  return `[INFO] ${backups.length} backup(s) available:\n${lines.join("\n")}`;
 }
 
 // --- executar_comando --------------------------------------------------------
@@ -425,7 +425,7 @@ export async function executarComando(
 
     child.on("error", (err) => {
       clearTimeout(timer);
-      const output = `[ERRO] Falha ao iniciar comando: ${err.message}`;
+      const output = `[ERROR] Falha ao iniciar comando: ${err.message}`;
       log.toolResult("executar_comando", false, err.message);
       resolve(output);
     });
@@ -435,7 +435,7 @@ export async function executarComando(
       const combined = [stdout, stderr].filter(Boolean).join("\n").trim();
 
       if (killed) {
-        const out = `[ERRO] Comando excedeu timeout de ${timeoutMs}ms e foi morto.\n${combined}`;
+        const out = `[ERROR] Comando excedeu timeout de ${timeoutMs}ms e foi morto.\n${combined}`;
         log.toolResult("executar_comando", false, "timeout");
         resolve(out);
         return;
@@ -445,7 +445,7 @@ export async function executarComando(
         log.toolResult("executar_comando", true, `exit=0`);
         resolve(combined || "[OK] Comando concluído sem saída.");
       } else {
-        const out = `[ERRO] Comando falhou (exit=${code}):\n${combined}`;
+        const out = `[ERROR] Comando failed (exit=${code}):\n${combined}`;
         log.toolResult("executar_comando", false, `exit=${code}`);
         resolve(out);
       }

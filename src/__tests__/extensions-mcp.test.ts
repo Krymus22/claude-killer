@@ -857,13 +857,13 @@ describe("MCP server lifecycle", () => {
     it("should return error for invalid format (no __)", async () => {
       const { callMCPTool } = await loadModule();
       const result = await callMCPTool("invalid", {});
-      expect(result).toBe('[ERRO] Invalid MCP tool name format: "invalid". Expected "serverName__toolName".');
+      expect(result).toBe('[ERROR] Invalid MCP tool name format: "invalid". Expected "serverName__toolName".');
     });
 
     it("should return error for non-existent server", async () => {
       const { callMCPTool } = await loadModule();
       const result = await callMCPTool("ghost__tool", {});
-      expect(result).toContain('[ERRO] MCP server "ghost" is not available.');
+      expect(result).toContain('[ERROR] MCP server "ghost" is not available.');
     });
 
     it("should return error for uninitialized server", async () => {
@@ -885,7 +885,7 @@ describe("MCP server lifecycle", () => {
       createMcpPlugin("c3", "cs3", "echo");
       await loadAllExtensions();
       const result = await callMCPTool("cs3__tool", {});
-      expect(result).toContain('[ERRO] MCP server "cs3" is not available.');
+      expect(result).toContain('[ERROR] MCP server "cs3" is not available.');
       shutdownMCPServers();
     });
 
@@ -1037,14 +1037,14 @@ describe("MCP server lifecycle", () => {
       createMcpPlugin("c8", "cs8", "echo");
       await loadAllExtensions();
       const result = await callMCPTool("cs8__fail", {});
-      expect(result).toContain("[ERRO] MCP tool call failed:");
+      expect(result).toContain("[ERROR] MCP tool call failed:");
       shutdownMCPServers();
     });
 
     it("should handle tool name with multiple underscores", async () => {
       const { callMCPTool } = await loadModule();
       const result = await callMCPTool("my__server__tool", {});
-      expect(result).toContain('[ERRO] MCP server "my" is not available.');
+      expect(result).toContain('[ERROR] MCP server "my" is not available.');
     });
 
     it("should handle empty content array", async () => {

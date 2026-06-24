@@ -52,12 +52,12 @@ describe("compactIntelligently", () => {
   it("should remove old error messages (>5)", () => {
     const messages = [
       { role: "system", content: "prompt" },
-      { role: "tool", content: "[ERRO] err1", tool_call_id: "1" },
-      { role: "tool", content: "[ERRO] err2", tool_call_id: "2" },
-      { role: "tool", content: "[ERRO] err3", tool_call_id: "3" },
-      { role: "tool", content: "[ERRO] err4", tool_call_id: "4" },
-      { role: "tool", content: "[ERRO] err5", tool_call_id: "5" },
-      { role: "tool", content: "[ERRO] err6", tool_call_id: "6" },
+      { role: "tool", content: "[ERROR] err1", tool_call_id: "1" },
+      { role: "tool", content: "[ERROR] err2", tool_call_id: "2" },
+      { role: "tool", content: "[ERROR] err3", tool_call_id: "3" },
+      { role: "tool", content: "[ERROR] err4", tool_call_id: "4" },
+      { role: "tool", content: "[ERROR] err5", tool_call_id: "5" },
+      { role: "tool", content: "[ERROR] err6", tool_call_id: "6" },
     ];
 
     const { messages: result } = compactIntelligently(messages);
@@ -93,24 +93,24 @@ describe("compactIntelligently", () => {
     const messages = [
       { role: "system", content: "prompt" },
       { role: "assistant", content: "ok" },
-      { role: "tool", content: "[ERRO] a", tool_call_id: "1" },
+      { role: "tool", content: "[ERROR] a", tool_call_id: "1" },
       { role: "assistant", content: "ok" },
-      { role: "tool", content: "[ERRO] b", tool_call_id: "2" },
+      { role: "tool", content: "[ERROR] b", tool_call_id: "2" },
       { role: "assistant", content: "ok" },
-      { role: "tool", content: "[ERRO] c", tool_call_id: "3" },
+      { role: "tool", content: "[ERROR] c", tool_call_id: "3" },
       { role: "assistant", content: "ok" },
-      { role: "tool", content: "[ERRO] d", tool_call_id: "4" },
+      { role: "tool", content: "[ERROR] d", tool_call_id: "4" },
       { role: "assistant", content: "ok" },
-      { role: "tool", content: "[ERRO] e", tool_call_id: "5" },
+      { role: "tool", content: "[ERROR] e", tool_call_id: "5" },
       { role: "assistant", content: "ok" },
-      { role: "tool", content: "[ERRO] f", tool_call_id: "6" },
+      { role: "tool", content: "[ERROR] f", tool_call_id: "6" },
       { role: "assistant", content: "ok" },
-      { role: "tool", content: "[ERRO] g", tool_call_id: "7" },
+      { role: "tool", content: "[ERROR] g", tool_call_id: "7" },
     ];
 
     const { messages: result, appliedStrategies } = compactIntelligently(messages);
     expect(appliedStrategies).toContain("remove-old-error-messages");
-    const errorCount = result.filter((m) => m.content?.includes("[ERRO]")).length;
+    const errorCount = result.filter((m) => m.content?.includes("[ERROR]")).length;
     expect(errorCount).toBeLessThanOrEqual(4);
   });
 
@@ -138,8 +138,8 @@ describe("compactIntelligently", () => {
   it("remove-old-error-messages skips when <=5 errors", () => {
     const messages = [
       { role: "system", content: "prompt" },
-      { role: "tool", content: "[ERRO] a", tool_call_id: "1" },
-      { role: "tool", content: "[ERRO] b", tool_call_id: "2" },
+      { role: "tool", content: "[ERROR] a", tool_call_id: "1" },
+      { role: "tool", content: "[ERROR] b", tool_call_id: "2" },
     ];
 
     const { appliedStrategies } = compactIntelligently(messages);

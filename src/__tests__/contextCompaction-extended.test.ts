@@ -8,7 +8,7 @@
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
-// Mocks mínimos para isolar contextCompaction das dependências externas
+// Mocks minimums para isolar contextCompaction das dependências externas
 // (apiClient, effortLevels, logger, history). Mantemos compactIntelligently
 // e strategies testáveis sem rede.
 vi.mock("../apiClient.js", () => ({
@@ -125,7 +125,7 @@ describe("contextCompaction — extended", () => {
         { role: "system", content: "p" },
       ];
       for (let i = 0; i < 5; i++) {
-        msgs.push({ role: "tool", content: "[ERRO] err", tool_call_id: String(i) });
+        msgs.push({ role: "tool", content: "[ERROR] err", tool_call_id: String(i) });
       }
       const { appliedStrategies } = compactIntelligently(msgs);
       // 5 erros NÃO devem disparar (limite é >5)

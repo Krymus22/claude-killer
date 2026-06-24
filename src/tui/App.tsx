@@ -63,7 +63,7 @@ function getSlashCommands(): Array<{ cmd: string; desc: string; subcommands?: st
 // Backward-compat: used by /help text and tests
 const SLASH_COMMANDS: Array<{ cmd: string; desc: string }> = [
   ...getSlashCommands().map((c) => ({ cmd: c.cmd, desc: c.desc })),
-  { cmd: "/buscar", desc: "Procurar arquivo na máquina (tools, etc)" },
+  { cmd: "/buscar", desc: "Search for file on machine (tools, etc)" },
 ];
 
 type CommandResult = { handled: boolean; message?: string; exit?: boolean; openHub?: boolean; resetChat?: boolean; openConfigurator?: boolean; configuratorTool?: string | null };
@@ -82,13 +82,13 @@ function handleHelpCommand(): CommandResult {
 
 function handleResetCommand(): CommandResult {
   history.resetHistory();
-  return { handled: true, message: "Histórico resetado." };
+  return { handled: true, message: "History reset." };
 }
 
 function handleHistoryCommand(): CommandResult {
   const summary = history.historySummary();
   const length = history.historyLength();
-  return { handled: true, message: `Histórico: ${length} mensagens (${summary})` };
+  return { handled: true, message: `History: ${length} messages (${summary})` };
 }
 
 function handleSkillsCommand(): CommandResult {
@@ -119,7 +119,7 @@ function handleCavemanCommand(arg: string | null): CommandResult {
     history.setCavemanLevel(arg);
     return { handled: true, message: `Caveman ativado: ${arg.toUpperCase()}` };
   }
-  return { handled: true, message: `Nível inválido. Use: ${validLevels.join(", ")} ou off` };
+  return { handled: true, message: `Invalid level. Use: ${validLevels.join(", ")} or off` };
 }
 
 function handleMemoryCommand(): CommandResult {
@@ -146,7 +146,7 @@ function handlePlanCommand(): CommandResult {
 
 function handleCompactCommand(): CommandResult {
   const result = history.compactHistory();
-  if (!result) return { handled: true, message: "Nada para compactar." };
+  if (!result) return { handled: true, message: "Nada for compactar." };
   return {
     handled: true,
     message: `Compactado: ${result.removed} msgs removidas, ${result.beforeTokens} -> ${result.afterTokens} tokens.`,
@@ -170,12 +170,12 @@ function handleDreamCommand(): CommandResult {
         console.log(`\n* Dream completo: ${result.reviewedSessions} sessões revisadas, ${result.extractedSkills} skills extraídas, ${result.deduplicatedEntries} duplicatas removidas.`);
       }
     }).catch((err) => {
-      console.error(`Dream falhou: ${(err as Error).message}`);
+      console.error(`Dream failed: ${(err as Error).message}`);
     });
   }).catch(() => {
     console.error("Failed to load memory module");
   });
-  return { handled: true, message: "Executando /dream - revisando memória..." };
+  return { handled: true, message: "Running /dream - reviewing memory..." };
 }
 
 function handleDistillCommand(): CommandResult {
@@ -186,7 +186,7 @@ function handleDistillCommand(): CommandResult {
         console.log(`\n* Distill completo: ${result.skillsExtracted} skills extraídos.`);
       }
     }).catch((err) => {
-      console.error(`Distill falhou: ${(err as Error).message}`);
+      console.error(`Distill failed: ${(err as Error).message}`);
     });
   }).catch(() => {
     console.error("\nX Failed to load memory module");
@@ -201,13 +201,13 @@ function handleHubCommand(): CommandResult {
 // Sprint 9: /buscar <arquivo> — procura arquivo na máquina
 function handleBuscarCommand(arg: string | null): CommandResult {
   if (!arg) {
-    return { handled: true, message: "Uso: /buscar <nome-do-arquivo>\nExemplo: /buscar darklua\nProcura nas pastas padrão primeiro. Se não encontrar, pergunta se quer procurar em toda a máquina." };
+    return { handled: true, message: "Usage: /buscar <filename>\nExample: /buscar darklua\nSearches default folders first. If not found, asks to search entire machine." };
   }
   // The actual search is async — we return a message and the search
   // will be triggered by the system message flow.
   return {
     handled: true,
-    message: `Buscando "${arg}"...\nUse a IA para buscar: "encontre ${arg} na minha máquina" ou aguarde a integração com o mini chat (Sprint 11).`,
+    message: `Searching "${arg}"...\nUse IA to search: "find ${arg} on my machine" or wait for mini chat integration.`,
   };
 }
 
@@ -233,8 +233,8 @@ function handleConfigurarCommand(arg: string | null): CommandResult {
   return {
     handled: true,
     message: arg
-      ? `Abrindo configurador para "${arg}"...`
-      : "Abrindo configurador... (use /configurar <tool-name> para configurar uma tool específica)",
+      ? `Abrindo configurador for "${arg}"...`
+      : "Opening configurator... (use /configurar <tool-name> to configure a specific tool)",
     openConfigurator: true,
     configuratorTool: arg,
   };
@@ -248,7 +248,7 @@ function handleToolsCommand(arg: string | null): CommandResult {
   const tools = category ? registry.getByCategory(category) : registry.getAll();
   
   if (tools.length === 0) {
-    return { handled: true, message: category ? `Nenhuma tool na categoria "${category}".` : "Nenhuma tool disponível." };
+    return { handled: true, message: category ? `No tools in category "${category}".` : "No tools available." };
   }
   
   const installed = tools.filter((t: any) => registry.isInstalled(t.name));
@@ -260,7 +260,7 @@ function handleToolsCommand(arg: string | null): CommandResult {
   ];
   
   if (installed.length > 0) {
-    lines.push("OK Instaladas:");
+    lines.push("OK Installeds:");
     installed.forEach((t: any) => {
       lines.push(`  * ${t.name} (${t.category}) - ${t.description.slice(0, 50)}`);
     });
@@ -268,7 +268,7 @@ function handleToolsCommand(arg: string | null): CommandResult {
   }
   
   if (notInstalled.length > 0) {
-    lines.push("X Não instaladas:");
+    lines.push("X Not installed:");
     notInstalled.forEach((t: any) => {
       lines.push(`  * ${t.name} (${t.category}) - ${t.description.slice(0, 50)}`);
     });
@@ -287,17 +287,17 @@ function handleToolInfoCommand(arg: string | null): CommandResult {
   const tool = registry.get(arg);
   
   if (!tool) {
-    return { handled: true, message: `Tool "${arg}" não encontrada.` };
+    return { handled: true, message: `Tool "${arg}" not found.` };
   }
   
   const installed = registry.isInstalled(tool.name);
   
   const lines: string[] = [
     `[T] ${tool.name}`,
-    `   Descrição: ${tool.description}`,
+    `   Description: ${tool.description}`,
     `   Categoria: ${tool.category}`,
     `   Comando: ${tool.command} ${tool.args.join(" ")}`,
-    `   Status: ${installed ? "OK Instalada" : "X Não instalada"}`,
+    `   Status: ${installed ? "OK Installed" : "X Not installed"}`,
     "",
     "   Quando usar:"
   ];
@@ -316,8 +316,8 @@ function handleToolInfoCommand(arg: string | null): CommandResult {
   if (tool.flags.length > 0) {
     lines.push("", "   Flags:");
     tool.flags.forEach((flag: any) => {
-      const required = flag.required ? " (obrigatório)" : "";
-      const defaultVal = flag.default ? ` (padrão: ${flag.default})` : "";
+      const required = flag.required ? " (required)" : "";
+      const defaultVal = flag.default ? ` (default: ${flag.default})` : "";
       lines.push(`     --${flag.name.slice(2)} <${flag.type}>${required}${defaultVal}`);
     });
   }
@@ -362,7 +362,7 @@ function handleEffortCommand(arg: string | null): CommandResult {
   }
   const valid = ["low", "medium", "high", "max"];
   if (!valid.includes(arg)) {
-    return { handled: true, message: `Nível inválido: ${arg}\nOpções: low, medium, high, max` };
+    return { handled: true, message: `Invalid level: ${arg}\nOptions: low, medium, high, max` };
   }
   setEffortLevel(arg as any);
   return { handled: true, message: `Effort alterado para: ${getEffortLabel()}` };
@@ -375,7 +375,7 @@ function handleModeCommand(arg: string | null): CommandResult {
   // No arg: list all modes
   if (!arg) {
     if (allModes.length === 0) {
-      return { handled: true, message: "Nenhum modo disponível. Use: /mode create <descrição>" };
+      return { handled: true, message: "No modes available. Use: /mode create <description>" };
     }
     const lines = allModes.map((m) => {
       const active = m.name === activeName ? " [ATIVO]" : "";
@@ -384,23 +384,23 @@ function handleModeCommand(arg: string | null): CommandResult {
     });
     return {
       handled: true,
-      message: `Modos disponíveis:\n${lines.join("\n")}\n\n` +
+      message: `Available modes:\n${lines.join("\n")}\n\n` +
                `Ativo: ${activeName ?? "(nenhum)"}\n\n` +
-               `Use: /mode <nome> para ativar | /mode off para desativar | /mode create <descrição> para criar novo`,
+               `Use: /mode <name> to activate | /mode off to deactivate | /mode create <description> to create new`,
     };
   }
 
   // /mode off - deactivate
   if (arg === "off" || arg === "none") {
     deactivateMode();
-    return { handled: true, message: "Modo desativado. Nenhuma validação automática ativa." };
+    return { handled: true, message: "Mode deactivated. No automatic validation active." };
   }
 
   // /mode create <description> - AI-assisted mode creation
   if (arg.startsWith("create ") || arg.startsWith("new ")) {
     const prompt = arg.replace(/^(create|new)\s+/, "").trim();
     if (!prompt) {
-      return { handled: true, message: "Descrição vazia. Use: /mode create <o que você quer fazer>" };
+      return { handled: true, message: "Empty description. Use: /mode create <what you want to do>" };
     }
 
     const all = getAllExtensions();
@@ -415,7 +415,7 @@ function handleModeCommand(arg: string | null): CommandResult {
       handled: true,
       message:
         `Modo sugerido: ${suggestion.label} (${suggestion.name})\n\n` +
-        `Razão: ${suggestion.reasoning}\n\n` +
+        `Reason: ${suggestion.reasoning}\n\n` +
         `Ferramentas a ativar (${suggestion.enableTools.length}):\n` +
         suggestion.enableTools.map((t) => `  - ${t}`).join("\n") + "\n\n" +
         `Skills a ativar (${suggestion.enableSkills.length}):\n` +
@@ -424,7 +424,7 @@ function handleModeCommand(arg: string | null): CommandResult {
           : "  (nenhuma)") + "\n\n" +
         `Features a ativar (${suggestion.enableFeatures.length}):\n` +
         suggestion.enableFeatures.map((f) => `  - ${f}`).join("\n") + "\n\n" +
-        `Configurações:\n` +
+        `Settings:\n` +
         `  effort: ${suggestion.effortLevel}\n` +
         `  strictMode: ${suggestion.strictMode}\n` +
         `  readBeforeWrite: ${suggestion.readBeforeWrite}\n` +
@@ -463,7 +463,7 @@ function handleModeCommand(arg: string | null): CommandResult {
 
   const mode = getMode(modeName);
   if (!mode) {
-    return { handled: true, message: `Modo "${modeName}" não encontrado. Use: /mode (sem args) para listar.` };
+    return { handled: true, message: `Mode "${modeName}" not found. Use: /mode (no args) to list.` };
   }
 
   // If no context action specified, ask the user which they want
@@ -472,9 +472,9 @@ function handleModeCommand(arg: string | null): CommandResult {
       handled: true,
       message:
         `Ativando modo "${modeName}" (${mode.label})...\n\n` +
-        `Escolha uma opção:\n` +
+        `Choose an option:\n` +
         `  /mode ${modeName} new   -> Ativa modo + inicia chat novo (contexto limpo)\n` +
-        `  /mode ${modeName} keep  -> Ativa modo + mantém chat atual (mesmo contexto)\n\n` +
+        `  /mode ${modeName} keep  -> Activate mode + keep current chat (same context)\n\n` +
         `Tools: ${mode.enableTools.length} | Skills: ${mode.enableSkills.length} | Features: ${mode.enableFeatures.length}\n` +
         `Effort: ${mode.effortLevel ?? "default"} | Strict: ${mode.strictMode ?? false} | ` +
         `Validation: ${(mode.luauValidation?.length ?? 0) + (mode.validation?.length ?? 0)} regra(s)`,
@@ -505,7 +505,7 @@ function handleModeCommand(arg: string | null): CommandResult {
         `[*] Chat reiniciado - contexto limpo.\n\n` +
         `Tools: ${mode.enableTools.length} | Skills: ${mode.enableSkills.length} | Features: ${mode.enableFeatures.length}\n` +
         `Effort: ${mode.effortLevel ?? "default"} | Strict: ${mode.strictMode ?? false}\n\n` +
-        `Pronto para começar. O que você quer fazer?`,
+        `Ready to start. What do you want to do?`,
     };
   }
 
@@ -524,7 +524,7 @@ function handleModeCommand(arg: string | null): CommandResult {
 function handlePoolCommand(): CommandResult {
   const size = getPoolSize();
   if (size === 0) {
-    return { handled: true, message: "Pool: modo single-key (configure NVIDIA_API_KEYS para multi-key)" };
+    return { handled: true, message: "Pool: modo single-key (configure NVIDIA_API_KEYS for multi-key)" };
   }
   const { formatPoolStats } = require("../apiKeyPool.js");
   return { handled: true, message: formatPoolStats() };
@@ -652,7 +652,7 @@ function Autocomplete({ query, selectedIndex, onSelect }: Readonly<AutocompleteP
       })}
       {total > AUTOCOMPLETE_PAGE_SIZE && (
         <Text color={colors.muted} dimColor>
-          {" "}(mostrando {startIdx + 1}-{endIdx} de {total} - use ↑↓ para navegar)
+          {" "}(mostrando {startIdx + 1}-{endIdx} de {total} - use ↑↓ for navegar)
         </Text>
       )}
     </Box>
@@ -993,7 +993,7 @@ export function App() {
         finalizeMessage(response, streamStarted);
         syncTodos();
       } catch (err) {
-        setSystemMessages((prev) => [...prev, `Erro: ${(err as Error).message}`]);
+        setSystemMessages((prev) => [...prev, `Error: ${(err as Error).message}`]);
         setMessages((prev) => prev.filter((m) => !m.isStreaming));
       } finally {
         isProcessing.current = false;
@@ -1123,7 +1123,7 @@ export function App() {
         {/* Input section - hidden when Hub is open to prevent key leaks */}
         <Box flexGrow={1}>
           {showHub ? (
-            <Text color={colors.muted}>[ Hub aberto - pressione Esc para fechar ]</Text>
+            <Text color={colors.muted}>[ Hub aberto - pressione Esc for fechar ]</Text>
           ) : (
             <>
               <Text color={colors.primary} bold>{"> "}</Text>

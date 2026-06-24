@@ -56,7 +56,7 @@ export function getContextInjection(toolName: string): string {
   if (!compact) return "";
 
   log.debug(`[CONTEXT_INJECT] Appended TASK_STATE snapshot to ${toolName} result (${compact.length} chars)`);
-  return `\n\n--- [CONTEXTO ATUAL] ---\n${compact}\n--- [FIM DO CONTEXTO] ---\nLembre-se destes pontos antes da próxima ação.`;
+  return `\n\n--- [CURRENT CONTEXT] ---\n${compact}\n--- [END CONTEXT] ---\nRemember these points before the next action.`;
 }
 
 /**

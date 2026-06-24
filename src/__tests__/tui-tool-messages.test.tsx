@@ -96,12 +96,12 @@ describe("ChatDisplay — tool message rendering", () => {
 
   it("renders tool result (error) with cross icon", () => {
     const messages: ChatMessage[] = [
-      { role: "tool", content: "[ERRO] File not found", toolName: "ler_arquivo", isResult: true, ok: false },
+      { role: "tool", content: "[ERROR] File not found", toolName: "ler_arquivo", isResult: true, ok: false },
     ];
     const { lastFrame } = render(<ChatDisplay messages={messages} />);
     const out = stripAnsi(lastFrame() ?? "");
     expect(out).toContain("ler_arquivo");
-    expect(out).toContain("[ERRO]");
+    expect(out).toContain("[ERROR]");
     // icons.cross = "✘" (Unicode, after figures migration) — old value was "x"
     // We accept either Unicode or ASCII fallback to keep tests stable.
     expect(out).toMatch(/[✘x✗]/);
@@ -350,8 +350,8 @@ describe("App — tool messages appear in chat (not above)", () => {
     const messages: ChatMessage[] = [
       { role: "user", content: "Lê /missing.ts" },
       { role: "tool", content: JSON.stringify({ path: "/missing.ts" }), toolName: "ler_arquivo", isResult: false },
-      { role: "tool", content: "[ERRO] File not found", toolName: "ler_arquivo", isResult: true, ok: false },
-      { role: "assistant", content: "Arquivo não encontrado. Vou tentar outro caminho." },
+      { role: "tool", content: "[ERROR] File not found", toolName: "ler_arquivo", isResult: true, ok: false },
+      { role: "assistant", content: "File not found. Vou tentar outro caminho." },
       { role: "tool", content: JSON.stringify({ path: "/correct.ts" }), toolName: "ler_arquivo", isResult: false },
       { role: "tool", content: "content", toolName: "ler_arquivo", isResult: true, ok: true },
       { role: "assistant", content: "Encontrei!" },
@@ -360,8 +360,8 @@ describe("App — tool messages appear in chat (not above)", () => {
     const out = stripAnsi(lastFrame() ?? "");
 
     expect(out).toContain("/missing.ts");
-    expect(out).toContain("[ERRO]");
-    expect(out).toContain("Arquivo não encontrado");
+    expect(out).toContain("[ERROR]");
+    expect(out).toContain("File not found");
     expect(out).toContain("/correct.ts");
     expect(out).toContain("Encontrei!");
   });

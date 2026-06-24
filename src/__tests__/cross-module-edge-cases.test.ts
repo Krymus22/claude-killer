@@ -236,7 +236,7 @@ describe("Cross-module: Mode + Validators + fileEdit", () => {
     ]);
 
     // fileEdit retorna erro de validação
-    expect(result).toContain("[ERRO]");
+    expect(result).toContain("[ERROR]");
     expect(result).toContain("Validação bloqueou");
     expect(result).toContain("Selene lint failed");
 
@@ -270,7 +270,7 @@ describe("Cross-module: Mode + Validators + fileEdit", () => {
     ]);
 
     // Edição sucedeu — arquivo .py não foi validado
-    expect(result).toContain("[SUCESSO]");
+    expect(result).toContain("[SUCCESS]");
     expect(fs.readFileSync(pyFile, "utf8")).toBe("x = 2\n");
 
     // validateLuauBeforeWrite NÃO foi chamado (shouldValidateFile retornou false)
@@ -296,7 +296,7 @@ describe("Cross-module: Mode + Validators + fileEdit", () => {
     ]);
 
     // Edição sucedeu sem validação
-    expect(result).toContain("[SUCESSO]");
+    expect(result).toContain("[SUCCESS]");
     expect(fs.readFileSync(luauFile, "utf8")).toBe("local x = 42\n");
     // validateLuauBeforeWrite NÃO foi chamado
     expect(luauValidator.validateLuauBeforeWrite).not.toHaveBeenCalled();
@@ -322,7 +322,7 @@ describe("Cross-module: Manifest + findToolBinary + executeFromManifest", () => 
   });
 
   it("tool com manifest mas SEM binary → function call NÃO gerada", () => {
-    toolDetectorMock.findToolBinary.mockReturnValue(null); // binary não encontrado
+    toolDetectorMock.findToolBinary.mockReturnValue(null); // binary not found
     const manifests = [
       {
         name: "rojo_build",
@@ -474,19 +474,19 @@ describe("Cross-module: AskUser + Configurator (allowUserQuestions)", () => {
     setAskUserCallback(mockCb, true);
 
     const result = await handleAskUser({
-      pergunta: "Qual configuração você quer?",
+      pergunta: "Qual configuração you quer?",
       alternativas: ["Opção A", "Opção B"],
     });
 
     // Callback foi chamado e resposta foi formatada
     expect(mockCb).toHaveBeenCalledTimes(1);
-    expect(result.resultStr).toContain("[RESPOSTA DO USUÁRIO]");
+    expect(result.resultStr).toContain("[USER RESPONSE]");
     expect(result.resultStr).toContain("Opção A escolhida");
     expect(result.usedHeal).toBe(false);
   });
 
-  it("sub-agente (allowUserQuestions: false) → perguntar_usuario retorna erro de permissão", async () => {
-    // Sub-agente NÃO tem permissão (allow=false)
+  it("sub-agent (allowUserQuestions: false) -> perguntar_usuario returns permission error", async () => {
+    // Sub-agent NÃO tem permissão (allow=false)
     const mockCb = vi.fn();
     setAskUserCallback(mockCb, false);
 
@@ -498,8 +498,8 @@ describe("Cross-module: AskUser + Configurator (allowUserQuestions)", () => {
     // Callback NÃO foi chamado (permissão negada antes)
     expect(mockCb).not.toHaveBeenCalled();
     // Resultado contém erro de permissão
-    expect(result.resultStr).toMatch(/não está disponível neste contexto/i);
-    expect(result.resultStr).toMatch(/melhor julgamento/i);
+    expect(result.resultStr).toMatch(/is not available in this context/i);
+    expect(result.resultStr).toMatch(/best judgment/i);
   });
 });
 
@@ -625,7 +625,7 @@ describe("Cross-module: Hooks + fileEdit", () => {
     ]);
 
     // fileEdit retorna erro do hook
-    expect(result).toContain("[ERRO]");
+    expect(result).toContain("[ERROR]");
     expect(result).toContain("Hook bloqueou");
     expect(result).toContain("arquivo protegido");
 
@@ -659,7 +659,7 @@ describe("Cross-module: Hooks + fileEdit", () => {
     ]);
 
     // fileEdit sucedeu
-    expect(result).toContain("[SUCESSO]");
+    expect(result).toContain("[SUCCESS]");
     // Arquivo foi modificado no disco
     expect(fs.readFileSync(targetFile, "utf8")).toBe("after\n");
     // on_file hook rodou (onFileCalled = true) — side-effect executado
@@ -685,7 +685,7 @@ describe("Cross-module: Hooks + fileEdit", () => {
     ]);
 
     // fileEdit sucedeu — warning não bloqueia
-    expect(result).toContain("[SUCESSO]");
+    expect(result).toContain("[SUCCESS]");
     // Arquivo foi modificado
     expect(fs.readFileSync(targetFile, "utf8")).toBe("new-data\n");
     // on_file hook também foi chamado (depois do write)

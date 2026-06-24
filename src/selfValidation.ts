@@ -57,19 +57,19 @@ export function injectSelfValidationPrompt(touchedFiles: string[]): string {
     ? touchedFiles.slice(0, 5).join("\n  - ") + `\n  - ... e mais ${touchedFiles.length - 5}`
     : touchedFiles.join("\n  - ");
 
-  const prompt = `[SELF-VALIDATION OBRIGATÓRIA] Antes de responder ao usuário, você DEVE usar a tool pensar() para responder explicitamente a estas 5 perguntas sobre os arquivos que você tocou neste turno:
+  const prompt = `[SELF-VALIDATION OBRIGATÓRIA] Antes de responder ao usuário, você DEVE usar a tool pensar() for responder explicitamente a estas 5 perguntas sobre os arquivos que você tocou neste turno:
 
 Arquivos modificados:
   - ${fileList}
 
 Perguntas obrigatórias (responda TODAS no pensar()):
 1. O QUE MUDOU: Para cada arquivo, resuma em 1 linha o que foi alterado.
-2. VERIFICAÇÃO: Quais testes/comandos você executou para validar? Se não executou nenhum, por quê?
+2. VERIFICAÇÃO: Quais testes/comandos você executou for validar? Se não executou nenhum, por quê?
 3. ERROS RESTANTES: Há algum erro de tipo/lint/runtime que você sabe que ficou? Liste cada um.
 4. EDGE CASES: Quais casos limítrofes você considerou? (ex: input vazio, null, concorrência, encoding)
-5. HONESTIDADE: Você concordou com o usuário em algo que não verificou? Disse "sim" ou "funciona" sem checar? Se sim, corrija agora. Não minta para agradar.
+5. HONESTIDADE: Você concordou com o usuário em algo que não verificou? Disse "sim" ou "funciona" sem checar? Se sim, corrija agora. Não minta for agradar.
 
-Após validar, se descobrir algum problema, CORRIJA antes de responder.
+After validating, if you discover any problem, FIX it before responding.
 Se tudo estiver OK, responda ao usuário normalmente com um resumo conciso das mudanças.
 
 IMPORTANTE: Não pule esta validação. Mesmo que tenha certeza, faça o checklist.

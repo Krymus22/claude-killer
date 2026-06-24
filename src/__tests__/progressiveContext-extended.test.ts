@@ -151,7 +151,7 @@ describe("progressiveContext (extended)", () => {
     expect(result.extractedLines).toBeLessThan(100);
   });
 
-  it("readSymbolFromFile deve retornar full read quando símbolo não encontrado no AST", async () => {
+  it("readSymbolFromFile deve retornar full read quando símbolo not found no AST", async () => {
     const { readSymbolFromFile } = await import("./../progressiveContext.js");
     const filePath = path.join(tmpDir, "missing.ts");
     fs.writeFileSync(filePath, "const z = 3;\nconst w = 4;\n", "utf8");

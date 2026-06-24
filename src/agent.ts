@@ -266,22 +266,6 @@ function getExternalToolDefinitions(): OpenAI.Chat.Completions.ChatCompletionToo
     {
       type: "function",
       function: {
-        name: "executar_tool",
-        description: "Execute an external tool that doesn't have a manifest. Use this for tools like pytest, cargo, npm, etc. For Roblox tools (rojo, selene, stylua, wally, lune, rokit), prefer the specific function calls instead.",
-        parameters: {
-          type: "object",
-          properties: {
-            tool: { type: "string", description: "Tool name (e.g., 'pytest', 'cargo', 'npm')" },
-            args: { type: "object", description: "Tool arguments" },
-            dir: { type: "string", description: "Working directory" }
-          },
-          required: ["tool"]
-        }
-      }
-    },
-    {
-      type: "function",
-      function: {
         name: "listar_tools",
         description: "List all available external tools, optionally filtered by category",
         parameters: {

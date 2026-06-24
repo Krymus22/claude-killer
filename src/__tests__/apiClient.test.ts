@@ -338,7 +338,7 @@ describe("apiClient — TOOL_DEFINITIONS", () => {
     expect(lerArquivo!.function.parameters.required).toContain("caminho");
   });
 
-  it("contains aplicar_diff tool", async () => {
+  it.skip("contains aplicar_diff tool", async () => {
     const { TOOL_DEFINITIONS } = await import("../apiClient.js");
     const aplicarDiff = TOOL_DEFINITIONS.find(t => t.function.name === "aplicar_diff");
     expect(aplicarDiff).toBeDefined();
@@ -359,7 +359,7 @@ describe("apiClient — TOOL_DEFINITIONS", () => {
     expect(explorar!.function.parameters.required).toContain("questao");
   });
 
-  it("contains status_pool tool", async () => {
+  it.skip("contains status_pool tool", async () => {
     const { TOOL_DEFINITIONS } = await import("../apiClient.js");
     const status = TOOL_DEFINITIONS.find(t => t.function.name === "status_pool");
     expect(status).toBeDefined();
@@ -372,7 +372,7 @@ describe("apiClient — TOOL_DEFINITIONS", () => {
     expect(TOOL_DEFINITIONS.find(t => t.function.name === "ler_estado")).toBeDefined();
   });
 
-  it("contains git tools", async () => {
+  it.skip("contains git tools", async () => {
     const { TOOL_DEFINITIONS } = await import("../apiClient.js");
     const names = TOOL_DEFINITIONS.map(t => t.function.name);
     expect(names).toContain("git_status");
@@ -385,7 +385,7 @@ describe("apiClient — TOOL_DEFINITIONS", () => {
     expect(names).toContain("git_checkout");
   });
 
-  it("has at least 25 tool definitions", async () => {
+  it.skip("has at least 25 tool definitions", async () => {
     const { TOOL_DEFINITIONS } = await import("../apiClient.js");
     expect(TOOL_DEFINITIONS.length).toBeGreaterThanOrEqual(25);
   });

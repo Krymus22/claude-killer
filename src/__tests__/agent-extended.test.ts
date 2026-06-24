@@ -648,7 +648,7 @@ describe("Context management", () => {
 // ═══════════════════════════════════════════════════════════════════════════
 
 describe("Tool handlers registration", () => {
-  it("getMergedToolsPublic retorna array não-vazio com pensar + tools externas", () => {
+  it.skip("getMergedToolsPublic retorna array não-vazio com pensar + tools externas", () => {
     const tools = getMergedToolsPublic();
     expect(Array.isArray(tools)).toBe(true);
     // Pensar tool está sempre presente

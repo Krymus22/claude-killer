@@ -146,44 +146,30 @@ export const TOOL_DEFINITIONS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
   {
     type: "function",
     function: {
-      name: "ler_arquivo_avancado",
-      description:
-        "Reads file content with offset, limit, line numbers, and optional grep filtering. " +
-        "Supports reading specific line ranges and searching within file content.",
+      name: "buscar_web",
+      description: "Search the web for current information. Returns titles, URLs, and snippets.",
       parameters: {
         type: "object",
         properties: {
-          path: { type: "string", description: "File path to read." },
-          offset: { type: "number", description: "1-indexed start line." },
-          limit: { type: "number", description: "Max lines to return." },
-          grep: { type: "string", description: "Regex pattern to filter lines." },
-          contextLines: { type: "number", description: "Lines of context around grep matches." },
+          query: { type: "string", description: "Search query." },
+          maxResults: { type: "number", description: "Max results (default: 5)." },
         },
-        required: ["path"],
+        required: ["query"],
       },
     },
   },
   {
     type: "function",
     function: {
-      name: "aplicar_diff",
-      description:
-        "Applies a Search & Replace diff block to a local file. " +
-        "The file content is parsed, and sections matching SEARCH are replaced with REPLACE. " +
-        "A syntax guardrail will validate the entire file after the patch is applied. " +
-        "Use this tool to make edits instead of writing full files.",
+      name: "ler_url",
+      description: "Fetch and read content from a web URL. HTML is stripped to text.",
       parameters: {
         type: "object",
         properties: {
-          caminho: { type: "string", description: "Relative or absolute path to the file to modify." },
-          bloco_diff: {
-            type: "string",
-            description:
-              "The diff contents following the strict format:\n" +
-              "<<<<<<< SEARCH\n[exact old code to replace]\n=======\n[new code replacement]\n>>>>>>> REPLACE",
-          },
+          url: { type: "string", description: "URL to fetch." },
+          maxLength: { type: "number", description: "Max chars to return (default: 10000)." },
         },
-        required: ["caminho", "bloco_diff"],
+        required: ["url"],
       },
     },
   },
@@ -263,115 +249,6 @@ export const TOOL_DEFINITIONS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
   {
     type: "function",
     function: {
-      name: "git_status",
-      description: "Shows the working tree status (branch, staged, modified, untracked files).",
-      parameters: { type: "object", properties: { cwd: { type: "string" } } },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "git_diff",
-      description: "Shows file changes. Use staged=true for staged changes.",
-      parameters: {
-        type: "object",
-        properties: {
-          cwd: { type: "string" },
-          file: { type: "string", description: "Specific file to diff." },
-          staged: { type: "boolean", description: "Show staged changes." },
-        },
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "git_log",
-      description: "Shows recent commit history.",
-      parameters: {
-        type: "object",
-        properties: {
-          cwd: { type: "string" },
-          count: { type: "number", description: "Number of commits (default 10)." },
-          file: { type: "string", description: "Show history for specific file." },
-        },
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "git_commit",
-      description: "Create a git commit. Optionally stage files first.",
-      parameters: {
-        type: "object",
-        properties: {
-          message: { type: "string", description: "Commit message." },
-          files: { type: "array", items: { type: "string" }, description: "Files to stage." },
-          cwd: { type: "string" },
-        },
-        required: ["message"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "git_blame",
-      description: "Show who changed each line of a file.",
-      parameters: {
-        type: "object",
-        properties: {
-          file: { type: "string", description: "File to blame." },
-          cwd: { type: "string" },
-          startLine: { type: "number" },
-          endLine: { type: "number" },
-        },
-        required: ["file"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "git_show",
-      description: "Show details of a specific commit.",
-      parameters: {
-        type: "object",
-        properties: {
-          commitHash: { type: "string", description: "Commit hash to show." },
-          cwd: { type: "string" },
-        },
-        required: ["commitHash"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "git_branch",
-      description: "List all branches (local and remote).",
-      parameters: { type: "object", properties: { cwd: { type: "string" } } },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "git_checkout",
-      description: "Switch to a branch.",
-      parameters: {
-        type: "object",
-        properties: {
-          branch: { type: "string", description: "Branch name." },
-          cwd: { type: "string" },
-        },
-        required: ["branch"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
       name: "editar_multi_arquivos",
       description: "Edit multiple files atomically. All edits succeed or all are rolled back.",
       parameters: {
@@ -409,34 +286,6 @@ export const TOOL_DEFINITIONS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
   {
     type: "function",
     function: {
-      name: "salvar_sessao",
-      description: "Save the current conversation session to disk for later restoration.",
-      parameters: { type: "object", properties: { id: { type: "string", description: "Optional session ID." } } },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "carregar_sessao",
-      description: "Load a previously saved session from disk.",
-      parameters: {
-        type: "object",
-        properties: { id: { type: "string", description: "Session ID to load." } },
-        required: ["id"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "listar_sessoes",
-      description: "List all saved sessions.",
-      parameters: { type: "object", properties: {} },
-    },
-  },
-  {
-    type: "function",
-    function: {
       name: "parse_ast",
       description:
         "Parse a source file and extract symbols (functions, classes, interfaces, etc.), imports, and exports. " +
@@ -447,21 +296,6 @@ export const TOOL_DEFINITIONS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
           path: { type: "string", description: "Source file to parse." },
         },
         required: ["path"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "executar_paralelo",
-      description: "Execute multiple tool calls in parallel for performance.",
-      parameters: {
-        type: "object",
-        properties: {
-          tools: { type: "array", items: { type: "string" }, description: "Tool names to call." },
-          args: { type: "array", items: { type: "object" }, description: "Arguments for each tool." },
-        },
-        required: ["tools", "args"],
       },
     },
   },
@@ -667,48 +501,6 @@ export const TOOL_DEFINITIONS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
   {
     type: "function",
     function: {
-      name: "criar_plano",
-      description:
-        "Cria um plano de execução numerado ANTES de fazer qualquer edição. " +
-        "OBRIGATÓRIO para tarefas complexas (2+ passos, multi-arquivo, refactoring). " +
-        "Cada passo deve ser uma ação específica e atômica. " +
-        "O plano aparece na TUI com checkboxes visuais. " +
-        "Você NÃO pode finalizar (finish_reason) até todos os passos estarem DONE. " +
-        "Use marcar_passo para atualizar o status de cada passo conforme progride.",
-      parameters: {
-        type: "object",
-        properties: {
-          passos: {
-            type: "array",
-            items: { type: "string" },
-            description: "Lista de passos do plano. Ex: ['Ler InventoryService.luau', 'Adicionar validação nil', 'Rodar testes']",
-          },
-        },
-        required: ["passos"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "marcar_passo",
-      description:
-        "Marca um passo do plano como concluído (done=true) ou reaberto (done=false). " +
-        "Use o índice (0-based) do passo no plano criado por criar_plano. " +
-        "Chame após completar cada passo para manter a TUI atualizada.",
-      parameters: {
-        type: "object",
-        properties: {
-          indice: { type: "number", description: "Índice do passo (0-based)" },
-          feito: { type: "boolean", description: "true = concluído, false = reaberto" },
-        },
-        required: ["indice", "feito"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
       name: "escrever_spec",
       description:
         "Escreve uma especificação técnica ANTES de implementar código. " +
@@ -775,45 +567,6 @@ export const TOOL_DEFINITIONS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
   {
     type: "function",
     function: {
-      name: "capturar_snapshot",
-      description:
-        "Captura o output de uma função ANTES de editá-la. " +
-        "Depois da edição, o sistema re-roda a função e compara. " +
-        "Se o output mudou inesperadamente, alerta sobre possível regressão. " +
-        "Use em funções puras (sem side effects).",
-      parameters: {
-        type: "object",
-        properties: {
-          funcao: { type: "string", description: "Nome da função" },
-          arquivo: { type: "string", description: "Caminho do arquivo" },
-          inputs: { type: "string", description: "JSON string dos inputs (ex: [1, 2] ou {x: 5})" },
-        },
-        required: ["funcao", "arquivo", "inputs"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "executar_workflow",
-      description:
-        "Executa um workflow dinâmico em JavaScript determinístico. " +
-        "Use para tarefas multi-step complexas onde prompt é ambíguo. " +
-        "Funções disponíveis: agent(pergunta) - sub-agente, parallel(...perguntas) - paralelo, log(msg). " +
-        "PROIBIDO: require, import, process, fs, child_process. " +
-        "O workflow roda em sandbox com timeout de 60s.",
-      parameters: {
-        type: "object",
-        properties: {
-          script: { type: "string", description: "Código JavaScript do workflow" },
-        },
-        required: ["script"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
       name: "ler_estado",
       description:
         "Lê o conteúdo atual do TASK_STATE.md e retorna como string formatada. " +
@@ -839,16 +592,6 @@ export const TOOL_DEFINITIONS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
         },
         required: ["questao"],
       },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "status_pool",
-      description:
-        "Mostra o status do pool de API keys (multi-key): quantas chaves ativas, chamadas por chave, erros 429, latência média. " +
-        "Use para diagnosticar problemas de rate limit ou verificar se o pool está funcionando.",
-      parameters: { type: "object", properties: {} },
     },
   },
 ];

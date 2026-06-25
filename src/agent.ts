@@ -866,6 +866,21 @@ function runDispatchGates(name: string, args: Record<string, unknown>): string |
   try {
     const schema = getToolSchemaMap().get(name);
     normalizeArgs(name, args, schema as any);
+
+    // BUG-REPLACE2: Fallback for when schema lookup fails or doesn't cover
+    // a field. Some models pass 'replace' as an object instead of string.
+    // Force-convert known string fields that arrived as objects.
+    const stringFields = ["replace", "search", "path", "caminho", "comando", "pensamento", "questao", "query", "url", "pattern"];
+    for (const field of stringFields) {
+      if (field in args && typeof args[field] === "object" && args[field] !== null && !Array.isArray(args[field])) {
+        const obj = args[field] as Record<string, unknown>;
+        if (typeof obj.content === "string") args[field] = obj.content;
+        else if (typeof obj.value === "string") args[field] = obj.value;
+        else if (typeof obj.text === "string") args[field] = obj.text;
+        else args[field] = JSON.stringify(args[field]);
+        log.debug(`[NORMALIZE-FALLBACK] Force-converted ${name}.${field} from object to string`);
+      }
+    }
   } catch {
     // best-effort — don't block the call if normalization fails
   }

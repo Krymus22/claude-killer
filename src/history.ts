@@ -85,17 +85,25 @@ You have direct access to the user's filesystem via tools.
 
 ## Rules
 
-1. ALWAYS read a file before editing — the system blocks edits on unread files.
-2. Call pensar() BEFORE every write operation. Checklist: what changes, did I read it, edge cases, minimal change, correct intent.
-3. Use ABSOLUTE paths. The agent cwd may differ from what you assume.
-4. After editing, run tests to verify. Fix and re-run until clean.
-5. Batch multiple read-only tool calls in one response — they run in parallel.
-6. For multi-file changes, use editar_multi_arquivos for atomic rollback.
-7. Use desfazer_edicao to roll back bad edits.
-8. Keep TASK_STATE.md current via atualizar_estado.
-9. Be concise. Respond in the user's language (PT or EN).
-10. One file per turn for complex tasks. Incremental changes.
-11. When unsure about an API, use buscar_web to verify current docs before writing code.
+### HIGH PRIORITY — Do these FIRST, always
+
+1. **PLAN before acting.** For any task involving edits, call pensar() with categoria="planning" FIRST. List: which files you'll touch, in what order, what edge cases exist, what could break. This is your #1 tool against bugs and loops. Skipping the plan = guessing = bugs.
+
+2. **RESEARCH APIs before writing code.** When the task involves external APIs, libraries, or frameworks (Roblox, React, Luau APIs, npm packages), use buscar_web() to verify the CURRENT documentation before writing any code. APIs change. What you remember from training data may be outdated. Wrong API usage = bugs that compile but fail at runtime.
+
+3. **READ before WRITE.** Always call ler_arquivo() before editar_arquivo(). The system blocks edits on unread files. Reading first prevents hallucinating file contents.
+
+### Standard rules
+
+4. Use ABSOLUTE paths. The agent cwd may differ from what you assume.
+5. After editing, run tests to verify. Fix and re-run until clean.
+6. Batch multiple read-only tool calls in one response — they run in parallel.
+7. For multi-file changes, use editar_multi_arquivos for atomic rollback.
+8. Use desfazer_edicao to roll back bad edits.
+9. Keep TASK_STATE.md current via atualizar_estado.
+10. Be concise. Respond in the user's language (PT or EN).
+11. One file per turn for complex tasks. Incremental changes.
+12. When editar_arquivo fails with "SEARCH not found", RE-READ the file (ler_arquivo) to see the actual current content, then adjust your search string. Do NOT retry with the same search.
 
 ## HONESTY RULES — CRITICAL
 
@@ -532,9 +540,11 @@ function buildCompactionSummary(messages: Message[]): string {
   const lines: string[] = [];
   lines.push(`[CONVERSATION MEMORY - ${messages.length} old messages compacted]`);
   lines.push(``);
+  lines.push(`IMPORTANT: This memory preserves what happened. Use it to answer questions about project context.`);
+  lines.push(``);
 
   if (userRequests.length > 0) {
-    lines.push(`## User Requests (chronological)`);
+    lines.push(`## User Requests (chronological — these are the GOALS)`);
     for (const r of userRequests.slice(-5)) { // last 5 user requests
       lines.push(`- ${r}`);
     }
@@ -542,7 +552,7 @@ function buildCompactionSummary(messages: Message[]): string {
   }
 
   if (assistantConclusions.length > 0) {
-    lines.push(`## Key Conclusions`);
+    lines.push(`## Key Conclusions (what was decided/done)`);
     for (const c of assistantConclusions.slice(-3)) { // last 3 conclusions
       lines.push(`- ${c}`);
     }
@@ -556,7 +566,7 @@ function buildCompactionSummary(messages: Message[]): string {
   }
 
   if (filesModified.size > 0) {
-    lines.push(`## Files Modified`);
+    lines.push(`## Files Modified (these EXIST on disk)`);
     for (const f of filesModified) {
       lines.push(`- ${f}`);
     }
@@ -564,6 +574,7 @@ function buildCompactionSummary(messages: Message[]): string {
   }
 
   lines.push(`Note: Historical tool_call IDs are now stale. If you need to reference past tool results, ask the user.`);
+  lines.push(`If asked about project name or context, check TASK_STATE above or this memory.`);
 
   return lines.join("\n");
 }

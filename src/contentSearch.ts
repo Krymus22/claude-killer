@@ -6,6 +6,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as glob from "./fileSearch.js";
 import * as log from "./logger.js";
+import { t } from "./i18n.js";
 
 export interface GrepOptions {
   pattern: string;
@@ -120,7 +121,7 @@ export function grepSearch(opts: GrepOptions): GrepMatch[] {
 }
 
 export function formatGrepResults(matches: GrepMatch[], maxDisplay: number = 50): string {
-  if (matches.length === 0) return "No results found.";
+  if (matches.length === 0) return t("tool.no_results");
 
   const lines: string[] = [];
   const displayCount = Math.min(matches.length, maxDisplay);

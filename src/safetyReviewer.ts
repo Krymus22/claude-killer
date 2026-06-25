@@ -26,6 +26,7 @@
 
 import { chat } from "./apiClient.js";
 import * as log from "./logger.js";
+import { t } from "./i18n.js";
 
 // --- Types ------------------------------------------------------------------
 
@@ -322,31 +323,27 @@ export function formatSafetyReview(result: SafetyReviewResult): string {
   const lines: string[] = [];
 
   if (result.risk === "high") {
-    lines.push("[SECURITY BLOCK] Reviewer detected HIGH risk to data:");
+    lines.push(t("safety.block_high"));
     lines.push("");
     lines.push(`Risk: HIGH`);
     lines.push(`Reasoning: ${result.reasoning}`);
     if (result.patternsMatched.length > 0) {
       lines.push("");
-      lines.push("Patterns detected:");
+      lines.push(t("safety.patterns_detected"));
       for (const p of result.patternsMatched) {
         lines.push(`  - ${p}`);
       }
     }
     lines.push("");
-    lines.push("[!] DO NOT write this code without:");
-    lines.push("  1. Explicitly confirming with the user that they want this operation");
-    lines.push("  2. Adding guardrails (e.g. if not IS_TEST_SERVER then return end)");
-    lines.push("  3. Implementing backup/rollback before the destructive operation");
-    lines.push("  4. For DataStore: use :UpdateAsync instead of :SetAsync (merge instead of overwrite)");
+    lines.push(t("safety.do_not_write"));
+    lines.push(t("safety.recommendations"));
     lines.push("");
-    lines.push("Review the code and try again. If you are CERTAIN the user asked for this,");
-    lines.push("explain the risk in your response and ask for confirmation before proceeding.");
+    lines.push(t("safety.review_retry"));
   } else if (result.risk === "low") {
-    lines.push("[SECURITY WARNING] Reviewer detected LOW risk:");
+    lines.push(t("safety.warn_low"));
     lines.push(`Reasoning: ${result.reasoning}`);
     if (result.patternsMatched.length > 0) {
-      lines.push("Patterns detected (handle with care):");
+      lines.push(t("safety.patterns_careful"));
       for (const p of result.patternsMatched) {
         lines.push(`  - ${p}`);
       }
@@ -354,7 +351,7 @@ export function formatSafetyReview(result: SafetyReviewResult): string {
   } else {
     // risk = none, but LLM was called (patterns matched but LLM said safe)
     if (result.reviewedByLlm) {
-      lines.push("[SECURITY OK] Reviewer analyzed and confirmed: no data risk.");
+      lines.push(t("safety.ok"));
       lines.push(`Reasoning: ${result.reasoning}`);
     }
     // If risk=none and not reviewed by LLM, return empty (no message needed)

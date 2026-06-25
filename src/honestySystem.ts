@@ -27,6 +27,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as log from "./logger.js";
+import { t } from "./i18n.js";
 
 // --- Types ------------------------------------------------------------------
 
@@ -352,11 +353,11 @@ export async function checkEvidenceRequirement(
         unverified.push(`"${claim}" (deveria ter chamado ${tool})`);
       } else {
         // Generic claim without specific tool requirement - flag if no verification tools were called
-        const hasVerification = toolCallHistory.some((t) =>
-          ["executar_testes", "executar_comando", "ler_arquivo", "pesquisar_api_atualizada"].includes(t)
+        const hasVerification = toolCallHistory.some((tc) =>
+          ["executar_testes", "executar_comando", "ler_arquivo", "pesquisar_api_atualizada"].includes(tc)
         );
         if (!hasVerification) {
-          unverified.push(`"${claim}" (no verification tool was called)`);
+          unverified.push(t("honesty.unverified_claim", claim));
         } else {
           verified.push(claim);
         }
@@ -642,7 +643,7 @@ export async function checkContradictions(
     return { contradictions: [], message: "" };
   }
 
-  const msg = `[CONTRADICTION DETECTED] You made claims that contradict earlier claims:\n${contradictions.map((c) => `  - Before: ${c.oldClaim} | Now: ${c.newClaim}`).join("\n")}\n\nWhich one is correct? Verify before continuing.`;
+  const msg = t("honesty.contradiction", contradictions.map((c) => `  - Before: ${c.oldClaim} | Now: ${c.newClaim}`).join("\n"));
   log.warn(`[HONESTY:Contradiction] ${msg}`);
   return { contradictions, message: msg };
 }

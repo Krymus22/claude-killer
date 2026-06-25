@@ -745,16 +745,24 @@ function buildQuotaExhaustedMessage(retryAfterS: number, errBody: string): strin
   const hint = isQuotaExhausted
     ? `Retry-After missing or too long (${retryAfterLabel}) - likely daily/monthly quota exhausted.`
     : `Max retries (${MAX_429_RETRIES}) reached.`;
-  const modelHint = config.model ? `the model ${config.model}` : "this model";
+  const modelHint = config.model ?? "this model";
 
-  return (
-    `\nx  NVIDIA NIM API 429 error - ${hint}\n\n` +
-    `   Possible causes:\n` +
-    `     * Daily/monthly API key quota exhausted\n` +
-    `     * Free-tier plan without access to ${modelHint}\n` +
-    `     * Check: https://build.nvidia.com/ -> Usage & Billing\n\n` +
-    `   Error details: ${errBody}`
-  );
+  // Defer i18n import to avoid circular dependency at module load time
+  // (apiClient is imported very early, before i18n is initialized)
+  try {
+    const { t } = require("./i18n.js") as { t: (key: string, ...args: unknown[]) => string };
+    return t("error.429_quota", modelHint, errBody) + `\n\n   ${hint}`;
+  } catch {
+    // Fallback to EN if i18n not available
+    return (
+      `\nx  NVIDIA NIM API 429 error - ${hint}\n\n` +
+      `   Possible causes:\n` +
+      `     * Daily/monthly API key quota exhausted\n` +
+      `     * Free-tier plan without access to ${modelHint}\n` +
+      `     * Check: https://build.nvidia.com/ -> Usage & Billing\n\n` +
+      `   Error details: ${errBody}`
+    );
+  }
 }
 
 function is429Error(err: unknown): boolean {

@@ -5,6 +5,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as log from "./logger.js";
+import { t } from "./i18n.js";
 
 export interface EditOperation {
   search: string;
@@ -135,7 +136,7 @@ export async function editFile(
     releaseLock = await acquireLock(resolved, holderId, 30_000, 60_000);
   } catch (err) {
     log.warn(`fileEdit: could not acquire lock for ${resolved}: ${(err as Error).message}`);
-    return `[ERROR] Could not acquire file lock: ${(err as Error).message}`;
+    return t("tool.file_lock_failed", (err as Error).message);
   }
 
   try {
@@ -392,13 +393,10 @@ export async function editFile(
   // entender que o search string não foi encontrado.
   let msg: string;
   if (result.replacements === 0) {
-    msg = `[WARNING] 0 replacements applied to ${resolved}. ` +
-      `No occurrence of the search text was found. ` +
-      `Make sure 'search' matches the file content exactly. ` +
-      `Use ler_arquivo to see the current content before editing.`;
+    msg = t("tool.zero_replacements", resolved);
     log.warn(`fileEdit: 0 replacements for ${resolved} — search string not found`);
   } else {
-    msg = `[SUCCESS] ${result.replacements} replacement(s) applied to ${resolved}`;
+    msg = t("tool.replacements_applied", result.replacements, resolved);
   }
   if (impactHint) {
     msg += `\n\n${impactHint}`;

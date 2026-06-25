@@ -13,21 +13,28 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 
 const originalEnv = { ...process.env };
 
-beforeEach(() => {
-  delete process.env.CLAUDE_KILLER_LANG;
+beforeEach(async () => {
+  // Reset language-related env vars EXCEPT CLAUDE_KILLER_LANG (set by vitest-setup.ts)
   delete process.env.LANG;
   delete process.env.LC_ALL;
   delete process.env.LC_MESSAGES;
   delete process.env.LANGUAGE;
+  // Keep CLAUDE_KILLER_LANG=en (from setup) so tests default to English
+  process.env.CLAUDE_KILLER_LANG = "en";
   vi.resetModules();
+  // Reset i18n cache after module reset
+  const mod = await import("./../i18n.js");
+  mod.resetAllLanguageState();
 });
 
-afterEach(() => {
+afterEach(async () => {
   for (const [k, v] of Object.entries(originalEnv)) {
     if (v === undefined) delete process.env[k];
     else process.env[k] = v;
   }
   vi.resetModules();
+  const mod = await import("./../i18n.js");
+  mod.resetAllLanguageState();
 });
 
 // ─── translate (getCommandI18n) ────────────────────────────────────────────
@@ -57,9 +64,11 @@ describe("translate — getCommandI18n (fallbacks e variações)", () => {
 // ─── detectLocale (detectLanguage) ─────────────────────────────────────────
 describe("detectLocale — detectLanguage (variações de formato)", () => {
   it("detecta pt-BR a partir de variações de formatação (pt-br, pt_BR, pt, pt-PT)", async () => {
+    delete process.env.CLAUDE_KILLER_LANG;
     // pt-br (com hífen, lowercase)
     process.env.LC_MESSAGES = "pt-br";
-    let { detectLanguage } = await import("./../i18n.js");
+    let { detectLanguage, resetLanguageCache } = await import("./../i18n.js");
+    resetLanguageCache();
     expect(detectLanguage()).toBe("pt-BR");
 
     delete process.env.LC_MESSAGES;
@@ -67,8 +76,11 @@ describe("detectLocale — detectLanguage (variações de formato)", () => {
 
     // pt (apenas prefixo)
     process.env.LC_ALL = "pt";
-    ({ detectLanguage } = await import("./../i18n.js"));
+    ({ detectLanguage, resetLanguageCache } = await import("./../i18n.js"));
+    resetLanguageCache();
     expect(detectLanguage()).toBe("pt-BR");
+    process.env.CLAUDE_KILLER_LANG = "en";
+    resetLanguageCache();
   });
 
   it("prioriza CLAUDE_KILLER_LANG sobre LANG/LC_ALL mesmo quando estes estão em pt-BR", async () => {
@@ -94,8 +106,10 @@ describe("getLocalizedSlashCommands (integrações)", () => {
   });
 
   it("traduz TODOS os comandos para pt-BR quando idioma detectado é pt-BR", async () => {
+    delete process.env.CLAUDE_KILLER_LANG;
     process.env.LANG = "pt_BR.UTF-8";
-    const { getLocalizedSlashCommands } = await import("./../i18n.js");
+    const { getLocalizedSlashCommands, resetLanguageCache } = await import("./../i18n.js");
+    resetLanguageCache();
     const cmds = getLocalizedSlashCommands();
     // Todos os comandos devem ter uma descrição não-vazia em pt-BR
     for (const c of cmds) {
@@ -107,21 +121,25 @@ describe("getLocalizedSlashCommands (integrações)", () => {
     // /exit deve estar em português
     const exit = cmds.find((c) => c.cmd === "/exit");
     expect(exit?.desc).toBe("Sair");
+    process.env.CLAUDE_KILLER_LANG = "en";
+    resetLanguageCache();
   });
 });
 
 // ─── edge cases ────────────────────────────────────────────────────────────
 describe("edge cases", () => {
   it("setLanguage persiste entre chamadas de getCommandI18n dentro da mesma instância", async () => {
-    const { setLanguage, getCommandI18n } = await import("./../i18n.js");
+    const { setLanguage, getCommandI18n, resetLanguageCache } = await import("./../i18n.js");
+    resetLanguageCache();
     setLanguage("pt-BR");
-    expect(getCommandI18n("/memory").desc).toBe("Show project memory");
+    expect(getCommandI18n("/memory").desc).toBe("Mostrar memória do projeto");
     // Segunda chamada deve continuar em pt-BR (cacheado)
     expect(getCommandI18n("/todos").desc).toBe("Mostrar lista de tarefas");
     // Alterna para en
     setLanguage("en");
     expect(getCommandI18n("/memory").desc).toBe("Show project memory");
     expect(getCommandI18n("/todos").desc).toBe("Show todo list");
+    resetLanguageCache();
   });
 
   it("CLAUDE_KILLER_LANG com valor inválido/não-reconhecido cai para detecção por LANG", async () => {

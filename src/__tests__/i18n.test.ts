@@ -7,36 +7,50 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 describe("i18n", () => {
   const originalEnv = { ...process.env };
 
-  beforeEach(() => {
-    // Reset language-related env vars
-    delete process.env.CLAUDE_KILLER_LANG;
+  beforeEach(async () => {
+    // Reset language-related env vars EXCEPT CLAUDE_KILLER_LANG (set by vitest-setup.ts)
     delete process.env.LANG;
     delete process.env.LC_ALL;
     delete process.env.LC_MESSAGES;
     delete process.env.LANGUAGE;
+    // Keep CLAUDE_KILLER_LANG=en (from setup) so tests default to English
+    process.env.CLAUDE_KILLER_LANG = "en";
     vi.resetModules();
+    // Reset i18n cache after module reset
+    const mod = await import("./../i18n.js");
+    mod.resetAllLanguageState();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     // Restore env
     for (const [k, v] of Object.entries(originalEnv)) {
       if (v === undefined) delete process.env[k];
       else process.env[k] = v;
     }
     vi.resetModules();
+    const mod = await import("./../i18n.js");
+    mod.resetAllLanguageState();
   });
 
   describe("detectLanguage", () => {
     it("should return pt-BR when LANG=pt_BR.UTF-8", async () => {
+      delete process.env.CLAUDE_KILLER_LANG; // LANG takes precedence in this test
       process.env.LANG = "pt_BR.UTF-8";
-      const { detectLanguage } = await import("./../i18n.js");
+      const { detectLanguage, resetLanguageCache } = await import("./../i18n.js");
+      resetLanguageCache();
       expect(detectLanguage()).toBe("pt-BR");
+      process.env.CLAUDE_KILLER_LANG = "en"; // restore
+      resetLanguageCache();
     });
 
     it("should return pt-BR when LC_ALL=pt_BR.UTF-8", async () => {
+      delete process.env.CLAUDE_KILLER_LANG;
       process.env.LC_ALL = "pt_BR.UTF-8";
-      const { detectLanguage } = await import("./../i18n.js");
+      const { detectLanguage, resetLanguageCache } = await import("./../i18n.js");
+      resetLanguageCache();
       expect(detectLanguage()).toBe("pt-BR");
+      process.env.CLAUDE_KILLER_LANG = "en";
+      resetLanguageCache();
     });
 
     it("should return en when LANG=en_US.UTF-8", async () => {
@@ -46,8 +60,13 @@ describe("i18n", () => {
     });
 
     it("should return en when no env vars set (default)", async () => {
-      const { detectLanguage } = await import("./../i18n.js");
-      expect(detectLanguage()).toBe("en");
+      // Setup forces CLAUDE_KILLER_LANG=en for tests; reset to test real default
+      delete process.env.CLAUDE_KILLER_LANG;
+      const { detectLanguage, resetLanguageCache } = await import("./../i18n.js");
+      resetLanguageCache();
+      // Default is pt-BR now (project default)
+      expect(detectLanguage()).toBe("pt-BR");
+      process.env.CLAUDE_KILLER_LANG = "en"; // restore for other tests
     });
 
     it("should respect CLAUDE_KILLER_LANG=pt-BR override", async () => {
@@ -65,24 +84,34 @@ describe("i18n", () => {
     });
 
     it("should detect pt from LANGUAGE env var", async () => {
+      delete process.env.CLAUDE_KILLER_LANG;
       process.env.LANGUAGE = "pt_BR:pt:en";
-      const { detectLanguage } = await import("./../i18n.js");
+      const { detectLanguage, resetLanguageCache } = await import("./../i18n.js");
+      resetLanguageCache();
       expect(detectLanguage()).toBe("pt-BR");
+      process.env.CLAUDE_KILLER_LANG = "en";
+      resetLanguageCache();
     });
   });
 
   describe("getCommandI18n", () => {
-    it("should return English description by default", async () => {
-      const { getCommandI18n } = await import("./../i18n.js");
+    it("should return English description by default (setup forces en)", async () => {
+      const { getCommandI18n, resetLanguageCache } = await import("./../i18n.js");
+      resetLanguageCache();
       const i18n = getCommandI18n("/help");
       expect(i18n.desc).toBe("Show help");
+      resetLanguageCache();
     });
 
     it("should return Portuguese description when LANG=pt_BR", async () => {
+      delete process.env.CLAUDE_KILLER_LANG;
       process.env.LANG = "pt_BR.UTF-8";
-      const { getCommandI18n } = await import("./../i18n.js");
+      const { getCommandI18n, resetLanguageCache } = await import("./../i18n.js");
+      resetLanguageCache();
       const i18n = getCommandI18n("/help");
       expect(i18n.desc).toBe("Mostrar ajuda");
+      process.env.CLAUDE_KILLER_LANG = "en";
+      resetLanguageCache();
     });
 
     it("should return subcommands for /effort", async () => {
@@ -105,9 +134,15 @@ describe("i18n", () => {
 
     it("should return PT-BR description for /effort", async () => {
       process.env.LANG = "pt_BR.UTF-8";
-      const { getCommandI18n } = await import("./../i18n.js");
+      const { getCommandI18n, resetLanguageCache } = await import("./../i18n.js");
+      resetLanguageCache();
+      // CLAUDE_KILLER_LANG from setup takes precedence, so delete it
+      const savedLang = process.env.CLAUDE_KILLER_LANG;
+      delete process.env.CLAUDE_KILLER_LANG;
       const i18n = getCommandI18n("/effort");
-      expect(i18n.desc).toContain("effort");
+      expect(i18n.desc).toContain("esforço");
+      process.env.CLAUDE_KILLER_LANG = savedLang;
+      resetLanguageCache();
     });
 
     it("should return PT-BR description for /hub", async () => {
@@ -119,15 +154,16 @@ describe("i18n", () => {
   });
 
   describe("getLocalizedSlashCommands", () => {
-    it("should return all 20 commands", async () => {
+    it("should return all 21 commands", async () => {
       const { getLocalizedSlashCommands } = await import("./../i18n.js");
       const cmds = getLocalizedSlashCommands();
-      expect(cmds.length).toBe(20);
+      expect(cmds.length).toBe(21);
       expect(cmds.some((c) => c.cmd === "/help")).toBe(true);
       expect(cmds.some((c) => c.cmd === "/effort")).toBe(true);
       expect(cmds.some((c) => c.cmd === "/mode")).toBe(true);
       expect(cmds.some((c) => c.cmd === "/exit")).toBe(true);
       expect(cmds.some((c) => c.cmd === "/organize")).toBe(true);
+      expect(cmds.some((c) => c.cmd === "/lang")).toBe(true);
     });
 
     it("should include subcommands for commands that have them", async () => {
@@ -147,13 +183,17 @@ describe("i18n", () => {
     });
 
     it("should return PT-BR descriptions when language is pt-BR", async () => {
+      delete process.env.CLAUDE_KILLER_LANG;
       process.env.LANG = "pt_BR.UTF-8";
-      const { getLocalizedSlashCommands } = await import("./../i18n.js");
+      const { getLocalizedSlashCommands, resetLanguageCache } = await import("./../i18n.js");
+      resetLanguageCache();
       const cmds = getLocalizedSlashCommands();
       const help = cmds.find((c) => c.cmd === "/help");
       expect(help?.desc).toBe("Mostrar ajuda");
       const exit = cmds.find((c) => c.cmd === "/exit");
       expect(exit?.desc).toBe("Sair");
+      process.env.CLAUDE_KILLER_LANG = "en";
+      resetLanguageCache();
     });
   });
 

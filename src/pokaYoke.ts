@@ -18,6 +18,7 @@
  */
 
 import * as path from "node:path";
+import { t } from "./i18n.js";
 
 // --- Types -------------------------------------------------------------------
 
@@ -64,10 +65,7 @@ export function pokaYokeCheck(
     if (!isNonEmptyString(rawPath)) {
       return {
         ok: false,
-        error:
-          `[POKA-YOKE] Tool "${toolName}" requires a non-empty file path. ` +
-          `Provide "caminho" (or "path") with a non-empty string. ` +
-          `Example: ${toolName}({ caminho: "/abs/path/to/file.ts" })`,
+        error: t("poka.empty_path", toolName),
       };
     }
     // Null bytes em paths são PERIGOSOS: em bindings nativos/C, "\0" é
@@ -151,14 +149,7 @@ function checkEditarArquivo(args: Record<string, unknown>): PokaYokeResult {
   if (!hasEditsArray && !hasSearchReplace && !isCreateIfMissing && !isAppendMode) {
     return {
       ok: false,
-      error:
-        `[POKA-YOKE] editar_arquivo requires EITHER "edits" (array of {search, replace, all?}) ` +
-        `OR "search" + "replace" as strings. ` +
-        `OR "replace" + "createIfMissing: true" (to create new file or append to existing). ` +
-        `Example 1: editar_arquivo({ path: "/x.ts", search: "foo", replace: "bar" }) ` +
-        `Example 2: editar_arquivo({ path: "/x.ts", edits: [{search: "foo", replace: "bar"}] }) ` +
-        `Example 3: editar_arquivo({ path: "/new.ts", replace: "content", createIfMissing: true }) ` +
-        `Example 4 (append): editar_arquivo({ path: "/x.ts", search: "", replace: "// comment", createIfMissing: true })`,
+      error: t("poka.editar_requires_args"),
     };
   }
   return { ok: true };

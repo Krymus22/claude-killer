@@ -238,28 +238,10 @@ export function detectFalsePromise(
  * The message is deliberately firm but constructive — it tells the model
  * what it did wrong and what to do instead.
  */
+import { t } from "./i18n.js";
+
 export function buildFalsePromiseRejectionMessage(matchedPhrase: string, attempt: number): string {
-  const attemptSuffix = attempt > 1 ? ` (attempt ${attempt} of 2)` : "";
-  return [
-    `[FALSE_PROMISE_DETECTED${attemptSuffix}]`,
-    ``,
-    `Your last message said "${matchedPhrase}..." but you didn't call any tool or edit any file.`,
-    ``,
-    `This is a problem because the user expects you to fulfill the promised action. To the user, it looks like you "stopped without doing anything".`,
-    ``,
-    `You have two options:`,
-    ``,
-    `1. **Call a tool NOW** to fulfill the promise:`,
-    `   - ler_arquivo({ path: "..." }) to investigate a file`,
-    `   - buscar_texto({ padrao: "...", caminho: "..." }) to search for something`,
-    `   - explorar_subagente({ questao: "..." }) to delegate the investigation`,
-    `   - executar_comando({ comando: "..." }) to run something`,
-    ``,
-    `2. **Explicitly explain WHY you cannot act now** (e.g. "I don't have access to X", "I need you to confirm Y"):`,
-    `   - Instead of "I will investigate", say "I cannot investigate because Z. Can you provide W?"`,
-    ``,
-    `DO NOT repeat "I will investigate" without calling a tool — this will be detected again and after 2 attempts the agent will terminate.`,
-  ].join("\n");
+  return t("promise.false_detected", matchedPhrase, attempt);
 }
 
 /**

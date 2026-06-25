@@ -7,6 +7,7 @@
  */
 
 import * as log from "./logger.js";
+import { t } from "./i18n.js";
 
 interface SchemaProperty {
   type?: string;
@@ -161,9 +162,6 @@ export function validateToolCall(
 }
 
 export function formatValidationErrors(toolName: string, errors: string[]): string {
-  return (
-    `[ERROR: SCHEMA VALIDATION] The call to "${toolName}" has invalid arguments:\n\n` +
-    errors.map((e) => `  X ${e}`).join("\n") +
-    `\n\nFix the arguments and try again. Check the types and required fields.`
-  );
+  const errsStr = errors.map((e) => `  X ${e}`).join("\n");
+  return t("schema.invalid_args", toolName, errsStr);
 }

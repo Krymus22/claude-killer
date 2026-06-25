@@ -146,6 +146,7 @@ let activeManifests: ToolManifest[] = [];
  * Default depends on provider: NVIDIA=2, ZenMux=10.
  */
 import { getProviderMaxSubAgents } from "./apiProvider.js";
+import { t } from "./i18n.js";
 const MAX_CONCURRENT_SUB_AGENTS = parseInt(
   process.env.MAX_CONCURRENT_SUB_AGENTS ?? String(getProviderMaxSubAgents()),
   10
@@ -404,14 +405,14 @@ const toolHandlers: Record<string, ToolHandler> = {
       const { webSearch } = await import("./apiResearcher.js");
       const results = await webSearch(query, maxResults);
       if (results.length === 0) {
-        return { resultStr: `[INFO] No results found for: "${query}"`, usedHeal: false };
+        return { resultStr: t("tool.no_results_for", query), usedHeal: false };
       }
       const formatted = results.map((r: any, i: number) =>
-        `${i + 1}. ${r.title ?? "(untitled)"}\n   URL: ${r.url}\n   ${r.snippet ?? r.description ?? ""}`
+        `${i + 1}. ${r.title ?? t("ui.untitled")}\n   URL: ${r.url}\n   ${r.snippet ?? r.description ?? ""}`
       ).join("\n\n");
-      return { resultStr: `[WEB RESULTS] ${results.length} result(s) for "${query}":\n\n${formatted}`, usedHeal: false };
+      return { resultStr: `${t("tool.web_results", results.length, query)}:\n\n${formatted}`, usedHeal: false };
     } catch (err) {
-      return { resultStr: `[ERROR] Web search failed: ${(err as Error).message}`, usedHeal: false };
+      return { resultStr: t("tool.web_search_failed", (err as Error).message), usedHeal: false };
     }
   },
 
@@ -425,11 +426,11 @@ const toolHandlers: Record<string, ToolHandler> = {
       const { webRead } = await import("./apiResearcher.js");
       const content = await webRead(url);
       const truncated = content.length > maxLength
-        ? content.slice(0, maxLength) + `\n\n[CONTENT TRUNCATED — ${content.length} chars total, showing ${maxLength}]`
+        ? content.slice(0, maxLength) + t("tool.content_truncated", content.length, maxLength)
         : content;
-      return { resultStr: truncated || `[ERROR] Could not extract content from: ${url}`, usedHeal: false };
+      return { resultStr: truncated || t("tool.url_extract_failed", url), usedHeal: false };
     } catch (err) {
-      return { resultStr: `[ERROR] Failed to read URL: ${(err as Error).message}`, usedHeal: false };
+      return { resultStr: t("tool.url_read_failed", (err as Error).message), usedHeal: false };
     }
   },
 
@@ -440,7 +441,7 @@ const toolHandlers: Record<string, ToolHandler> = {
       maxDepth: args.maxDepth as number | undefined,
       ignore: args.ignore as string[] | undefined,
     });
-    const output = results.length > 0 ? results.join("\n") : "No files found.";
+    const output = results.length > 0 ? results.join("\n") : t("tool.no_files_found");
     return { resultStr: output, usedHeal: false };
   },
 
@@ -467,8 +468,8 @@ const toolHandlers: Record<string, ToolHandler> = {
     const result = multiFileEdit(requests);
     const errorList = result.errors.map((e) => `${e.file}: ${e.error}`).join("; ");
     const output = result.success
-      ? `[SUCCESS] Edited: ${result.filesEdited.join(", ")}`
-      : `[ERROR] Failures: ${errorList}`;
+      ? t("tool.edited_files", result.filesEdited.join(", "))
+      : t("tool.edit_failures", errorList);
     return { resultStr: output, usedHeal: false };
   },
 
@@ -556,7 +557,7 @@ const toolHandlers: Record<string, ToolHandler> = {
     const suggestions = suggester.suggest(message);
     
     if (suggestions.length === 0) {
-      return { resultStr: "No tool suggested for this message.", usedHeal: false };
+      return { resultStr: t("ui.no_tool_suggested"), usedHeal: false };
     }
     
     const output = [
@@ -626,8 +627,7 @@ const toolHandlers: Record<string, ToolHandler> = {
     if (args.notes) patch.notes = asString(args.notes);
     const updated = updateTaskState(patch);
     return {
-      resultStr: `[SUCCESS] TASK_STATE.md updated at ${updated.updatedAt}.\n` +
-        `Done: ${updated.done.length} | Todo: ${updated.todo.length} | Decisions: ${updated.decisions.length} | Bugs: ${updated.bugs.length}`,
+      resultStr: t("tool.task_state_updated", updated.updatedAt, updated.done.length, updated.todo.length, updated.decisions.length, updated.bugs.length),
       usedHeal: false,
     };
   },
@@ -640,7 +640,7 @@ const toolHandlers: Record<string, ToolHandler> = {
     const { markTaskItemDone } = await import("./taskState.js");
     const updated = markTaskItemDone(item);
     return {
-      resultStr: `[SUCCESS] Item moved to 'done': "${item}".\nTodo remaining: ${updated.todo.length}`,
+      resultStr: t("tool.item_moved_to_done", item, updated.todo.length),
       usedHeal: false,
     };
   },
@@ -648,7 +648,7 @@ const toolHandlers: Record<string, ToolHandler> = {
   "ler_estado": async () => {
     const summary = getTaskStateSummary();
     return {
-      resultStr: summary ?? "[INFO] No TASK_STATE.md found. Use atualizar_estado to create one.",
+      resultStr: summary ?? t("tool.task_state_not_found"),
       usedHeal: false,
     };
   },
@@ -671,7 +671,7 @@ const toolHandlers: Record<string, ToolHandler> = {
       const result = await runSubAgent({ question, cwd, maxToolCalls: maxCalls });
     if (result === null) {
       return {
-        resultStr: "[INFO] Sub-agent did not execute (effort level too low or failed). Use effort=high or max to enable.",
+        resultStr: t("tool.subagent_disabled"),
         usedHeal: false,
       };
     }
@@ -744,10 +744,7 @@ async function dispatchToolCall(
     blockedCallCounter.set(argSignature, (blockedCallCounter.get(argSignature) ?? 0) + 1);
     const attemptNum = blockedCallCounter.get(argSignature)!;
     if (attemptNum >= 3) {
-      const stopMsg =
-        `[STOP] You have called "${name}" with the same arguments ${attemptNum} times and it keeps failing. ` +
-        `STOP retrying the same call. Respond to the user now with what you have so far, ` +
-        `explain the issue clearly, and ask for guidance if needed. Do NOT call "${name}" again with the same arguments.`;
+      const stopMsg = t("abort.stop_duplicate", name, attemptNum);
       log.warn(`[DEDUP] Tool ${name} blocked ${attemptNum}x with same args — forcing stop`);
       return { resultStr: stopMsg, usedHeal: false };
     }
@@ -1314,10 +1311,7 @@ async function handleChatResponse(
       log.warn(`[DEDUP-ABORT] Aborting agent loop: tool "${blockedTool}" blocked ${maxBlocked}x with same args`);
       // Return immediately with a final error message. Don't recurse — the IA will
       // just call the same tool again. Force-terminate.
-      const abortMsg =
-        `[LOOP-ABORT] The agent was terminated because tool "${blockedTool}" was called ${maxBlocked} times ` +
-        `with the same arguments and kept failing. The model appears unable to recover from this state. ` +
-        `Please retry with a different prompt or model.`;
+      const abortMsg = t("abort.loop_detected", blockedTool, maxBlocked);
       return abortMsg;
     }
 

@@ -8,6 +8,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { execSync } from "node:child_process";
 import * as log from "./logger.js";
+import { t } from "./i18n.js";
 
 // --- Types -------------------------------------------------------------------
 
@@ -618,9 +619,7 @@ export function formatTestResult(result: TestResult): string {
 
 export function formatFixSuggestions(suggestions: FixSuggestion[]): string {
   if (suggestions.length === 0) {
-    return "[INFO] No fix suggestions available. This tool analyzes test failures — " +
-      "if the project has no test framework (vitest/jest/pytest/cargo/go) or no tests failed, " +
-      "no suggestions can be generated. For static code analysis, use parse_ast instead.";
+    return t("fix.no_suggestions");
   }
 
   const lines = ["Fix Suggestions:"];

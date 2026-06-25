@@ -14,6 +14,8 @@
  *   4. Confirm the change is minimal and correct
  */
 
+import { t } from "./i18n.js";
+
 export interface ThinkArgs {
   /** The structured thinking content */
   pensamento: string;
@@ -32,12 +34,10 @@ export async function think(args: ThinkArgs): Promise<ThinkResult> {
   // Accept both `categoria` (PT, original) and `category` (EN, alias) for robustness
   const category = args.categoria ?? args.category ?? "general";
   const thoughtLength = args.pensamento.length;
-  
+
   return {
     confirmed: true,
-    message: `[THOUGHT RECORDED - category: ${category}, ${thoughtLength} chars]\n` +
-      `Use this space to reason before acting. ` +
-      `Now proceed with the planned action.`,
+    message: t("tool.thought_recorded", category, thoughtLength),
   };
 }
 

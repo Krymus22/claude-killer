@@ -15,6 +15,7 @@
 
 import * as path from "node:path";
 import * as log from "./logger.js";
+import { t } from "./i18n.js";
 
 const READ_TOOLS = new Set([
   "ler_arquivo",
@@ -98,12 +99,7 @@ function checkMultiFileRead(args: Record<string, unknown>, toolName: string): { 
   }
   if (unreadPaths.length === 0) return { allowed: true };
 
-  const msg =
-    `[ERROR: READ-BEFORE-WRITE] You tried to edit files without reading them first:\n` +
-    unreadPaths.map((p) => `  - ${p}`).join("\n") +
-    `\n\nRULES: ALWAYS use ler_arquivo to read a file BEFORE editing it. ` +
-    `This ensures you know the current content and avoids hallucinations.\n` +
-    `Call ler_arquivo for each file above and THEN do the edit.`;
+  const msg = t("gate.read_before_write", unreadPaths.map((p) => `  - ${p}`).join("\n"));
   log.warn(`[READ-BEFORE-WRITE] Blocked ${toolName} on unread files: ${unreadPaths.join(", ")}`);
   return { allowed: false, message: msg };
 }

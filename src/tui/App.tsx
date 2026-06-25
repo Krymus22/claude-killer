@@ -354,7 +354,24 @@ const COMMAND_HANDLERS: Record<string, (arg: string | null) => CommandResult> = 
   "/organize": () => handleOrganizeCommand(),
   // Sprint 11: configurar tools via mini chat
   "/configurar": (arg) => handleConfigurarCommand(arg),
+  // i18n: trocar idioma em runtime
+  "/lang": (arg) => handleLangCommand(arg),
 };
+
+function handleLangCommand(arg: string | null): CommandResult {
+  const { detectLanguage, setLanguage, resetLanguageCache } = require("../i18n.js") as typeof import("../i18n.js");
+  if (!arg) {
+    const current = detectLanguage();
+    return { handled: true, message: `Idioma atual: ${current}\nUse: /lang pt-BR | en` };
+  }
+  const valid = ["pt-BR", "en"];
+  if (!valid.includes(arg)) {
+    return { handled: true, message: `Invalid language: ${arg}\nOptions: pt-BR, en` };
+  }
+  setLanguage(arg as any);
+  resetLanguageCache();
+  return { handled: true, message: `Idioma alterado para: ${arg}` };
+}
 
 function handleEffortCommand(arg: string | null): CommandResult {
   if (!arg) {

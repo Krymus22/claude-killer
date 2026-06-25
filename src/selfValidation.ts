@@ -50,6 +50,8 @@ export function shouldSelfValidate(touchedFilesCount: number): boolean {
  * Inject the self-validation prompt as a system message.
  * Returns the prompt that was injected (for logging).
  */
+import { t } from "./i18n.js";
+
 export function injectSelfValidationPrompt(touchedFiles: string[]): string {
   validationCountThisTurn++;
 
@@ -57,23 +59,7 @@ export function injectSelfValidationPrompt(touchedFiles: string[]): string {
     ? touchedFiles.slice(0, 5).join("\n  - ") + `\n  - ... and ${touchedFiles.length - 5} more`
     : touchedFiles.join("\n  - ");
 
-  const prompt = `[MANDATORY SELF-VALIDATION] Before responding to the user, you MUST use the pensar() tool to explicitly answer these 5 questions about the files you touched this turn:
-
-Modified files:
-  - ${fileList}
-
-Required questions (answer ALL in pensar()):
-1. WHAT CHANGED: For each file, summarize in 1 line what was changed.
-2. VERIFICATION: Which tests/commands did you run to validate? If none, why?
-3. REMAINING ERRORS: Are there any type/lint/runtime errors you know are still there? List each one.
-4. EDGE CASES: Which boundary cases did you consider? (e.g. empty input, null, concurrency, encoding)
-5. HONESTY: Did you agree with the user on something you didn't verify? Did you say "yes" or "it works" without checking? If so, correct it now. Don't lie to please.
-
-After validating, if you discover any problem, FIX it before responding.
-If everything is OK, respond to the user normally with a concise summary of the changes.
-
-IMPORTANT: Do not skip this validation. Even if you are sure, do the checklist.
-Remember: HONESTY OVER AGREEMENT. If you said something you didn't verify, correct it.`;
+  const prompt = t("prompt.self_validation", fileList);
 
   history.addSystemMessage(prompt);
   log.debug(`[SELF_VAL] Injected self-validation prompt (turn validations: ${validationCountThisTurn})`);

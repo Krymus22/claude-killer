@@ -16,6 +16,7 @@ import { previewAndApprove } from "./diffPreview.js";
 import { executePreFileWriteHooks, executePostFileWriteHooks } from "./hooks.js";
 import { saveBackup, restoreBackup, listBackups } from "./rollbackStore.js";
 import * as log from "./logger.js";
+import { t } from "./i18n.js";
 
 // --- ler_arquivo -------------------------------------------------------------
 
@@ -324,19 +325,16 @@ export function desfazerEdicao(args: DesfazerEdicaoArgs): string {
 
   const ok = restoreBackup(resolved);
   if (ok) {
-    return `[SUCCESS] File restored from backup: ${resolved}`;
+    return t("tool.file_restored", resolved);
   }
 
   // List available backups for diagnostics
   const backups = listBackups(resolved);
   if (backups.length === 0) {
-    return `[ERROR] No backup available for ${resolved}. ` +
-      `Backups are created automatically before each successful aplicar_diff / editar_arquivo on existing files, ` +
-      `and expire after 5 minutes.`;
+    return t("tool.no_backup_available", resolved);
   }
 
-  return `[ERROR] Failed to restore backup for ${resolved}. ` +
-    `There are ${backups.length} backup(s) registered but the restore failed (backup file may be corrupted or missing).`;
+  return t("tool.restore_backup_failed", resolved, backups.length);
 }
 
 // --- listar_backups -----------------------------------------------------------
@@ -425,7 +423,7 @@ export async function executarComando(
 
     child.on("error", (err) => {
       clearTimeout(timer);
-      const output = `[ERROR] Failed to start command: ${err.message}`;
+      const output = t("tool.command_start_failed", err.message);
       log.toolResult("executar_comando", false, err.message);
       resolve(output);
     });
@@ -435,7 +433,7 @@ export async function executarComando(
       const combined = [stdout, stderr].filter(Boolean).join("\n").trim();
 
       if (killed) {
-        const out = `[ERROR] Command exceeded timeout of ${timeoutMs}ms and was killed.\n${combined}`;
+        const out = t("tool.command_timeout", timeoutMs, combined);
         log.toolResult("executar_comando", false, "timeout");
         resolve(out);
         return;
@@ -443,9 +441,9 @@ export async function executarComando(
 
       if (code === 0) {
         log.toolResult("executar_comando", true, `exit=0`);
-        resolve(combined || "[OK] Command completed with no output.");
+        resolve(combined || t("tool.command_no_output"));
       } else {
-        const out = `[ERROR] Command failed (exit=${code}):\n${combined}`;
+        const out = t("tool.command_failed", code, combined);
         log.toolResult("executar_comando", false, `exit=${code}`);
         resolve(out);
       }

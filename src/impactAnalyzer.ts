@@ -31,6 +31,7 @@ import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as log from "./logger.js";
+import { t } from "./i18n.js";
 
 // --- Types ------------------------------------------------------------------
 
@@ -611,9 +612,9 @@ export function formatImpactHint(report: ImpactReport): string {
   if (report.usages.length === 0) return "";
 
   const lines: string[] = [];
-  lines.push(`[IMPACT ANALYSIS] Before editing ${path.basename(report.targetFile)}:`);
-  lines.push(`Found ${report.symbols.length} symbol(s) defined in this file.`);
-  lines.push(`${report.usages.length} usage(s) found in ${report.affectedFiles.length} file(s):`);
+  lines.push(t("impact.header", path.basename(report.targetFile)));
+  lines.push(t("impact.symbols_count", report.symbols.length));
+  lines.push(t("impact.usages_count", report.usages.length, report.affectedFiles.length));
   lines.push("");
 
   // Group usages by file
@@ -629,13 +630,12 @@ export function formatImpactHint(report: ImpactReport): string {
       lines.push(`    L${u.line}: ${u.lineContent}`);
     }
     if (usages.length > 5) {
-      lines.push(`    ... and ${usages.length - 5} more usage(s)`);
+      lines.push(t("impact.more_usages", usages.length - 5));
     }
   }
 
   lines.push("");
-  lines.push(`If you RENAME or REMOVE any of these symbols, you must also edit`);
-  lines.push(`all the files listed above. Otherwise, it will break at runtime.`);
+  lines.push(t("impact.rename_warning"));
 
   return lines.join("\n");
 }
@@ -645,7 +645,7 @@ export function formatImpactHint(report: ImpactReport): string {
  */
 export function formatImpactSummary(report: ImpactReport): string {
   if (report.usages.length === 0) return "no dependencies";
-  return `${report.usages.length} usage(s) in ${report.affectedFiles.length} file(s)`;
+  return t("impact.summary", report.usages.length, report.affectedFiles.length);
 }
 
 /** Clear the cache. Useful for tests. */

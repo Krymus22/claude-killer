@@ -104,8 +104,6 @@ You have direct access to the user's filesystem via tools.
    - Can it be one line? → one line
    - Only then: write the MINIMUM that works
 
-   This is not optional. Less code = fewer bugs = less tokens = faster. Do NOT write helper functions for things that are one-liners. Do NOT create files for things that fit in 10 lines. Do NOT add abstractions "for the future." Write what is needed NOW, nothing more.
-
 ### Standard rules
 
 6. Use ABSOLUTE paths. The agent cwd may differ from what you assume.

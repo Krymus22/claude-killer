@@ -257,11 +257,17 @@ export async function runBugHunter(
       }
 
       const choice = response.choices?.[0];
-      if (!choice) break;
+      if (!choice) {
+        log.warn(`[BUG_HUNTER] No choice in response — breaking loop`);
+        break;
+      }
 
       const msg = choice.message;
       const content = msg?.content ?? "";
       const toolCalls = msg?.tool_calls;
+
+      // DEBUG: log what the model returned so we can see why it's failing
+      log.info(`[BUG_HUNTER] Turn ${turn}: finish_reason=${choice.finish_reason}, content=${content ? content.length + " chars" : "null"}, tool_calls=${toolCalls ? toolCalls.length + " calls" : "none"}`);
 
       // If model wants to use tools (read files), execute them and continue
       if (toolCalls && toolCalls.length > 0 && choice.finish_reason === "tool_calls") {
@@ -313,11 +319,12 @@ export async function runBugHunter(
 
       // No tool calls — this is the final verdict
       finalContent = content;
+      log.info(`[BUG_HUNTER] Final verdict received: ${content.length} chars`);
       break;
     }
 
     if (!finalContent || finalContent.length < 20) {
-      log.warn("[BUG_HUNTER] Empty or too-short response from hunter after loop");
+      log.warn(`[BUG_HUNTER] Empty or too-short response after loop (finalContent=${finalContent ? finalContent.length + " chars" : "null"}, turns exhausted=${turn >= MAX_HUNTER_TURNS})`);
       return { shouldBlock: false, findings: [], message: "", completed: false };
     }
 
@@ -529,8 +536,12 @@ function parseFindings(content: string): BugFinding[] {
 
   // Match patterns like:
   // [CRITICAL] file.luau:42 — description
-  // [HIGH] file.ts:10 — description
-  const regex = /\[(CRITICAL|HIGH|MEDIUM|LOW)\]\s+([^\s:]+)(?::(\d+))?\s*[—\-–]\s*(.+?)(?=\n\s*(?:\[|VERDICT|Impact|Fix)|$)/gis;
+  // [CRITICAL] /abs/path/file.ts:42 - description
+  // **[CRITICAL]** file.ts — description
+  // [CRITICAL] file.ts:42: description
+  // [CRITICAL] file.ts:42 — description
+  // Flexível: aceita vários separadores (—, -, –, :) e paths absolutos
+  const regex = /\**\[(CRITICAL|HIGH|MEDIUM|LOW)\]\**\s+([^\s\[]+?)(?::(\d+))?\s*[—\-–:]\s*(.+?)(?=\n\s*(?:\**\[|VERDICT|Impact|Fix|$))/gis;
   let match;
   while ((match = regex.exec(content)) !== null) {
     const severity = match[1].toLowerCase() as BugFinding["severity"];
@@ -539,7 +550,7 @@ function parseFindings(content: string): BugFinding[] {
     const description = match[4].trim().split("\n")[0].trim();
 
     // Try to extract Fix
-    const fixMatch = content.slice(match.index).match(/Fix:\s*(.+?)(?=\n\s*\[|\n\s*VERDICT|$)/is);
+    const fixMatch = content.slice(match.index).match(/Fix:\s*(.+?)(?=\n\s*\**\[|\n\s*VERDICT|$)/is);
     const suggestion = fixMatch ? fixMatch[1].trim() : "No fix suggested.";
 
     findings.push({
@@ -549,6 +560,34 @@ function parseFindings(content: string): BugFinding[] {
       description,
       suggestion,
     });
+  }
+
+  // Fallback: if regex found nothing but content has severity keywords, 
+  // try a simpler line-by-line parse
+  if (findings.length === 0) {
+    const lines = content.split("\n");
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const simpleMatch = line.match(/\**\[(CRITICAL|HIGH|MEDIUM|LOW)\]\**\s*(.*)/i);
+      if (simpleMatch) {
+        const severity = simpleMatch[1].toLowerCase() as BugFinding["severity"];
+        const rest = simpleMatch[2].trim();
+        // Try to extract file and description from rest
+        const fileMatch = rest.match(/^([^\s—\-–:]+)(?::(\d+))?\s*[—\-–:]?\s*(.*)/);
+        const file = fileMatch ? fileMatch[1] : "unknown";
+        const lineNum = fileMatch?.[2] || undefined;
+        const description = fileMatch?.[3]?.trim() || rest;
+
+        // Look for Fix in next few lines
+        let suggestion = "No fix suggested.";
+        for (let j = i + 1; j < Math.min(i + 5, lines.length); j++) {
+          const fixLine = lines[j].match(/Fix:\s*(.+)/i);
+          if (fixLine) { suggestion = fixLine[1].trim(); break; }
+        }
+
+        findings.push({ severity, file, line: lineNum ? String(lineNum) : undefined, description, suggestion });
+      }
+    }
   }
 
   return findings;

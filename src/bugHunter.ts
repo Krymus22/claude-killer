@@ -330,14 +330,14 @@ export async function runBugHunter(
 
     // Parse the findings from the final response
     const findings = parseFindings(finalContent);
-    log.info(`[BUG_HUNTER] Parsed ${findings.length} findings from ${finalContent.length} chars verdict`);
+    console.log(`[BUG_HUNTER] Parsed ${findings.length} findings from ${finalContent.length} chars verdict`);
     if (findings.length === 0) {
-      // Log first 500 chars of content to see what format the model used
-      log.warn(`[BUG_HUNTER] Parser found 0 findings! Content preview: ${finalContent.slice(0, 500)}`);
+      console.log(`[BUG_HUNTER] Parser found 0 findings! Content preview: ${finalContent.slice(0, 500)}`);
     }
     const criticalAndHigh = findings.filter(f => f.severity === "critical" || f.severity === "high");
     const mediumAndLow = findings.filter(f => f.severity === "medium" || f.severity === "low");
     const shouldBlock = criticalAndHigh.length > 0;
+    console.log(`[BUG_HUNTER] critical/high: ${criticalAndHigh.length}, medium/low: ${mediumAndLow.length}, shouldBlock: ${shouldBlock}`);
 
     // IDEIA A: Compare with previous round
     let comparison: { fixed: BugFinding[]; persisting: BugFinding[]; newBugs: BugFinding[] } | null = null;
@@ -358,17 +358,17 @@ export async function runBugHunter(
     const message = formatBugHuntMessage(findings, shouldBlock, comparison, projectOutput);
 
     if (shouldBlock) {
-      log.warn(`[BUG_HUNTER] Found ${criticalAndHigh.length} critical/high bug(s) — BLOCKING finish`);
+      console.log(`[BUG_HUNTER] Found ${criticalAndHigh.length} critical/high bug(s) — BLOCKING finish`);
       for (const f of findings) {
         const icon = f.severity === "critical" ? "🔴" : f.severity === "high" ? "🟠" : f.severity === "medium" ? "🟡" : "🔵";
-        log.warn(`[BUG_HUNTER] ${icon} [${f.severity.toUpperCase()}] ${f.file}${f.line ? ":" + f.line : ""} — ${f.description}`);
-        log.warn(`[BUG_HUNTER]   Fix: ${f.suggestion}`);
+        console.log(`[BUG_HUNTER] ${icon} [${f.severity.toUpperCase()}] ${f.file}${f.line ? ":" + f.line : ""} — ${f.description}`);
+        console.log(`[BUG_HUNTER]   Fix: ${f.suggestion}`);
       }
     } else {
-      log.warn(`[BUG_HUNTER] ✓ APPROVED — 0 critical/high bugs. ${mediumAndLow.length} medium/low advisory findings (injected for IA to consider).`);
+      console.log(`[BUG_HUNTER] ✓ APPROVED — 0 critical/high bugs. ${mediumAndLow.length} medium/low advisory findings (injected for IA to consider).`);
       for (const f of findings) {
         const icon = f.severity === "medium" ? "🟡" : "🔵";
-        log.warn(`[BUG_HUNTER] ${icon} [${f.severity.toUpperCase()}] ${f.file}${f.line ? ":" + f.line : ""} — ${f.description}`);
+        console.log(`[BUG_HUNTER] ${icon} [${f.severity.toUpperCase()}] ${f.file}${f.line ? ":" + f.line : ""} — ${f.description}`);
       }
     }
 

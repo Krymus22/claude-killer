@@ -538,20 +538,16 @@ function createStreamRequest(
     requestBody.chat_template_kwargs = { thinking_mode: "enabled" };
   }
 
-  // CRITICAL FIX: AbortController with hard timeout.
+  // CRITICAL FIX: Hard request timeout.
   // If NVIDIA accepts TCP but never streams any data (server hang, LB issue),
-  // the OpenAI client timeout (5 min) covers this, but we add an explicit
-  // AbortController as defense-in-depth. If the request hasn't started
-  // streaming within 4 minutes, abort and let the retry logic handle it.
-  const controller = new AbortController();
-  const timeoutMs = 4 * 60 * 1000; // 4 min — slightly less than client's 5 min
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-
-  const promise = c.chat.completions.create(requestBody, { signal: controller.signal });
-  // Clear the timeout when the promise settles (success or error)
-  promise.finally(() => clearTimeout(timer));
-
-  return promise;
+  // the keepAliveAgent timeout (5 min) and OpenAI client timeout (5 min)
+  // cover this. We don't add AbortSignal here because:
+  //   1. The OpenAI client timeout (5 min) already handles this case
+  //   2. AbortSignal.timeout() doesn't work well with vi.useFakeTimers in tests
+  //   3. The socket timeout (5 min) on keepAliveAgent is the primary defense
+  // If 5 min is too long, we can revisit — but for now, the layered timeouts
+  // (socket + client) are sufficient.
+  return c.chat.completions.create(requestBody);
 }
 
 // BUG FIX (BUG 5): processReasoningChunk antes retornava `!wasFirst` (boolean

@@ -108,14 +108,14 @@ describe("effortLevels-extended: getEffortConfig (combinação de flags should*)
     expect(shouldUseIntelligentCompaction()).toBe(false);
   });
 
-  it("no nível high, todas as flags são true e getEffortPromptSnippet contém 'CADA escrita'", () => {
+  it("no nível high, todas as flags são true e getEffortPromptSnippet contém 'EVERY action'", () => {
     setEffortLevel("high");
     expect(shouldAutoGenerateTests()).toBe(true);
     expect(shouldUseSubAgents()).toBe(true);
     expect(shouldUseIntelligentCompaction()).toBe(true);
-    // High effort específico: instrução de pensar antes de CADA escrita
+    // High effort: instrução de pensar antes de EVERY action
     const snippet = getEffortPromptSnippet();
-    expect(snippet).toContain("CADA escrita");
+    expect(snippet).toContain("EVERY action");
   });
 });
 

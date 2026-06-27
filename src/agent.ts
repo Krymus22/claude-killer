@@ -1898,11 +1898,14 @@ export async function runAgentLoop(
   try {
     result = await sendAndProcess(0, onStreamStart, onToken, onThinking, onUsage);
   } catch (err) {
-    // CRITICAL FIX: any error from sendAndProcess (API failure, checkpoint write, etc)
-    // must NOT kill the process. Return the error message as the result so the
-    // caller (test script or TUI) can handle it gracefully.
-    log.error(`[AGENT_LOOP] Fatal error: ${(err as Error).message}`);
-    result = `[ERROR] Agent loop failed: ${(err as Error).message}. Please try again.`;
+    // Log the error for debugging, but RE-THROW it so callers (tests, TUI)
+    // that expect the promise to reject still work correctly.
+    // The try/catch around runPreTurnMaintenance and maybeWriteCheckpoint
+    // (added in this same fix) prevents the most common crash causes from
+    // reaching here. If something still throws, it's a real error that
+    // should propagate.
+    log.error(`[AGENT_LOOP] Error: ${(err as Error).message}`);
+    throw err;
   } finally {
     // Always clear callbacks to prevent leaks across turns
     currentOnToolCall = undefined;

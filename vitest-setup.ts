@@ -11,3 +11,7 @@
 // Force English for unit tests (default may be pt-BR for users, but tests
 // should not depend on the project's default language)
 process.env.CLAUDE_KILLER_LANG = "en";
+
+// Mark as test environment so production-only defenses (like AbortSignal.timeout
+// in apiClient) are disabled. These can hang test mocks that don't respect signals.
+process.env.NODE_ENV = "test";

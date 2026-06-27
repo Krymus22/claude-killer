@@ -31,8 +31,8 @@ describe("thinkTool (extended) — handler pensar", () => {
     expect(r.message).toContain("10000 chars");
   });
 
-  it("preserva a categoria informada em todos os 5 valores do enum", async () => {
-    for (const cat of ["planning", "verification", "debugging", "architecture", "general"]) {
+  it("preserva a categoria informada em todos os valores do enum", async () => {
+    for (const cat of ["planning", "pre_edit", "pre_response", "debugging", "architecture", "general"]) {
       const r = await think({ pensamento: "x", category: cat });
       expect(r.message).toContain(cat);
     }

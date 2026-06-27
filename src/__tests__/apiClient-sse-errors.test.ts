@@ -344,20 +344,20 @@ describe("Server errors (5xx)", () => {
     vi.useFakeTimers({ shouldAdvanceTime: false });
     vi.setSystemTime(new Date(0));
 
-    // BUG 1 fix: 503 agora é retried (transiente). Retry 8x com backoff
-    // crescente (exponential backoff 1s+2s+4s+8s+15s+30s+30s...), depois
-    // propaga o erro.
+    // BUG 1 fix: 503 agora é retried (transiente). Retry 15x com backoff
+    // crescente (exponential backoff 1s+2s+4s+8s+15s+30s+30s...+30s = ~388s),
+    // depois propaga o erro.
     hoisted.createMock.mockRejectedValue(make5xxError(503, "service unavailable"));
 
     const p = chat(sampleMessages);
     // Registra handler ANTES de avançar o tempo (evita unhandled rejection)
     const assertion = expect(p).rejects.toThrow("service unavailable");
-    // 15 retries com backoff crescente → 16500ms no total
-    await vi.advanceTimersByTimeAsync(20_000);
+    // 15 retries com backoff exponencial — precisa avançar ~400s
+    await vi.advanceTimersByTimeAsync(400_000);
     await assertion;
 
     // 1 chamada inicial + 15 retries = 16 chamadas
-    expect(hoisted.createMock).toHaveBeenCalledTimes(9);
+    expect(hoisted.createMock).toHaveBeenCalledTimes(16);
   });
 
   it("502 bad gateway → RETRY com backoff → erro propagado após esgotar retries (BUG 1)", async () => {
@@ -369,11 +369,11 @@ describe("Server errors (5xx)", () => {
 
     const p = chat(sampleMessages);
     const assertion = expect(p).rejects.toThrow("bad gateway");
-    await vi.advanceTimersByTimeAsync(20_000);
+    await vi.advanceTimersByTimeAsync(400_000);
     await assertion;
 
     // 1 inicial + 15 retries = 16
-    expect(hoisted.createMock).toHaveBeenCalledTimes(9);
+    expect(hoisted.createMock).toHaveBeenCalledTimes(16);
   });
 });
 
@@ -411,19 +411,19 @@ describe("Network errors", () => {
       code: "ETIMEDOUT",
       message: expect.stringMatching(/timed out/i),
     });
-    // 15 retries com backoff crescente (exponential backoff 1s+2s+4s+8s+15s+30s+30s...)
-    await vi.advanceTimersByTimeAsync(20_000);
+    // 15 retries com backoff exponencial (1s+2s+4s+8s+15s+30s+30s+...+30s = ~388s)
+    await vi.advanceTimersByTimeAsync(400_000);
     await assertion;
 
     // 1 chamada inicial + 15 retries = 16 chamadas
-    expect(hoisted.createMock).toHaveBeenCalledTimes(9);
+    expect(hoisted.createMock).toHaveBeenCalledTimes(16);
   });
 
   it("ECONNRESET → erro propagado", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: false });
     vi.setSystemTime(new Date(0));
 
-    // ECONNRESET também é transiente → retry 8x depois propaga
+    // ECONNRESET também é transiente → retry 15x depois propaga
     const err = makeNetworkError("ECONNRESET", "socket hang up");
     hoisted.createMock.mockRejectedValue(err);
 
@@ -432,11 +432,11 @@ describe("Network errors", () => {
       code: "ECONNRESET",
       message: expect.stringMatching(/socket hang up/i),
     });
-    await vi.advanceTimersByTimeAsync(20_000);
+    await vi.advanceTimersByTimeAsync(400_000);
     await assertion;
 
     // 1 inicial + 15 retries = 16
-    expect(hoisted.createMock).toHaveBeenCalledTimes(9);
+    expect(hoisted.createMock).toHaveBeenCalledTimes(16);
   });
 });
 

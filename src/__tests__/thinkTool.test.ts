@@ -18,7 +18,7 @@ describe("thinkTool", () => {
       const r = await think({ pensamento: "I should check X", category: "pre_response" });
       expect(r.confirmed).toBe(true);
       expect(r.message).toContain("THINK");
-      expect(r.message).toContain("verification");
+      expect(r.message).toContain("pre_response");
     });
 
     it("includes the thought length in the message", async () => {
@@ -60,10 +60,10 @@ describe("thinkTool", () => {
 
     it("supports the categoria enum", () => {
       const params = THINK_TOOL_DEFINITION.function.parameters as {
-        properties: { category: { enum: string[] } };
+        properties: { categoria: { enum: string[] } };
       };
-      expect(params.properties.categoria.enum?.toContain("planning");
-      expect(params.properties.categoria.enum?.toContain("pre_response");
+      expect(params.properties.categoria.enum).toContain("planning");
+      expect(params.properties.categoria.enum).toContain("pre_response");
       expect(params.properties.categoria.enum).toContain("debugging");
       expect(params.properties.categoria.enum).toContain("architecture");
     });

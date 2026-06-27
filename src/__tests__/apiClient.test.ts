@@ -412,9 +412,9 @@ describe("apiClient — exported constants", () => {
     expect(SUB_AGENT_MAX_CHAT_RETRIES).toBe(2);
   });
 
-  it("SUB_AGENT_MAX_NETWORK_RETRIES is 8", async () => {
+  it("SUB_AGENT_MAX_NETWORK_RETRIES is 15", async () => {
     const { SUB_AGENT_MAX_NETWORK_RETRIES } = await import("../apiClient.js");
-    expect(SUB_AGENT_MAX_NETWORK_RETRIES).toBe(8);
+    expect(SUB_AGENT_MAX_NETWORK_RETRIES).toBe(15);
   });
 
   it("SUB_AGENT_TRANSIENT_NETWORK_CODES includes ECONNRESET", async () => {

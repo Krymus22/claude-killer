@@ -664,8 +664,20 @@ function getToolName(toolCallId: string, currentIndex: number): string {
 
 const READ_TOOLS = new Set(["ler_arquivo", "buscar_texto_no_projeto", "ler_linhas_arquivo"]);
 
+/** Edit tools that may have an [IMPACT] hint appended to their result. */
+const EDIT_TOOLS = new Set([
+  "editar_arquivo",
+  "editar_multi_arquivos",
+  "escrever_arquivo",
+  "aplicar_diff",
+]);
+
 function isReadTool(toolName: string): boolean {
   return READ_TOOLS.has(toolName);
+}
+
+function isEditTool(toolName: string): boolean {
+  return EDIT_TOOLS.has(toolName);
 }
 
 function isErrorMessage(content: string): boolean {
@@ -677,10 +689,11 @@ function hasFlowAdvancedAfterIndex(fromIndex: number): boolean {
     const futureMsg = history[k];
     if (futureMsg.role === "user") return true;
     if (futureMsg.role === "tool") {
-      const futureToolCallId = (futureMsg as any).tool_call_id as string;
-      const futureToolName = getToolName(futureToolCallId, k);
-      const futureContent = (futureMsg as any).content as string;
-      if (futureToolName === "aplicar_diff" && futureContent?.includes("[SUCCESS]")) return true;
+      // Any subsequent tool call means the flow advanced past the previous one.
+      // (Previously only "aplicar_diff" with [SUCCESS] counted as advancement,
+      // which was too strict — it meant ler_arquivo results were never summarized
+      // unless the IA explicitly called aplicar_diff afterwards.)
+      return true;
     }
   }
   return false;
@@ -712,6 +725,22 @@ function optimizeToolMessage(i: number): boolean {
 
   const toolName = getToolName(toolCallId, i);
 
+  // ─── Edit tool results with [IMPACT] hint ──────────────────────────────
+  // The impact hint (showing which files reference the symbols being edited)
+  // is useful BEFORE the edit — but useless AFTER. It clutters context forever.
+  // Once the flow has advanced (another tool call or user message), strip the
+  // [IMPACT] section and keep only the success/error line.
+  // This saves ~2K chars per edit. With 20 edits = ~40K chars saved.
+  if (isEditTool(toolName) && content.includes("[IMPACT]") && !content.startsWith("[EDIT COMPLETED")) {
+    if (hasFlowAdvancedAfterIndex(i)) {
+      // Keep only the first line (the success/error message), drop the IMPACT hint.
+      const firstLine = content.split("\n")[0];
+      (history[i] as any).content = `[EDIT COMPLETED - IMPACT HINT OMITTED FOR OPTIMIZATION]\n${firstLine}`;
+      return true;
+    }
+  }
+
+  // ─── Read tool results (ler_arquivo, etc) ──────────────────────────────
   if (isReadTool(toolName) && content.length > 800 && !content.startsWith("[FILE READ")) {
     if (hasFlowAdvancedAfterIndex(i)) {
       (history[i] as any).content = `[FILE READ - OMITTED FOR CONTEXT OPTIMIZATION. ORIGINAL LENGTH: ${content.length} CHARS]`;
@@ -719,6 +748,7 @@ function optimizeToolMessage(i: number): boolean {
     }
   }
 
+  // ─── Error messages that have been overcome ────────────────────────────
   if (isErrorMessage(content) && !content.startsWith("[ERRO ANTERIOR")) {
     if (hasErrorBeenOvercomeAfterIndex(i, toolName)) {
       (history[i] as any).content = `[PREVIOUS ERROR OVERCOME AND OMITTED FOR OPTIMIZATION]`;

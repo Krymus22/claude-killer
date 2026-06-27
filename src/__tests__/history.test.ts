@@ -553,7 +553,7 @@ describe("hasFlowAdvancedAfterIndex false path (line 371)", () => {
     resetHistory();
   });
 
-  it("returns false when no future user or aplicar_diff success exists after read tool", () => {
+  it("returns true when ANY future tool call exists after read tool (new behavior)", () => {
     addUserMessage("read file");
     addRawAssistantMessage({
       role: "assistant",
@@ -561,7 +561,7 @@ describe("hasFlowAdvancedAfterIndex false path (line 371)", () => {
       tool_calls: [{ id: "tc_read", type: "function", function: { name: "ler_arquivo", arguments: "{}" } }],
     } as any);
     addToolResult("tc_read", "a".repeat(1000));
-    // Add only assistant+tool that is NOT aplicar_diff and NOT a user message after
+    // Add only assistant+tool (executar_comando, NOT aplicar_diff) after read
     addRawAssistantMessage({
       role: "assistant",
       content: "",
@@ -572,9 +572,12 @@ describe("hasFlowAdvancedAfterIndex false path (line 371)", () => {
     optimizeContext();
     const h = getHistory();
     const readTool = h.find(m => m.role === "tool" && (m as any).tool_call_id === "tc_read");
-    // hasFlowAdvancedAfterIndex returned false, so read tool content is NOT optimized
+    // NEW behavior: any subsequent tool call counts as flow advancement.
+    // Previously only aplicar_diff with [SUCCESS] counted, but that was too
+    // strict — read results were never summarized unless the IA called
+    // aplicar_diff explicitly afterwards.
     expect(readTool).toBeDefined();
-    expect((readTool as any).content).toBe("a".repeat(1000));
+    expect((readTool as any).content).toContain("FILE READ - OMITTED");
   });
 });
 

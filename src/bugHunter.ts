@@ -122,17 +122,22 @@ export function generateDiffAfterEdit(filePath: string): string {
 async function runProjectVerification(projectDir: string): Promise<string> {
   try {
     const { execSync } = require("node:child_process");
-    // Try npx tsx src/index.ts first
+    // Try npx tsx src/index.ts first — short timeout to avoid hanging
     try {
       const out = execSync("npx tsx src/index.ts 2>&1", {
-        cwd: projectDir, timeout: 30000, encoding: "utf8"
+        cwd: projectDir, timeout: 10000, encoding: "utf8",
+        stdio: ["pipe", "pipe", "pipe"] // don't inherit stdin
       });
       return out.trim().slice(0, 500) || "(no output)";
-    } catch {
+    } catch (e: any) {
+      // If it timed out or failed, try to get partial output
+      if (e.stdout) return ("output: " + e.stdout.toString().trim()).slice(0, 500);
+      if (e.killed) return "(project timed out after 10s)";
       // Try npm test
       try {
         const out = execSync("npm test 2>&1", {
-          cwd: projectDir, timeout: 30000, encoding: "utf8"
+          cwd: projectDir, timeout: 10000, encoding: "utf8",
+          stdio: ["pipe", "pipe", "pipe"]
         });
         return out.trim().slice(0, 500) || "(no output)";
       } catch {

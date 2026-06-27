@@ -422,6 +422,46 @@ export function addSystemMessage(content: string): void {
     }
   }
 
+  // ─── Bug Hunter: summarize previous round before injecting new one ──────
+  // Bug Hunter findings can be ~13K chars per round. Without cleanup, after
+  // 2 rounds there's ~26K chars of OBSOLETE findings (bugs the IA already
+  // corrected or dismissed) permanently in context. After 10 rounds (max),
+  // that's ~130K chars — more than the entire context window.
+  //
+  // Solution: when a new Bug Hunter message is injected, find the PREVIOUS
+  // Bug Hunter message and replace it with a 1-line summary. The IA already
+  // saw the old findings, corrected them, and the new round has the current
+  // state. The old findings are useless clutter.
+  //
+  // We only keep the MOST RECENT Bug Hunter message in full. All previous
+  // rounds are summarized to "[BUG_HUNTER ROUND N COMPLETE - X findings
+  // (Y critical/high, Z medium/low) — IA corrected or dismissed. OMITTED
+  // FOR CONTEXT OPTIMIZATION.]"
+  if (content.startsWith("[BUG_HUNTER]")) {
+    // Find the most recent previous Bug Hunter message (not the one we're
+    // about to add)
+    for (let i = history.length - 1; i >= 1; i--) {
+      if (history[i]!.role === "system") {
+        const prevContent = (history[i] as any).content as string;
+        if (prevContent && prevContent.startsWith("[BUG_HUNTER]")) {
+          // Extract finding count from the previous message if possible
+          const findingsMatch = prevContent.match(/All Findings \((\d+) total\)/);
+          const findingsCount = findingsMatch ? findingsMatch[1] : "?";
+
+          // Determine if it was a blocking or advisory round
+          const wasBlocking = prevContent.includes("ISSUES FOUND");
+
+          // Replace the old verbose findings with a compact summary
+          (history[i] as any).content =
+            `[BUG_HUNTER] Previous round complete — ${findingsCount} findings were reported, ` +
+            `IA corrected or dismissed them. Findings omitted for context optimization. ` +
+            (wasBlocking ? `(was blocking)` : `(was advisory)`);
+          break; // Only summarize the most recent one
+        }
+      }
+    }
+  }
+
   history.push({ role: "system", content });
 }
 

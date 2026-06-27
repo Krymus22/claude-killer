@@ -330,6 +330,11 @@ export async function runBugHunter(
 
     // Parse the findings from the final response
     const findings = parseFindings(finalContent);
+    log.info(`[BUG_HUNTER] Parsed ${findings.length} findings from ${finalContent.length} chars verdict`);
+    if (findings.length === 0) {
+      // Log first 500 chars of content to see what format the model used
+      log.warn(`[BUG_HUNTER] Parser found 0 findings! Content preview: ${finalContent.slice(0, 500)}`);
+    }
     const criticalAndHigh = findings.filter(f => f.severity === "critical" || f.severity === "high");
     const shouldBlock = criticalAndHigh.length > 0;
 
@@ -359,9 +364,9 @@ export async function runBugHunter(
         log.warn(`[BUG_HUNTER]   Fix: ${f.suggestion}`);
       }
     } else {
-      log.success(`[BUG_HUNTER] No critical/high bugs found (${findings.length} medium/low findings)`);
+      log.warn(`[BUG_HUNTER] No critical/high bugs found (${findings.length} medium/low findings) — allowing finish`);
       for (const f of findings) {
-        log.info(`[BUG_HUNTER] [${f.severity.toUpperCase()}] ${f.file}${f.line ? ":" + f.line : ""} — ${f.description}`);
+        log.warn(`[BUG_HUNTER] [${f.severity.toUpperCase()}] ${f.file}${f.line ? ":" + f.line : ""} — ${f.description}`);
       }
     }
 

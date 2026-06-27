@@ -324,7 +324,7 @@ export async function runBugHunter(
     }
 
     if (!finalContent || finalContent.length < 20) {
-      log.warn(`[BUG_HUNTER] Empty or too-short response after loop (finalContent=${finalContent ? finalContent.length + " chars" : "null"}, turns exhausted=${turn >= MAX_HUNTER_TURNS})`);
+      log.warn(`[BUG_HUNTER] Empty or too-short response after loop (finalContent=${finalContent ? finalContent.length + " chars" : "null"})`);
       return { shouldBlock: false, findings: [], message: "", completed: false };
     }
 

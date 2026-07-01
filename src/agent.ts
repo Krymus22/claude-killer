@@ -413,9 +413,11 @@ const toolHandlers: Record<string, ToolHandler> = {
     const maxResults = (args.maxResults as number) ?? 5;
     try {
       const { webSearch } = await import("./apiResearcher.js");
+      const startTime = Date.now();
       const results = await webSearch(query, maxResults);
+      const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
       if (results.length === 0) {
-        return { resultStr: t("tool.no_results_for", query), usedHeal: false };
+        return { resultStr: `[INFO] Nenhum resultado encontrado para: "${query}" (busca concluída em ${elapsed}s). Tente reformular a busca com termos mais específicos ou em inglês.`, usedHeal: false };
       }
       const formatted = results.map((r: any, i: number) =>
         `${i + 1}. ${r.title ?? t("ui.untitled")}\n   URL: ${r.url}\n   ${r.snippet ?? r.description ?? ""}`

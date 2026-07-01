@@ -309,9 +309,14 @@ export async function webSearch(query: string, num: number = 5): Promise<SearchR
           console.log(`[WEB_SEARCH] Bing: ${results.length} results for "${query.slice(0, 50)}"`);
           return results;
         }
-        console.log(`[WEB_SEARCH] Bing attempt ${attempt+1}: 0 results (HTML size: ${bingResult.stdout.length})`);
+        // DEBUG: save HTML when parse fails — helps diagnose region differences
+        try {
+          const debugFile = path.join(os.tmpdir(), `claude-killer-bing-debug-${Date.now()}.html`);
+          fs.writeFileSync(debugFile, bingResult.stdout.slice(0, 50000));
+          console.log(`[WEB_SEARCH] Bing: 0 results. HTML saved to ${debugFile} (${bingResult.stdout.length} bytes, b_algo: ${(bingResult.stdout.match(/class="b_algo"/g) || []).length})`);
+        } catch { /* ignore */ }
       } else {
-        console.log(`[WEB_SEARCH] Bing attempt ${attempt+1}: curl failed (ok=${bingResult.ok})`);
+        console.log(`[WEB_SEARCH] Bing attempt ${attempt+1}: curl failed (ok=${bingResult.ok}, stderr: ${bingResult.stderr?.slice(0, 100)})`);
       }
       if (attempt < MAX_SEARCH_RETRIES - 1) {
         await new Promise(r => setTimeout(r, RETRY_DELAY_MS));

@@ -488,6 +488,9 @@ interface StreamState {
   toolCallsAccumulator: ToolCallAccumulator;
   promptTokens: number;
   completionTokens: number;
+  /** Repetition detection: tracks recent chunks to detect loops */
+  recentChunks: string[];
+  repetitionDetected: boolean;
 }
 
 function createStreamState(): StreamState {
@@ -501,7 +504,49 @@ function createStreamState(): StreamState {
     toolCallsAccumulator: {},
     promptTokens: 0,
     completionTokens: 0,
+    recentChunks: [],
+    repetitionDetected: false,
   };
+}
+
+/**
+ * Detect if the model is stuck in a repetition loop.
+ * Checks if the same phrase (10+ chars) has been repeated 5+ times
+ * in the recent content. If so, returns true to abort generation.
+ */
+function detectRepetition(state: StreamState): boolean {
+  const content = state.totalContent;
+  if (content.length < 200) return false;
+
+  // Check the last 2000 chars for repetition
+  const recent = content.slice(-2000);
+
+  // Try to find a phrase (10-100 chars) that repeats 5+ times
+  for (let len = 10; len <= 100; len += 5) {
+    // Sample phrases from different positions in the recent text
+    for (let start = 0; start < recent.length - len * 5; start += Math.max(1, len)) {
+      const phrase = recent.slice(start, start + len);
+      // Skip whitespace-only or trivial phrases
+      if (phrase.trim().length < 5) continue;
+
+      // Count occurrences in recent text
+      let count = 0;
+      let searchFrom = 0;
+      while (count < 6) {
+        const idx = recent.indexOf(phrase, searchFrom);
+        if (idx === -1) break;
+        count++;
+        searchFrom = idx + len;
+      }
+
+      if (count >= 6) {
+        console.log(`[REPETITION_DETECTED] Phrase "${phrase.slice(0, 40)}..." repeated ${count}x — aborting generation`);
+        return true;
+      }
+    }
+  }
+
+  return false;
 }
 
 function createStreamRequest(
@@ -577,21 +622,28 @@ function processContentChunk(
   onStreamStart?: () => void,
   onToken?: (token: string) => void,
 ): void {
-  // BUG FIX (BUG 3): antes havia um `else if (state.totalContent === "")`
-  // morto — totalContent só cresce, nunca volta a ser "". onStreamStart deve
-  // ser chamado APENAS na primeira vez que isFirstChunk é true.
   if (state.isFirstChunk) {
     state.isFirstChunk = false;
     onStreamStart?.();
   }
-  // BUG FIX (BUG 2): antes, o caller usava `if (delta.content)` (falsy para
-  // string vazia), então chunks com content="" nunca chegavam aqui. Agora o
-  // caller testa `typeof delta.content === "string"`, então strings vazias
-  // chegam. Chamamos onToken mesmo com string vazia (alguns provedores enviam
-  // chunks vazios como heartbeats). totalContent += "" é no-op, então a
-  // contagem de tokens no conteúdo final não é afetada.
+
+  // If repetition was already detected, ignore further tokens
+  if (state.repetitionDetected) return;
+
   onToken?.(content);
   state.totalContent += content;
+
+  // REPETITION DETECTION: check every ~500 chars if the model is looping
+  if (state.totalContent.length > 200 && state.totalContent.length % 500 < content.length) {
+    if (detectRepetition(state)) {
+      state.repetitionDetected = true;
+      state.finishReason = "repetition_detected";
+      // Truncate repeated garbage
+      state.totalContent = state.totalContent.slice(0, -500) +
+        "\n\n[GERAÇÃO INTERROMPIDA: repetição detectada. Tente reformular sua pergunta.]";
+      console.log("[REPETITION] Generation aborted — returning partial content");
+    }
+  }
 }
 
 function processToolCallDelta(
@@ -689,6 +741,11 @@ async function consumeStream(
   onThinking?: () => void,
 ): Promise<void> {
   for await (const chunk of rawStream) {
+    // ABORT: if repetition was detected, stop consuming the stream
+    if (state.repetitionDetected) {
+      try { rawStream.controller?.abort?.(); } catch { /* ignore */ }
+      break;
+    }
     processStreamChunk(chunk, state, onStreamStart, onToken, onThinking);
   }
 }

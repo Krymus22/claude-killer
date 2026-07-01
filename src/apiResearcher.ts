@@ -219,8 +219,97 @@ interface SearchResult {
   snippet: string;
 }
 
+/**
+ * Parse Bing HTML search results.
+ * Bing wraps URLs in redirect links (bing.com/ck/a?...&u=BASE64...) and
+ * puts results in <li class="b_algo"> blocks with <h2><a> for title/link
+ * and <p> for snippet.
+ */
+function parseBingResults(html: string, num: number): SearchResult[] {
+  const results: SearchResult[] = [];
+
+  // Split by b_algo blocks — each result is in <li class="b_algo">
+  const algoBlocks = html.split(/class="b_algo"/).slice(1);
+
+  for (const block of algoBlocks) {
+    if (results.length >= num) break;
+
+    // Extract URL: Bing encodes real URL in base64 after &u=a1
+    const urlMatch = block.match(/href="https:\/\/www\.bing\.com\/ck\/a\?[^"]*u=a1([^&"]+)/);
+    if (!urlMatch) continue;
+    let url = "";
+    try {
+      // Bing base64: add padding if needed
+      const encoded = urlMatch[1];
+      const padded = encoded + "===".slice((encoded.length + 3) % 4);
+      url = Buffer.from(padded, "base64").toString("utf8");
+    } catch {
+      continue;
+    }
+    // Skip Bing internal links
+    if (!url.startsWith("http") || url.includes("bing.com/")) continue;
+
+    // Extract title: text inside <h2><a ...>TITLE</a></h2>
+    const titleMatch = block.match(/<h2><a[^>]*>([\s\S]*?)<\/a><\/h2>/);
+    if (!titleMatch) continue;
+    const title = titleMatch[1]
+      .replace(/<[^>]+>/g, "")
+      .replace(/&amp;/g, "&")
+      .replace(/&lt;/g, "<")
+      .replace(/&gt;/g, ">")
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;/g, "'")
+      .trim();
+    if (!title) continue;
+
+    // Extract snippet: text in <p> after the title
+    const snippetMatch = block.match(/<p[^>]*>([\s\S]*?)<\/p>/);
+    let snippet = "";
+    if (snippetMatch) {
+      snippet = snippetMatch[1]
+        .replace(/<[^>]+>/g, "")
+        .replace(/&amp;/g, "&")
+        .replace(/&lt;/g, "<")
+        .replace(/&gt;/g, ">")
+        .replace(/&quot;/g, '"')
+        .replace(/&#39;/g, "'")
+        .replace(/&nbsp;/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+    }
+
+    results.push({ url, title, snippet });
+  }
+
+  return results;
+}
+
 export async function webSearch(query: string, num: number = 5): Promise<SearchResult[]> {
-  // Try z-ai CLI first (we know it's installed in this env)
+  // PRIMARY: Bing search (no API key, no CAPTCHA, works on any machine with curl)
+  for (let attempt = 0; attempt < MAX_SEARCH_RETRIES; attempt++) {
+    try {
+      const ua = USER_AGENTS[attempt % USER_AGENTS.length];
+      const bingResult = await runCmd(
+        "curl",
+        ["-sL", "-A", ua, "--max-time", "25",
+         `https://www.bing.com/search?q=${encodeURIComponent(query)}&count=${num}&setlang=en`],
+        SEARCH_TIMEOUT_MS
+      );
+      if (bingResult.ok && bingResult.stdout) {
+        const results = parseBingResults(bingResult.stdout, num);
+        if (results.length > 0) return results;
+      }
+      if (attempt < MAX_SEARCH_RETRIES - 1) {
+        await new Promise(r => setTimeout(r, RETRY_DELAY_MS));
+      }
+    } catch {
+      if (attempt < MAX_SEARCH_RETRIES - 1) {
+        await new Promise(r => setTimeout(r, RETRY_DELAY_MS));
+      }
+    }
+  }
+
+  // Fallback 1: z-ai CLI (only in Super Z environment)
   try {
     const tmpFile = path.join(os.tmpdir(), `claude-killer-search-${Date.now()}.json`);
     const result = await runCmd(
@@ -228,7 +317,6 @@ export async function webSearch(query: string, num: number = 5): Promise<SearchR
       ["function", "-n", "web_search", "-a", JSON.stringify({ query, num }), "-o", tmpFile],
       SEARCH_TIMEOUT_MS
     );
-
     if (result.ok && fs.existsSync(tmpFile)) {
       const data = JSON.parse(fs.readFileSync(tmpFile, "utf8"));
       fs.unlinkSync(tmpFile);
@@ -245,7 +333,7 @@ export async function webSearch(query: string, num: number = 5): Promise<SearchR
     // z-ai CLI not available, fall through
   }
 
-  // Fallback 1: DuckDuckGo HTML search with RETRY and rotating user-agents
+  // Fallback 2: DuckDuckGo (often blocked by CAPTCHA, last resort)
   for (let attempt = 0; attempt < MAX_SEARCH_RETRIES; attempt++) {
     try {
       const ua = USER_AGENTS[attempt % USER_AGENTS.length];
@@ -277,7 +365,6 @@ export async function webSearch(query: string, num: number = 5): Promise<SearchR
         }
         if (results.length > 0) return results;
       }
-      // No results — wait and retry with different user-agent
       if (attempt < MAX_SEARCH_RETRIES - 1) {
         await new Promise(r => setTimeout(r, RETRY_DELAY_MS));
       }
@@ -288,7 +375,7 @@ export async function webSearch(query: string, num: number = 5): Promise<SearchR
     }
   }
 
-  // Fallback 2: GitHub search API for code-related queries
+  // Fallback 3: GitHub search API for code-related queries
   if (query.toLowerCase().includes("roblox") || query.toLowerCase().includes("api") ||
       query.toLowerCase().includes("github") || query.toLowerCase().includes("library")) {
     try {

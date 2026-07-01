@@ -20,6 +20,7 @@ import { setTuiMode } from "./logger.js";
 import { initApiKeyPool, prewarmPool, getPoolSize, getPoolStats } from "./apiKeyPool.js";
 import { startHeartbeat, stopHeartbeat } from "./heartbeat.js";
 import { getProviderConfig, providerNeedsHeartbeat, providerUsesMultiKeyPool } from "./apiProvider.js";
+import { autoStartSearx, autoStopSearx } from "./searxManager.js";
 import OpenAI from "openai";
 
 import React from "react";
@@ -124,6 +125,17 @@ async function main(): Promise<void> {
     console.error(`Tool updater check failed: ${err.message}`);
   });
 
+  // Auto-start local Searx if installed (non-blocking).
+  // Searx provides better search quality by aggregating Google + Bing + DDG.
+  // If not installed, this is a no-op. If installed but not running, it
+  // starts Searx in background — the TUI doesn't wait for it to be ready.
+  // On first search, apiResearcher.ts probes localhost:8888 and uses Searx
+  // if it's responding (usually ready within 3-5s of CLI launch).
+  autoStartSearx().catch((err) => {
+    // Searx is optional — never crash on failure
+    console.error(`Searx auto-start failed: ${err.message}`);
+  });
+
   // Load skills and start MCP servers before rendering
   await loadAllExtensions();
 
@@ -142,6 +154,7 @@ async function main(): Promise<void> {
   // Handle graceful shutdown
   const cleanup = () => {
     stopHeartbeat();
+    autoStopSearx();
     setTuiMode(false);
     shutdownMCPServers();
     unmount();
@@ -153,6 +166,7 @@ async function main(): Promise<void> {
 
   await waitUntilExit();
   setTuiMode(false);
+  autoStopSearx();
   shutdownMCPServers();
 }
 

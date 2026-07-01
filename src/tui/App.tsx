@@ -356,6 +356,8 @@ const COMMAND_HANDLERS: Record<string, (arg: string | null) => CommandResult> = 
   "/configurar": (arg) => handleConfigurarCommand(arg),
   // i18n: trocar idioma em runtime
   "/lang": (arg) => handleLangCommand(arg),
+  // Searx local search status/install
+  "/searx": (arg) => handleSearxCommand(arg),
 };
 
 function handleLangCommand(arg: string | null): CommandResult {
@@ -371,6 +373,66 @@ function handleLangCommand(arg: string | null): CommandResult {
   setLanguage(arg as any);
   resetLanguageCache();
   return { handled: true, message: `Idioma alterado para: ${arg}` };
+}
+
+function handleSearxCommand(arg: string | null): CommandResult {
+  const { getSearxStatus } = require("../searxManager.js") as typeof import("../searxManager.js");
+  const status = getSearxStatus();
+
+  if (!arg || arg === "status") {
+    const lines = [
+      "Searx Local Search:",
+      `  Installed : ${status.installed ? "YES ✓" : "NO ✗"}`,
+      `  Running   : ${status.running ? "YES ✓" : "NO ✗"}`,
+      `  Auto-start: ${status.weStarted ? "started by CLI" : "not started by CLI"}`,
+      `  PID       : ${status.pid ?? "N/A"}`,
+      `  URL       : ${status.url}`,
+      `  Directory : ${status.dir}`,
+    ];
+    if (!status.installed) {
+      lines.push(
+        "",
+        "Para instalar (busca estável via Google + Bing + DDG):",
+        "  python3 scripts/setup-searx.py",
+        "",
+        "Após instalar, reinicie a CLI. O Searx iniciará automaticamente.",
+      );
+    } else if (!status.running) {
+      lines.push("", "Para iniciar agora: /searx start");
+    }
+    return { handled: true, message: lines.join("\n") };
+  }
+
+  if (arg === "install") {
+    return {
+      handled: true,
+      message:
+        "Para instalar o Searx, execute no terminal:\n" +
+        "  python3 scripts/setup-searx.py\n\n" +
+        "Após instalar, reinicie a CLI — o Searx iniciará automaticamente.",
+    };
+  }
+
+  if (arg === "start") {
+    const { autoStartSearx } = require("../searxManager.js") as typeof import("../searxManager.js");
+    // Note: autoStartSearx is async but slash command handlers are sync.
+    // We fire-and-forget and tell the user it's starting.
+    autoStartSearx().catch(() => {});
+    return {
+      handled: true,
+      message: status.installed
+        ? "Searx iniciando em background... Use /searx para verificar status."
+        : "Searx não instalado. Use: python3 scripts/setup-searx.py",
+    };
+  }
+
+  if (arg === "stop") {
+    const { autoStopSearx } = require("../searxManager.js") as typeof import("../searxManager.js");
+    autoStopSearx();
+    return { handled: true, message: "Searx parado (se foi iniciado pela CLI)." };
+  }
+
+  return { handled: true, message: "Use: /searx [status|install|start|stop]" };
 }
 
 function handleEffortCommand(arg: string | null): CommandResult {

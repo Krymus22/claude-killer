@@ -643,6 +643,16 @@ export const COMMAND_I18N: Record<string, Record<Language, CommandI18n>> = {
     "pt-BR": { desc: "Organizar arquivos do inbox do modo ativo" },
     en: { desc: "Organize files in the active mode's inbox" },
   },
+  "/searx": {
+    "pt-BR": {
+      desc: "Status/instalar busca local Searx",
+      subcommands: ["status", "install", "start", "stop"],
+    },
+    en: {
+      desc: "Searx local search status/install",
+      subcommands: ["status", "install", "start", "stop"],
+    },
+  },
 };
 
 /** Get the localized description + subcommands for a slash command. */

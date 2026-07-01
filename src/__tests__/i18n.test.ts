@@ -154,16 +154,17 @@ describe("i18n", () => {
   });
 
   describe("getLocalizedSlashCommands", () => {
-    it("should return all 21 commands", async () => {
+    it("should return all 22 commands", async () => {
       const { getLocalizedSlashCommands } = await import("./../i18n.js");
       const cmds = getLocalizedSlashCommands();
-      expect(cmds.length).toBe(21);
+      expect(cmds.length).toBe(22);
       expect(cmds.some((c) => c.cmd === "/help")).toBe(true);
       expect(cmds.some((c) => c.cmd === "/effort")).toBe(true);
       expect(cmds.some((c) => c.cmd === "/mode")).toBe(true);
       expect(cmds.some((c) => c.cmd === "/exit")).toBe(true);
       expect(cmds.some((c) => c.cmd === "/organize")).toBe(true);
       expect(cmds.some((c) => c.cmd === "/lang")).toBe(true);
+      expect(cmds.some((c) => c.cmd === "/searx")).toBe(true);
     });
 
     it("should include subcommands for commands that have them", async () => {

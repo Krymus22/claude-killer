@@ -176,12 +176,13 @@ describe("autocomplete subcommands", () => {
     const { getLocalizedSlashCommands } = await import("./../i18n.js");
     const commands = getLocalizedSlashCommands();
     const matches = getMatches("/", commands);
-    // All 21 commands should match (19 original + /organize from Sprint 10 + /lang)
-    expect(matches.length).toBe(21);
+    // All 22 commands should match (19 original + /organize + /lang + /searx)
+    expect(matches.length).toBe(22);
     expect(matches.some((m) => m.label === "/effort")).toBe(true);
     expect(matches.some((m) => m.label === "/mode")).toBe(true);
     expect(matches.some((m) => m.label === "/help")).toBe(true);
     expect(matches.some((m) => m.label === "/organize")).toBe(true);
+    expect(matches.some((m) => m.label === "/searx")).toBe(true);
   });
 });
 

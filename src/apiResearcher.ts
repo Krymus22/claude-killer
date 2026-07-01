@@ -402,10 +402,70 @@ export async function webSearch(query: string, num: number = 5): Promise<SearchR
 }
 
 /**
+ * Extract readable text from HTML — prioritizes <article>, <main>, and content
+ * divs over navigation/menu HTML.
+ */
+function extractTextFromHtml(html: string): string {
+  // Try to extract from <article> first (most news sites use this)
+  let content = "";
+  const articleMatch = html.match(/<article[^>]*>([\s\S]*?)<\/article>/i);
+  if (articleMatch) content = articleMatch[1];
+
+  // If no <article>, try <main>
+  if (!content) {
+    const mainMatch = html.match(/<main[^>]*>([\s\S]*?)<\/main>/i);
+    if (mainMatch) content = mainMatch[1];
+  }
+
+  // If still no content, try common content divs
+  if (!content) {
+    const contentDiv = html.match(/<div[^>]*(?:class|id)="[^"]*(?:content|article|post-body|entry-content|story-body|article-body)[^"]*"[^>]*>([\s\S]*?)<\/div>/i);
+    if (contentDiv) content = contentDiv[1];
+  }
+
+  // Fall back to full HTML if no content section found
+  if (!content) content = html;
+
+  // Strip scripts, styles, and HTML tags
+  return content
+    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
+    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
+    .replace(/<nav[^>]*>[\s\S]*?<\/nav>/gi, "")
+    .replace(/<footer[^>]*>[\s\S]*?<\/footer>/gi, "")
+    .replace(/<header[^>]*>[\s\S]*?<\/header>/gi, "")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&#x27;/g, "'")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
+ * Check if a URL is from a site that supports .md (markdown) versions
+ * and return the markdown URL if available.
+ */
+function tryMarkdownUrl(url: string): string | null {
+  // Roblox docs: create.roblox.com/docs/... → create.roblox.com/docs/en-us/...md
+  if (url.includes("create.roblox.com/docs/")) {
+    // Remove any existing locale prefix and add en-us + .md
+    const cleanUrl = url.replace(/\/docs\/(en-us\/)?/, "/docs/en-us/");
+    return cleanUrl.endsWith(".md") ? cleanUrl : cleanUrl + ".md";
+  }
+  return null;
+}
+
+/**
  * Read a web page and extract its text content.
- * Uses z-ai CLI's page_reader function if available.
+ * Uses z-ai CLI's page_reader function if available, then falls back to curl.
+ * For JS-rendered sites (like Roblox docs), automatically tries .md version.
  */
 export async function webRead(url: string): Promise<string> {
+  // Try z-ai CLI first (only in Super Z environment)
   try {
     const tmpFile = path.join(os.tmpdir(), `claude-killer-page-${Date.now()}.json`);
     const result = await runCmd(
@@ -413,57 +473,32 @@ export async function webRead(url: string): Promise<string> {
       ["function", "-n", "page_reader", "-a", JSON.stringify({ url }), "-o", tmpFile],
       READ_TIMEOUT_MS
     );
-
     if (result.ok && fs.existsSync(tmpFile)) {
       const data = JSON.parse(fs.readFileSync(tmpFile, "utf8"));
       fs.unlinkSync(tmpFile);
-      // page_reader returns {data: {html, title, ...}}
       const html = data?.data?.html ?? data?.html ?? "";
-      // Strip HTML tags for plain text
-      const text = html
-        .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
-        .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
-        .replace(/<[^>]+>/g, " ")
-        .replace(/&nbsp;/g, " ")
-        .replace(/&amp;/g, "&")
-        .replace(/&lt;/g, "<")
-        .replace(/&gt;/g, ">")
-        .replace(/&quot;/g, '"')
-        .replace(/\s+/g, " ")
-        .trim();
-      return text.slice(0, MAX_CONTENT_LENGTH);
+      const text = extractTextFromHtml(html);
+      if (text.length > 100) return text.slice(0, MAX_CONTENT_LENGTH);
     }
     if (fs.existsSync(tmpFile)) fs.unlinkSync(tmpFile);
-  } catch {
-    // ignore
-  }
+  } catch { /* z-ai not available */ }
 
-  // Fallback: direct curl fetch with RETRY and rotating user-agents
+  // Primary: curl with retry, better headers, and content extraction
   for (let attempt = 0; attempt < MAX_READ_RETRIES; attempt++) {
     try {
       const ua = USER_AGENTS[attempt % USER_AGENTS.length];
       const curlResult = await runCmd(
         "curl",
-        ["-sL", "-A", ua, "--max-time", "25", url],
+        ["-sL", "-A", ua,
+         "-H", "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+         "-H", "Accept-Language: en-US,en;q=0.9",
+         "--max-time", "25", url],
         READ_TIMEOUT_MS
       );
       if (curlResult.ok && curlResult.stdout) {
-        const html = curlResult.stdout;
-        const text = html
-          .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
-          .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
-          .replace(/<[^>]+>/g, " ")
-          .replace(/&nbsp;/g, " ")
-          .replace(/&amp;/g, "&")
-          .replace(/&lt;/g, "<")
-          .replace(/&gt;/g, ">")
-          .replace(/&quot;/g, '"')
-          .replace(/&#39;/g, "'")
-          .replace(/\s+/g, " ")
-          .trim();
-        if (text.length > 0) return text.slice(0, MAX_CONTENT_LENGTH);
+        const text = extractTextFromHtml(curlResult.stdout);
+        if (text.length > 100) return text.slice(0, MAX_CONTENT_LENGTH);
       }
-      // Empty response — retry with different user-agent
       if (attempt < MAX_READ_RETRIES - 1) {
         await new Promise(r => setTimeout(r, RETRY_DELAY_MS));
       }
@@ -472,6 +507,23 @@ export async function webRead(url: string): Promise<string> {
         await new Promise(r => setTimeout(r, RETRY_DELAY_MS));
       }
     }
+  }
+
+  // JS-rendered site fallback: try .md version if available
+  const mdUrl = tryMarkdownUrl(url);
+  if (mdUrl && mdUrl !== url) {
+    try {
+      const ua = USER_AGENTS[0];
+      const mdResult = await runCmd(
+        "curl",
+        ["-sL", "-A", ua, "--max-time", "20", mdUrl],
+        READ_TIMEOUT_MS
+      );
+      if (mdResult.ok && mdResult.stdout && mdResult.stdout.length > 100) {
+        // Markdown is already plain text — return as-is
+        return mdResult.stdout.slice(0, MAX_CONTENT_LENGTH);
+      }
+    } catch { /* .md not available */ }
   }
 
   return "";

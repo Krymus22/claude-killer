@@ -271,23 +271,22 @@ function main() {
 
   if (isWindows) {
     // Windows: Docker is the ONLY reliable method (Python doesn't work natively)
+    // Always try installViaDocker() — the PowerShell script handles starting
+    // Docker Desktop if the daemon isn't running yet.
     if (!dockerAvailable) {
-      log("Windows detected but Docker is not available — skipping Searx.");
-      log("(SearxNG doesn't run natively on Windows. Install Docker Desktop:");
-      log(" https://www.docker.com/products/docker-desktop)");
-      log("Or run manually later: powershell scripts/setup-searx-docker.ps1");
-      return;
+      log("Windows detected. Docker daemon not running — will attempt to start Docker Desktop...");
+    } else {
+      log("Windows + Docker detected — installing Searx via Docker...");
     }
-
-    log("Windows + Docker detected — installing Searx via Docker...");
     const success = installViaDocker();
     if (success) {
-      log("Searx installed successfully! ✓");
+      log("Searx installed successfully!");
       log("  The Docker container starts automatically with Docker Desktop.");
       log("  Use /searx in the CLI to check status.");
     } else {
       logError("Searx installation via Docker failed. Claude-Killer will use Bing fallback.");
-      logError("You can retry later: powershell scripts/setup-searx-docker.ps1");
+      logError("(Install Docker Desktop: https://www.docker.com/products/docker-desktop)");
+      logError("Or retry later: powershell scripts/setup-searx-docker.ps1");
     }
   } else {
     // Linux/macOS: prefer Docker, fall back to Python

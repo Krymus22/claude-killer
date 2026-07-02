@@ -14,6 +14,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { Message } from "./apiClient.js";
+
+export type { Message };
 import type OpenAI from "openai";
 
 import { getActiveSkills } from "./extensions.js";
@@ -518,6 +520,7 @@ export interface CompactResult {
   removed: number;
   beforeTokens: number;
   afterTokens: number;
+  method: "llm" | "mechanical";
 }
 
 /**
@@ -525,9 +528,16 @@ export interface CompactResult {
  * to bring prompt under threshold. Always preserves:
  *   - index 0 (system prompt)
  *   - last COMPACT_KEEP_RECENT messages (recent context)
+ *
+ * ASYNC VERSION: tries LLM-based compaction first (uses the AI to generate
+ * an intelligent summary), falls back to mechanical compaction if LLM fails.
+ *
+ * @param customInstruction Optional user instruction for what to preserve
+ *                          (e.g., "focus on code changes and API decisions")
+ *                          Empty/null = automatic compaction (preserve everything important)
  * Returns counts or null when nothing to compact.
  */
-export function compactHistory(): CompactResult | null {
+export async function compactHistoryAsync(customInstruction?: string): Promise<CompactResult | null> {
   if (history.length <= COMPACT_KEEP_RECENT + 1) return null;
 
   const beforeTokens = estimateTokens(history);
@@ -539,9 +549,6 @@ export function compactHistory(): CompactResult | null {
   //   - What was already decided (decisions, plans)
   //   - What bugs are open
   //   - Persistent memory (skills, project context)
-  //
-  // Strategy: instead of dropping everything except the last N messages,
-  // we ALSO preserve system messages with critical prefixes.
   const PRESERVE_PREFIXES = [
     "## TASK_STATE",
     "## Persistent Memory",
@@ -554,7 +561,6 @@ export function compactHistory(): CompactResult | null {
     if (m.role !== "system") continue;
     const content = typeof m.content === "string" ? m.content : "";
     if (PRESERVE_PREFIXES.some(p => content.startsWith(p))) {
-      // Avoid duplicates
       if (!preservedSystem.some(p => (typeof p.content === "string" ? p.content : "") === content)) {
         preservedSystem.push(m);
       }
@@ -565,9 +571,41 @@ export function compactHistory(): CompactResult | null {
   const dropped = history.length - 1 - COMPACT_KEEP_RECENT - preservedSystem.length;
   if (dropped <= 0) return null;
 
-  // Build a summary of what was compacted, preserving key facts
+  // Messages that will be compacted (everything between system and recent)
   const compactedMessages = history.slice(1, history.length - COMPACT_KEEP_RECENT);
-  const compactedSummary = buildCompactionSummary(compactedMessages);
+
+  // ── Try LLM-based compaction first ───────────────────────────────────────
+  // Uses the AI itself to generate an intelligent summary that preserves
+  // decisions, code changes, bugs, and context. Falls back to mechanical
+  // compaction if the LLM call fails.
+  let compactedSummary: string;
+  let method: "llm" | "mechanical";
+
+  try {
+    const { llmCompact, isLlmCompactionAvailable } = await import("./llmCompactor.js");
+    const llmAvailable = await isLlmCompactionAvailable();
+    if (llmAvailable) {
+      console.log("[COMPACT] Generating LLM-based summary...");
+      const llmSummary = await llmCompact(compactedMessages, customInstruction);
+      if (llmSummary && llmSummary.length > 100) {
+        compactedSummary = llmSummary;
+        method = "llm";
+        console.log("[COMPACT] LLM summary generated successfully.");
+      } else {
+        console.log("[COMPACT] LLM summary too short, falling back to mechanical.");
+        compactedSummary = buildCompactionSummary(compactedMessages);
+        method = "mechanical";
+      }
+    } else {
+      console.log("[COMPACT] LLM not available, using mechanical compaction.");
+      compactedSummary = buildCompactionSummary(compactedMessages);
+      method = "mechanical";
+    }
+  } catch (err) {
+    console.log(`[COMPACT] LLM compaction failed (${(err as Error).message}), using mechanical.`);
+    compactedSummary = buildCompactionSummary(compactedMessages);
+    method = "mechanical";
+  }
 
   const summary: Message = {
     role: "system",
@@ -578,7 +616,6 @@ export function compactHistory(): CompactResult | null {
   history = [system, ...preservedSystem, summary, ...recent];
 
   // Remove dangling tool messages that no longer match a tool_call in history
-  // (this also drops orphan tool results from the dropped assistant calls)
   const validToolIds = new Set<string>();
   for (const m of history) {
     if (m.role === "assistant" && Array.isArray((m as any).tool_calls)) {
@@ -594,7 +631,67 @@ export function compactHistory(): CompactResult | null {
   });
 
   const afterTokens = estimateTokens(history);
-  return { removed: dropped, beforeTokens, afterTokens };
+  return { removed: dropped, beforeTokens, afterTokens, method };
+}
+
+/**
+ * Synchronous mechanical compaction (legacy, used as fallback and in tests).
+ * Keeps the old behavior for backwards compatibility.
+ */
+export function compactHistory(): CompactResult | null {
+  if (history.length <= COMPACT_KEEP_RECENT + 1) return null;
+
+  const beforeTokens = estimateTokens(history);
+  const system = history[0];
+
+  const PRESERVE_PREFIXES = [
+    "## TASK_STATE",
+    "## Persistent Memory",
+    "[CONVERSATION MEMORY",
+  ];
+
+  const preservedSystem: Message[] = [];
+  for (let i = 1; i < history.length - COMPACT_KEEP_RECENT; i++) {
+    const m = history[i];
+    if (m.role !== "system") continue;
+    const content = typeof m.content === "string" ? m.content : "";
+    if (PRESERVE_PREFIXES.some(p => content.startsWith(p))) {
+      if (!preservedSystem.some(p => (typeof p.content === "string" ? p.content : "") === content)) {
+        preservedSystem.push(m);
+      }
+    }
+  }
+
+  const recent = history.slice(-COMPACT_KEEP_RECENT);
+  const dropped = history.length - 1 - COMPACT_KEEP_RECENT - preservedSystem.length;
+  if (dropped <= 0) return null;
+
+  const compactedMessages = history.slice(1, history.length - COMPACT_KEEP_RECENT);
+  const compactedSummary = buildCompactionSummary(compactedMessages);
+
+  const summary: Message = {
+    role: "system",
+    content: compactedSummary,
+  };
+
+  history = [system, ...preservedSystem, summary, ...recent];
+
+  const validToolIds = new Set<string>();
+  for (const m of history) {
+    if (m.role === "assistant" && Array.isArray((m as any).tool_calls)) {
+      for (const tc of (m as any).tool_calls) validToolIds.add(tc.id);
+    }
+  }
+  history = history.filter((m) => {
+    if (m.role === "tool") {
+      const id = (m as any).tool_call_id;
+      if (typeof id === "string" && !validToolIds.has(id)) return false;
+    }
+    return true;
+  });
+
+  const afterTokens = estimateTokens(history);
+  return { removed: dropped, beforeTokens, afterTokens, method: "mechanical" };
 }
 
 /**
@@ -607,6 +704,10 @@ function buildCompactionSummary(messages: Message[]): string {
   const assistantConclusions: string[] = [];
   const toolsUsed: string[] = [];
   const filesModified: Set<string> = new Set();
+  const filesRead: Set<string> = new Set();
+  const errorsEncountered: string[] = [];
+  const decisions: string[] = [];
+  const commandsRun: string[] = [];
 
   for (const m of messages) {
     if (m.role === "user") {
@@ -618,21 +719,50 @@ function buildCompactionSummary(messages: Message[]): string {
       const content = typeof m.content === "string" ? m.content : "";
       if (content.length > 20 && !content.startsWith("[TOOL")) {
         // Capture conclusions (not tool call descriptions)
-        assistantConclusions.push(content.slice(0, 300));
+        assistantConclusions.push(content.slice(0, 400));
+        // Detect decisions (sentences with decision keywords)
+        const decisionKeywords = /\b(decid|vou|vamos|usar|usarei|implementar|criar|fazer|refatorar|mudar|alterar)\b/i;
+        const sentences = content.split(/[.!?\n]/);
+        for (const s of sentences) {
+          if (decisionKeywords.test(s) && s.trim().length > 20 && s.trim().length < 200) {
+            decisions.push(s.trim());
+          }
+        }
       }
-      // Collect tool names
+      // Collect tool names and details
       if (Array.isArray((m as any).tool_calls)) {
         for (const tc of (m as any).tool_calls) {
           const name = tc?.function?.name;
           if (name && !toolsUsed.includes(name)) toolsUsed.push(name);
-          // Track file modifications
           try {
             const args = JSON.parse(tc?.function?.arguments ?? "{}");
-            const path = args.path ?? args.caminho ?? args.filePath;
-            if (typeof path === "string" && (tc.function.name === "editar_arquivo" || tc.function.name === "editar_multi_arquivos")) {
-              filesModified.add(path);
+            const filePath = args.path ?? args.caminho ?? args.filePath;
+            // Track file modifications
+            if (typeof filePath === "string" &&
+                (tc.function.name === "editar_arquivo" || tc.function.name === "editar_multi_arquivos")) {
+              filesModified.add(filePath);
+            }
+            // Track files read
+            if (typeof filePath === "string" && tc.function.name === "ler_arquivo") {
+              filesRead.add(filePath);
+            }
+            // Track commands run
+            if (tc.function.name === "executar_comando" && typeof args.comando === "string") {
+              commandsRun.push(args.comando.slice(0, 100));
             }
           } catch { /* ignore */ }
+        }
+      }
+    } else if (m.role === "tool") {
+      const content = typeof m.content === "string" ? m.content : "";
+      // Capture errors from tool results
+      if (content.includes("[ERROR]") || content.includes("[ERRO") ||
+          content.includes("Error:") || content.includes("failed")) {
+        const errorLine = content.split("\n").find(l =>
+          l.includes("[ERROR]") || l.includes("[ERRO") ||
+          l.includes("Error:") || l.includes("failed"));
+        if (errorLine && errorLine.length < 200) {
+          errorsEncountered.push(errorLine.trim());
         }
       }
     }
@@ -646,23 +776,25 @@ function buildCompactionSummary(messages: Message[]): string {
 
   if (userRequests.length > 0) {
     lines.push(`## User Requests (chronological — these are the GOALS)`);
-    for (const r of userRequests.slice(-5)) { // last 5 user requests
+    for (const r of userRequests.slice(-8)) { // last 8 user requests (was 5)
       lines.push(`- ${r}`);
     }
     lines.push(``);
   }
 
-  if (assistantConclusions.length > 0) {
-    lines.push(`## Key Conclusions (what was decided/done)`);
-    for (const c of assistantConclusions.slice(-3)) { // last 3 conclusions
-      lines.push(`- ${c}`);
+  if (decisions.length > 0) {
+    lines.push(`## Decisions Made (what was decided)`);
+    for (const d of decisions.slice(-6)) { // last 6 decisions
+      lines.push(`- ${d}`);
     }
     lines.push(``);
   }
 
-  if (toolsUsed.length > 0) {
-    lines.push(`## Tools Used`);
-    lines.push(toolsUsed.join(", "));
+  if (assistantConclusions.length > 0) {
+    lines.push(`## Key Conclusions (what was done)`);
+    for (const c of assistantConclusions.slice(-4)) { // last 4 conclusions (was 3)
+      lines.push(`- ${c}`);
+    }
     lines.push(``);
   }
 
@@ -671,6 +803,36 @@ function buildCompactionSummary(messages: Message[]): string {
     for (const f of filesModified) {
       lines.push(`- ${f}`);
     }
+    lines.push(``);
+  }
+
+  if (filesRead.size > 0) {
+    lines.push(`## Files Read (context was gathered from these)`);
+    for (const f of [...filesRead].slice(0, 10)) { // limit to 10
+      lines.push(`- ${f}`);
+    }
+    lines.push(``);
+  }
+
+  if (commandsRun.length > 0) {
+    lines.push(`## Commands Executed`);
+    for (const c of commandsRun.slice(-5)) { // last 5 commands
+      lines.push(`- ${c}`);
+    }
+    lines.push(``);
+  }
+
+  if (errorsEncountered.length > 0) {
+    lines.push(`## Errors Encountered (may need follow-up)`);
+    for (const e of errorsEncountered.slice(-5)) { // last 5 errors
+      lines.push(`- ${e}`);
+    }
+    lines.push(``);
+  }
+
+  if (toolsUsed.length > 0) {
+    lines.push(`## Tools Used`);
+    lines.push(toolsUsed.join(", "));
     lines.push(``);
   }
 

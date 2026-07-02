@@ -68,7 +68,7 @@ const SLASH_COMMANDS: Array<{ cmd: string; desc: string }> = [
   { cmd: "/buscar", desc: "Search for file on machine (tools, etc)" },
 ];
 
-type CommandResult = { handled: boolean; message?: string; exit?: boolean; openHub?: boolean; resetChat?: boolean; openConfigurator?: boolean; configuratorTool?: string | null; compactDone?: boolean; compactResult?: { removed: number; beforeTokens: number; afterTokens: number } };
+type CommandResult = { handled: boolean; message?: string; exit?: boolean; openHub?: boolean; resetChat?: boolean; openConfigurator?: boolean; configuratorTool?: string | null; compactDone?: boolean; compactStarted?: boolean; compactInstruction?: string; compactResult?: { removed: number; beforeTokens: number; afterTokens: number; method?: string } };
 
 
 
@@ -146,14 +146,20 @@ function handlePlanCommand(): CommandResult {
   };
 }
 
-function handleCompactCommand(): CommandResult {
-  const result = history.compactHistory();
-  if (!result) return { handled: true, message: "Nada for compactar." };
+function handleCompactCommand(arg: string | null): CommandResult {
+  // /compact com mensagem = custom instruction (ex: /compact focus on code changes)
+  // /compact vazio = compactação automática (preserva tudo importante)
+  // A compactação real (LLM-based) é feita pelo caller (handleSlashCommandFlow)
+  // que tem acesso aos setters do React.
+  const customInstruction = arg?.trim() || undefined;
+
   return {
     handled: true,
-    message: `✅ Contexto compactado!\n  • ${result.removed} mensagens removidas\n  • Tokens: ${result.beforeTokens.toLocaleString()} → ${result.afterTokens.toLocaleString()} (−${(result.beforeTokens - result.afterTokens).toLocaleString()})\n  • Economia: ${((1 - result.afterTokens / result.beforeTokens) * 100).toFixed(1)}%\n\nA barra de contexto será atualizada no próximo turno da IA.`,
-    compactDone: true,
-    compactResult: result,
+    message: customInstruction
+      ? `Compactando com foco em: ${customInstruction}\nAguarde... (a IA esta gerando o resumo)`
+      : "Compactando contexto...\nAguarde... (a IA esta gerando o resumo inteligente)",
+    compactStarted: true,
+    compactInstruction: customInstruction,
   };
 }
 
@@ -347,7 +353,7 @@ const COMMAND_HANDLERS: Record<string, (arg: string | null) => CommandResult> = 
   "/memory": () => handleMemoryCommand(),
   "/todos": () => handleTodosCommand(),
   "/plan": () => handlePlanCommand(),
-  "/compact": () => handleCompactCommand(),
+  "/compact": (arg) => handleCompactCommand(arg),
   "/dream": () => handleDreamCommand(),
   "/distill": () => handleDistillCommand(),
   // Sprint 9: buscar arquivo na máquina
@@ -1019,21 +1025,46 @@ export function App() {
       if (result.resetChat) {
         setMessages([]);
       }
-      // After /compact, update the StatusBar immediately to reflect the
-      // new (smaller) context size. Without this, the bar keeps showing
-      // the old token count until the next IA response, which confuses
-      // the user into thinking the compaction didn't work.
-      if (result.compactDone && result.compactResult) {
-        const cr = result.compactResult;
-        // Show "compacting" status briefly for visual feedback
+      // /compact agora é assíncrono (LLM-based). Mostra status "compacting"
+      // enquanto a IA gera o resumo. O resultado aparece como system message
+      // quando termina.
+      if (result.compactStarted) {
         setStatus("compacting");
-        setLastUsage({
-          prompt_tokens: cr.afterTokens,
-          completion_tokens: 0,
-          total_tokens: cr.afterTokens,
-        });
-        // Return to idle after 1.2s so the user sees the feedback
-        setTimeout(() => setStatus("idle"), 1200);
+        if (result.message) {
+          setSystemMessages((prev) => [...prev, result.message!]);
+        }
+        // Executa a compactação assíncrona (LLM-based)
+        const instruction = result.compactInstruction;
+        (async () => {
+          try {
+            const { compactHistoryAsync } = await import("../history.js");
+            const compactResult = await compactHistoryAsync(instruction);
+            if (!compactResult) {
+              setSystemMessages((prev) => [...prev, "Nada para compactar (contexto muito curto)."]);
+              return;
+            }
+            const methodLabel = compactResult.method === "llm" ? "LLM (IA gerou resumo inteligente)" : "mecanico (fallback)";
+            const msg = `Contexto compactado!\n` +
+              `  - ${compactResult.removed} mensagens removidas\n` +
+              `  - Tokens: ${compactResult.beforeTokens.toLocaleString()} -> ${compactResult.afterTokens.toLocaleString()} (-${(compactResult.beforeTokens - compactResult.afterTokens).toLocaleString()})\n` +
+              `  - Economia: ${((1 - compactResult.afterTokens / compactResult.beforeTokens) * 100).toFixed(1)}%\n` +
+              `  - Metodo: ${methodLabel}` +
+              (instruction ? `\n  - Foco: ${instruction}` : "");
+            setSystemMessages((prev) => [...prev, msg]);
+            // Atualiza a barra de contexto imediatamente
+            setLastUsage({
+              prompt_tokens: compactResult.afterTokens,
+              completion_tokens: 0,
+              total_tokens: compactResult.afterTokens,
+            });
+          } catch (err) {
+            setSystemMessages((prev) => [...prev, `Erro na compactacao: ${(err as Error).message}`]);
+          } finally {
+            isProcessing.current = false;
+            setStatus("idle");
+          }
+        })();
+        return true; // NÃO setar isProcessing = false aqui
       }
       if (result.message) {
         setSystemMessages((prev) => [...prev, result.message!]);

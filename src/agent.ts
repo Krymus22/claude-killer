@@ -2009,6 +2009,21 @@ export async function runAgentLoop(
     log.debug(`Injected memory: ~${memory.totalTokensEstimate} tokens`);
   }
 
+  // ── Auto Memory Injection ────────────────────────────────────────────────
+  // Load notes the IA wrote in previous sessions (corrections, patterns).
+  // Inspired by Claude Code's auto memory: first 200 lines of MEMORY.md
+  // are loaded at session start.
+  try {
+    const { readAutoMemory } = await import("./autoMemory.js");
+    const autoMem = readAutoMemory();
+    if (autoMem && autoMem.length > 50) {
+      history.addSystemMessage(`## Auto Memory (notas de sessões anteriores)\n\n${autoMem}`);
+      log.debug(`[AUTO_MEMORY] Injected ${autoMem.length} chars`);
+    }
+  } catch (autoMemErr) {
+    log.debug(`[AUTO_MEMORY] Failed to load: ${(autoMemErr as Error).message}`);
+  }
+
   history.addUserMessage(userInput);
   recordMessage(userInput.length);
   log.debug(`History: ${history.historySummary()}`);
@@ -2091,6 +2106,19 @@ export async function runAgentLoop(
   // Clear any leftover activity entries so the TUI doesn't show a stale
   // "Executando tool: foo" after the loop has ended.
   clearActivity();
+
+  // ── Auto Memory Suggestion ───────────────────────────────────────────────
+  // After the IA responds, check if the user was correcting the IA.
+  // If so, inject a hint suggesting the IA write a note for future sessions.
+  // This is non-blocking and doesn't affect the current response.
+  try {
+    const { maybeSuggestMemoryWrite } = await import("./autoMemory.js");
+    const suggestion = maybeSuggestMemoryWrite(userInput, result);
+    if (suggestion) {
+      history.addSystemMessage(suggestion);
+      log.debug("[AUTO_MEMORY] Suggested memory write for next turn");
+    }
+  } catch { /* auto memory is optional */ }
 
   return result;
 }

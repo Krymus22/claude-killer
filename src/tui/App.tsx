@@ -22,7 +22,8 @@ import { config } from "../config.js";
 import { shutdownMCPServers, getActiveSkills, getActiveMCPServers } from "../extensions.js";
 import { discoverExtensions, getAllExtensions } from "../extensionCenter.js";
 import { setEffortLevel, getEffortLabel } from "../effortLevels.js";
-import { getPoolSize } from "../apiKeyPool.js";
+import { getPoolSize, formatPoolStats } from "../apiKeyPool.js";
+import { getRegistry as getExternalToolRegistry } from "../externalTools.js";
 import {
   getAllModes,
   getActiveModeName,
@@ -33,7 +34,7 @@ import {
   suggestMode,
   confirmAndSaveMode,
 } from "../modes.js";
-import { getLocalizedSlashCommands, getCommandI18n } from "../i18n.js";
+import { getLocalizedSlashCommands, getCommandI18n, detectLanguage, setLanguage, resetLanguageCache } from "../i18n.js";
 // Sprint 10: Inbox organizer — /organize slash command + 'O' key in Hub
 import { organizeInbox, formatOrganizeResult } from "../inboxOrganizer.js";
 import { colors } from "./theme.js";
@@ -46,6 +47,7 @@ import { QuestionPrompt } from "./QuestionPrompt.js";
 import { ConfiguratorChat } from "./ConfiguratorChat.js";
 import { useTerminalWidth } from "./useTerminal.js";
 import type { AskUserQuestion, AskUserResponse } from "../askUser.js";
+import { getSearxStatus } from "../searxManager.js";
 
 // --- Types ------------------------------------------------------------------
 
@@ -243,11 +245,10 @@ function handleConfigurarCommand(arg: string | null): CommandResult {
 }
 
 function handleToolsCommand(arg: string | null): CommandResult {
-  const { getRegistry } = require("../externalTools.js");
-  const registry = getRegistry();
-  
+  const registry = getExternalToolRegistry();
+
   const category = arg;
-  const tools = category ? registry.getByCategory(category) : registry.getAll();
+  const tools = category ? registry.getByCategory(category as any) : registry.getAll();
   
   if (tools.length === 0) {
     return { handled: true, message: category ? `No tools in category "${category}".` : "No tools available." };
@@ -283,9 +284,8 @@ function handleToolInfoCommand(arg: string | null): CommandResult {
   if (!arg) {
     return { handled: true, message: "Uso: /toolinfo <nome_da_tool>" };
   }
-  
-  const { getRegistry } = require("../externalTools.js");
-  const registry = getRegistry();
+
+  const registry = getExternalToolRegistry();
   const tool = registry.get(arg);
   
   if (!tool) {
@@ -363,7 +363,6 @@ const COMMAND_HANDLERS: Record<string, (arg: string | null) => CommandResult> = 
 };
 
 function handleLangCommand(arg: string | null): CommandResult {
-  const { detectLanguage, setLanguage, resetLanguageCache } = require("../i18n.js") as typeof import("../i18n.js");
   if (!arg) {
     const current = detectLanguage();
     return { handled: true, message: `Idioma atual: ${current}\nUse: /lang pt-BR | en` };
@@ -387,7 +386,6 @@ function handleSearxCommand(_arg: string | null): CommandResult {
   // is being used as the backend).
   let status: { installed: boolean; running: boolean; weStarted: boolean; pid: number | null; url: string; dir: string };
   try {
-    const { getSearxStatus } = require("../searxManager.js") as typeof import("../searxManager.js");
     status = getSearxStatus();
   } catch (err) {
     return {
@@ -602,7 +600,6 @@ function handlePoolCommand(): CommandResult {
   if (size === 0) {
     return { handled: true, message: "Pool: modo single-key (configure NVIDIA_API_KEYS for multi-key)" };
   }
-  const { formatPoolStats } = require("../apiKeyPool.js");
   return { handled: true, message: formatPoolStats() };
 }
 

@@ -575,7 +575,7 @@ function handleModeCommand(arg: string | null): CommandResult {
         `Choose an option:\n` +
         `  /mode ${modeName} new   -> Ativa modo + inicia chat novo (contexto limpo)\n` +
         `  /mode ${modeName} keep  -> Activate mode + keep current chat (same context)\n\n` +
-        `Tools: ${mode.enableTools.length} | Skills: ${mode.enableSkills.length} | Features: ${mode.enableFeatures.length}\n` +
+        `Tools: ${((mode as any).enableTools ?? (mode as any).tools ?? []).length} | Skills: ${((mode as any).enableSkills ?? (mode as any).skills ?? []).length} | Features: ${mode.enableFeatures.length}\n` +
         `Effort: ${mode.effortLevel ?? "default"} | Strict: ${mode.strictMode ?? false} | ` +
         `Validation: ${(mode.luauValidation?.length ?? 0) + (mode.validation?.length ?? 0)} regra(s)`,
     };
@@ -603,7 +603,7 @@ function handleModeCommand(arg: string | null): CommandResult {
       message:
         `[OK] Modo "${modeName}" (${mode.label}) ativado!\n` +
         `[*] Chat reiniciado - contexto limpo.\n\n` +
-        `Tools: ${mode.enableTools.length} | Skills: ${mode.enableSkills.length} | Features: ${mode.enableFeatures.length}\n` +
+        `Tools: ${((mode as any).enableTools ?? (mode as any).tools ?? []).length} | Skills: ${((mode as any).enableSkills ?? (mode as any).skills ?? []).length} | Features: ${mode.enableFeatures.length}\n` +
         `Effort: ${mode.effortLevel ?? "default"} | Strict: ${mode.strictMode ?? false}\n\n` +
         `Ready to start. What do you want to do?`,
     };
@@ -615,7 +615,7 @@ function handleModeCommand(arg: string | null): CommandResult {
     message:
       `[OK] Modo "${modeName}" (${mode.label}) ativado!\n` +
       `[*] Chat mantido - contexto atual preservado.\n\n` +
-      `Tools: ${mode.enableTools.length} | Skills: ${mode.enableSkills.length} | Features: ${mode.enableFeatures.length}\n` +
+      `Tools: ${((mode as any).enableTools ?? (mode as any).tools ?? []).length} | Skills: ${((mode as any).enableSkills ?? (mode as any).skills ?? []).length} | Features: ${mode.enableFeatures.length}\n` +
       `Effort: ${mode.effortLevel ?? "default"} | Strict: ${mode.strictMode ?? false}\n\n` +
       `As ferramentas do modo foram adicionadas. Continue conversando.`,
   };

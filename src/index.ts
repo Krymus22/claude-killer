@@ -94,24 +94,37 @@ async function main(): Promise<void> {
     });
   }
 
-  // Start heartbeat — ONLY for NVIDIA with single key (ZenMux has no cold start).
+  // Start heartbeat — ONLY for NVIDIA (ZenMux has no cold start).
   // NVIDIA NIM free tier unloads models from GPU after 30-60 min of inactivity.
-  // With multi-key pool, heartbeat is DISABLED because:
-  //   1. The pool rotates keys during normal chat, keeping them warm
-  //   2. Prewarm at startup already warms all keys
-  //   3. Heartbeat on a single key (#0) was causing 429s by consuming
-  //      that key's rate limit budget while the pool also uses it
+  //
+  // Heartbeat strategy:
+  //   - With pool: use the LAST key (reserve key) so it doesn't compete
+  //     with the pool's main keys for rate limit budget. The reserve key
+  //     stays warm so if a main key fails, the reserve is ready.
+  //   - Without pool: use the single key (only option).
+  //   - Interval: 5 minutes (300000ms) — enough to keep GPU warm,
+  //     not enough to cause 429.
   if (providerNeedsHeartbeat()) {
-    if (getPoolSize() === 0 && process.env.NVIDIA_API_KEY) {
-      // Single-key mode: heartbeat is useful to keep the model warm
+    const allKeys = process.env.NVIDIA_API_KEYS?.split(",").map(k => k.trim()).filter(k => k) ?? [];
+    const poolSize = allKeys.length;
+
+    if (poolSize > 0) {
+      // Use LAST key (reserve) for heartbeat — doesn't compete with pool
+      const heartbeatKey = allKeys[poolSize - 1];
+      const heartbeatClient = new OpenAI({
+        apiKey: heartbeatKey,
+        baseURL: providerConfig.baseUrl,
+        timeout: 30_000,
+      });
+      console.log(`[claude-killer] Heartbeat active on key #${poolSize - 1} (reserve), interval=5min`);
+      startHeartbeat(heartbeatClient);
+    } else if (process.env.NVIDIA_API_KEY) {
       const heartbeatClient = new OpenAI({
         apiKey: process.env.NVIDIA_API_KEY,
         baseURL: providerConfig.baseUrl,
         timeout: 30_000,
       });
       startHeartbeat(heartbeatClient);
-    } else if (getPoolSize() > 0) {
-      console.log("[claude-killer] Multi-key pool active — heartbeat disabled (pool keeps keys warm)");
     }
   }
 

@@ -421,18 +421,18 @@ function loadMCPsFromModeDir(modeName: string): Record<string, MCPConfig> {
         const filePath = path.join(dir, file);
         try {
           const content = JSON.parse(fs.readFileSync(filePath, "utf8"));
-          if (content.command) {
-            // Simple format: { command, args, env }
-            const name = file.replace(/\.json$/, "");
-            if (!result[name]) result[name] = content;
+          if (content.name && content.command) {
+            // Named format: { name, command, args, env } — uses the name field
+            if (!result[content.name]) result[content.name] = content;
           } else if (content.mcpServers) {
             // Plugin format: { mcpServers: { name: { command, args, env } } }
             for (const [name, cfg] of Object.entries(content.mcpServers)) {
               if (!result[name]) result[name] = cfg as MCPConfig;
             }
-          } else if (content.name && content.command) {
-            // Named format: { name, command, args, env }
-            if (!result[content.name]) result[content.name] = content;
+          } else if (content.command) {
+            // Simple format: { command, args, env } — uses filename as name
+            const name = file.replace(/\.json$/, "");
+            if (!result[name]) result[name] = content;
           }
         } catch { /* skip invalid JSON */ }
       }
@@ -513,7 +513,16 @@ export async function loadAllExtensions() {
 
   for (const [name, cfg] of Object.entries(mcpConfigs)) {
     try {
+      console.log(`[MCP] Starting server "${name}" (command: ${cfg.command})...`);
       await startAndInitMCPServer(name, cfg);
+      if (activeMCPServers.has(name)) {
+        const server = activeMCPServers.get(name)!;
+        if (server.initialized) {
+          console.log(`[MCP] Server "${name}" connected! ${server.tools.length} tool(s) available.`);
+        } else {
+          console.log(`[MCP] Server "${name}" started but not initialized.`);
+        }
+      }
     } catch (e) {
       console.error(`[MCP] Failed to start server "${name}": ${(e as Error).message}`);
     }

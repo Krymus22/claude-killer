@@ -102,8 +102,11 @@ vi.mock("../modes.js", () => ({
     enableSkills: [], enableFeatures: [], effortLevel: "medium", strictMode: false,
     readBeforeWrite: false, advancedThinking: false, luauValidation: [],
   })),
-  confirmAndSaveMode: vi.fn(async () => ({
-    name: "suggested", label: "Suggested", enableTools: [], enableSkills: [],
+  // NOTE: confirmAndSaveMode is SYNCHRONOUS in modes.ts (returns ModeDefinition,
+  // not Promise<ModeDefinition>). The mock here returns the user-provided name
+  // so tests can verify the right name was used.
+  confirmAndSaveMode: vi.fn((suggestion: { name: string }) => ({
+    name: suggestion.name, label: "Suggested", enableTools: [], enableSkills: [],
     enableFeatures: [], effortLevel: "medium", strictMode: false,
   })),
 }));
@@ -126,6 +129,9 @@ vi.mock("../apiKeyPool.js", () => ({
 }));
 
 // Mock i18n — define TODOS os slash commands (incluindo /buscar, /organize, /configurar)
+const mockedDetectLanguage = vi.hoisted(() => vi.fn(() => "en"));
+const mockedSetLanguage = vi.hoisted(() => vi.fn());
+const mockedResetLanguageCache = vi.hoisted(() => vi.fn());
 vi.mock("../i18n.js", () => ({
   getLocalizedSlashCommands: vi.fn(() => [
     { cmd: "/help", desc: "Mostra comandos disponíveis" },
@@ -148,8 +154,12 @@ vi.mock("../i18n.js", () => ({
     { cmd: "/buscar", desc: "Procurar arquivo na máquina (tools, etc)" },
     { cmd: "/organize", desc: "Organiza inbox do modo ativo" },
     { cmd: "/configurar", desc: "Abre configurador de tools" },
+    { cmd: "/lang", desc: "Troca idioma" },
   ]),
   getCommandI18n: vi.fn((cmd: string) => ({ cmd, desc: `Descrição para ${cmd}` })),
+  detectLanguage: mockedDetectLanguage,
+  setLanguage: mockedSetLanguage,
+  resetLanguageCache: mockedResetLanguageCache,
 }));
 
 // Mock history (hoisted — /reset, /history, /plan, /compact, /caveman, /memory, /todos)
@@ -600,6 +610,202 @@ describe("Slash Commands FULL — cobertura completa de TODOS os comandos", () =
     await sendCommand(stdin, "/compact focus on Code Changes");
     const out = stripAnsi(lastFrame() ?? "");
     expect(out).toContain("Compactando com foco em: focus on Code Changes");
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // REGRESSION SUITE — multi-token args + case-insensitive + parser edge cases
+  // Root cause: old handleSlashCommand parsed `arg = parts[1]?.toLowerCase()`,
+  // truncating multi-word args AND lowercasing values where it shouldn't.
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  // ─── ALTA: /mode create <multi-word description> ─────────────────────────
+  // Bug: arg was "create" only → startsWith("create ") was false → fell through
+  // to /mode <name> branch → showed "Mode 'create' not found".
+
+  it("/mode create <multi-word> — sugere modo a partir de descrição completa", async () => {
+    const { stdin, lastFrame } = render(<App />);
+    await sendCommand(stdin, "/mode create modo para revisar código Luau");
+    const out = stripAnsi(lastFrame() ?? "");
+    // Deve chamar suggestMode (não cair no branch /mode <name>).
+    expect(out).toContain("Modo sugerido:");
+    expect(out).toContain("Reason:");
+    expect(out).toContain("Para confirmar e ativar: /mode confirm");
+    // Não deve mostrar "Mode 'create' not found" (sintoma do bug).
+    expect(out).not.toContain('Mode "create" not found');
+    expect(out).not.toContain("Choose an option");
+  });
+
+  it("/mode new <multi-word> — alias de create, também funciona", async () => {
+    const { stdin, lastFrame } = render(<App />);
+    await sendCommand(stdin, "/mode new criar ferramenta para formatar scripts");
+    const out = stripAnsi(lastFrame() ?? "");
+    expect(out).toContain("Modo sugerido:");
+    expect(out).not.toContain('Mode "new" not found');
+  });
+
+  it("/mode create (sem descrição) — mostra erro 'Empty description'", async () => {
+    const { stdin, lastFrame } = render(<App />);
+    await sendCommand(stdin, "/mode create");
+    const out = stripAnsi(lastFrame() ?? "");
+    expect(out).toContain("Empty description");
+    expect(out).toContain("/mode create <what you want to do>");
+  });
+
+  // ─── ALTA: /mode confirm <name> ──────────────────────────────────────────
+  // Bug: arg was "confirm" only → startsWith("confirm ") was false.
+
+  it("/mode confirm <name> — salva modo sugerido", async () => {
+    const { stdin, lastFrame } = render(<App />);
+    await sendCommand(stdin, "/mode confirm meu-modo");
+    const out = stripAnsi(lastFrame() ?? "");
+    expect(out).toContain('Modo "meu-modo" salvo');
+    expect(out).toContain("/mode meu-modo");
+    expect(out).not.toContain('Mode "confirm" not found');
+  });
+
+  // ─── ALTA: /buscar <filename com espaços> ─────────────────────────────────
+  // Bug: arg was only first token → "meu" instead of "meu arquivo.lua".
+
+  it("/buscar <arquivo com espaços> — preserva nome completo", async () => {
+    const { stdin, lastFrame } = render(<App />);
+    await sendCommand(stdin, "/buscar meu arquivo.lua");
+    const out = stripAnsi(lastFrame() ?? "");
+    expect(out).toContain('Searching "meu arquivo.lua"');
+    // Sintoma do bug: mostrava 'Searching "meu"'.
+    expect(out).not.toContain('Searching "meu"');
+  });
+
+  it("/buscar <arquivo com path> — preserva path com subpastas", async () => {
+    const { stdin, lastFrame } = render(<App />);
+    await sendCommand(stdin, "/buscar src/utils/helpers.ts");
+    const out = stripAnsi(lastFrame() ?? "");
+    expect(out).toContain('Searching "src/utils/helpers.ts"');
+  });
+
+  // ─── MÉDIA: case-insensitive em /lang (bug preexistente era pt-BR→pt-br) ──
+
+  it("/lang pt-BR — aceita case correto (regressão do lowercasing)", async () => {
+    const { stdin, lastFrame } = render(<App />);
+    await sendCommand(stdin, "/lang pt-BR");
+    expect(mockedSetLanguage).toHaveBeenCalledWith("pt-BR");
+    expect(mockedResetLanguageCache).toHaveBeenCalledTimes(1);
+    const out = stripAnsi(lastFrame() ?? "");
+    expect(out).toContain("Idioma alterado para: pt-BR");
+  });
+
+  it("/lang pt-br — aceita lowercase e normaliza para pt-BR", async () => {
+    const { stdin, lastFrame } = render(<App />);
+    await sendCommand(stdin, "/lang pt-br");
+    expect(mockedSetLanguage).toHaveBeenCalledWith("pt-BR");
+    const out = stripAnsi(lastFrame() ?? "");
+    expect(out).toContain("pt-BR");
+    expect(out).not.toContain("Invalid language");
+  });
+
+  it("/lang PT-BR — aceita uppercase e normaliza para pt-BR", async () => {
+    const { stdin, lastFrame } = render(<App />);
+    await sendCommand(stdin, "/lang PT-BR");
+    expect(mockedSetLanguage).toHaveBeenCalledWith("pt-BR");
+  });
+
+  it("/lang EN — aceita uppercase", async () => {
+    const { stdin, lastFrame } = render(<App />);
+    await sendCommand(stdin, "/lang EN");
+    expect(mockedSetLanguage).toHaveBeenCalledWith("en");
+  });
+
+  it("/lang invalido — mostra erro com opções", async () => {
+    const { stdin, lastFrame } = render(<App />);
+    await sendCommand(stdin, "/lang fr");
+    const out = stripAnsi(lastFrame() ?? "");
+    expect(out).toContain("Invalid language: fr");
+    expect(out).toContain("Options: pt-BR, en");
+    expect(mockedSetLanguage).not.toHaveBeenCalled();
+  });
+
+  it("/lang (sem arg) — mostra idioma atual", async () => {
+    mockedDetectLanguage.mockReturnValue("pt-BR");
+    const { stdin, lastFrame } = render(<App />);
+    await sendCommand(stdin, "/lang");
+    const out = stripAnsi(lastFrame() ?? "");
+    expect(out).toContain("Idioma atual: pt-BR");
+    expect(out).toContain("Use: /lang pt-BR | en");
+  });
+
+  // ─── MÉDIA: case-insensitive em /effort ──────────────────────────────────
+
+  it("/effort HIGH — aceita uppercase e normaliza", async () => {
+    const { stdin } = render(<App />);
+    await sendCommand(stdin, "/effort HIGH");
+    expect(mockedSetEffortLevel).toHaveBeenCalledWith("high");
+  });
+
+  it("/effort High — aceita mixed case", async () => {
+    const { stdin } = render(<App />);
+    await sendCommand(stdin, "/effort High");
+    expect(mockedSetEffortLevel).toHaveBeenCalledWith("high");
+  });
+
+  // ─── MÉDIA: case-insensitive em /caveman ─────────────────────────────────
+
+  it("/caveman LITE — aceita uppercase e normaliza", async () => {
+    const { stdin } = render(<App />);
+    await sendCommand(stdin, "/caveman LITE");
+    expect(mockedSetCavemanLevel).toHaveBeenCalledWith("lite");
+  });
+
+  it("/caveman Ultra — aceita mixed case", async () => {
+    const { stdin } = render(<App />);
+    await sendCommand(stdin, "/caveman Ultra");
+    expect(mockedSetCavemanLevel).toHaveBeenCalledWith("ultra");
+  });
+
+  it("/caveman OFF — aceita uppercase e desativa", async () => {
+    const { stdin } = render(<App />);
+    await sendCommand(stdin, "/caveman OFF");
+    expect(mockedSetCavemanLevel).toHaveBeenCalledWith(null);
+  });
+
+  // ─── MÉDIA: case-insensitive em /tools <category> ────────────────────────
+
+  it("/tools ROBLOX — aceita uppercase category e normaliza", async () => {
+    mockedGetByCategory.mockReturnValue([
+      { name: "rojo", category: "roblox", description: "Build tool", flags: [], context: { whenToUse: [], examples: [] } },
+    ]);
+    mockedIsInstalled.mockReturnValue(true);
+    const { stdin, lastFrame } = render(<App />);
+    await sendCommand(stdin, "/tools ROBLOX");
+    // Deve chamar getByCategory com "roblox" (lowercase), não "ROBLOX".
+    expect(mockedGetByCategory).toHaveBeenCalledWith("roblox");
+    const out = stripAnsi(lastFrame() ?? "");
+    expect(out).toContain("rojo");
+  });
+
+  // ─── MÉDIA: case-insensitive em /toolinfo <name> ──────────────────────────
+
+  it("/toolinfo ROJO — aceita uppercase e encontra tool", async () => {
+    mockedToolGet.mockImplementation((name: string) =>
+      name === "rojo"
+        ? { name: "rojo", category: "roblox", description: "Build", command: "rojo", args: [], flags: [], context: { whenToUse: [], examples: [] } }
+        : null,
+    );
+    mockedIsInstalled.mockReturnValue(true);
+    const { stdin, lastFrame } = render(<App />);
+    await sendCommand(stdin, "/toolinfo ROJO");
+    // Deve chamar registry.get com "rojo" (lowercase).
+    expect(mockedToolGet).toHaveBeenCalledWith("rojo");
+    const out = stripAnsi(lastFrame() ?? "");
+    expect(out).toContain("[T] rojo");
+  });
+
+  // ─── MÉDIA: case-insensitive em /configurar <tool> ───────────────────────
+
+  it("/configurar ROJO — aceita uppercase e normaliza tool name", async () => {
+    const { stdin, lastFrame } = render(<App />);
+    await sendCommand(stdin, "/configurar ROJO", 400);
+    const out = stripAnsi(lastFrame() ?? "");
+    // Mensagem de abertura deve mostrar "rojo" (lowercase).
+    expect(out).toContain('Abrindo configurador for "rojo"');
   });
 
   it("/mode off — deactivates and calls deactivateMode()", async () => {

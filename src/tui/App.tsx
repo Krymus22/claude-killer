@@ -511,8 +511,11 @@ function handleModeCommand(arg: string | null): CommandResult {
   }
 
   // /mode create <description> - AI-assisted mode creation
-  if (arg.startsWith("create ") || arg.startsWith("new ")) {
-    const prompt = arg.replace(/^(create|new)\s+/, "").trim();
+  // Accept "/mode create" (bare, no description) → show "Empty description"
+  // instead of falling through to "/mode <name>" which would show the
+  // misleading "Mode 'create' not found" message.
+  if (arg === "create" || arg === "new" || arg.startsWith("create ") || arg.startsWith("new ")) {
+    const prompt = arg.replace(/^(create|new)(\s+)?/, "").trim();
     if (!prompt) {
       return { handled: true, message: "Empty description. Use: /mode create <what you want to do>" };
     }

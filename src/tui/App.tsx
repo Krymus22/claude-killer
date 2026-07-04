@@ -48,6 +48,7 @@ import { ConfiguratorChat } from "./ConfiguratorChat.js";
 import { useTerminalWidth } from "./useTerminal.js";
 import type { AskUserQuestion, AskUserResponse } from "../askUser.js";
 import { getSearxStatus } from "../searxManager.js";
+import { loadConfig as loadDotfileConfig, updateConfig as updateDotfileConfig, saveConfig as saveDotfileConfig } from "../dotfileConfig.js";
 
 // --- Types ------------------------------------------------------------------
 
@@ -165,10 +166,9 @@ function handleMcpCommand(arg: string | null): CommandResult {
     }
     const [name, command, ...args] = parts;
     try {
-      const { loadConfig, updateConfig } = require("../dotfileConfig.js");
-      const current = loadConfig();
+      const current = loadDotfileConfig();
       const existingServers = current.mcpServers ?? {};
-      const updated = updateConfig({
+      const updated = updateDotfileConfig({
         mcpServers: {
           ...existingServers,
           [name!]: { command, args: args.length > 0 ? args : undefined },
@@ -196,14 +196,13 @@ function handleMcpCommand(arg: string | null): CommandResult {
       return { handled: true, message: "Usage: /mcp remove <name>" };
     }
     try {
-      const { loadConfig, saveConfig } = require("../dotfileConfig.js");
-      const current = loadConfig();
+      const current = loadDotfileConfig();
       const existingServers = current.mcpServers ?? {};
       if (!existingServers[name]) {
         return { handled: true, message: `MCP server "${name}" not found in ~/.claude-killer/config.json` };
       }
       delete existingServers[name];
-      saveConfig({ ...current, mcpServers: existingServers });
+      saveDotfileConfig({ ...current, mcpServers: existingServers });
       return {
         handled: true,
         message:

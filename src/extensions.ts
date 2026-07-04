@@ -216,14 +216,19 @@ function loadPluginsFromDir(dirPath: string): { skills: Skill[]; mcps: Record<st
 
 /**
  * Send a JSON-RPC request to an MCP server via its stdin.
- * Framing: "Content-Length: <n>\r\n\r\n<json body>"
+ * Framing: NDJSON (newline-delimited JSON) per MCP spec — `{json}\n`.
+ * (Previous versions used LSP-style Content-Length framing, but the MCP
+ * spec at https://spec.modelcontextprotocol.io/ specifies NDJSON. Servers
+ * like Roblox Studio's StudioMCP.exe follow the spec and fail to parse
+ * Content-Length framing with "serde error expected value at line 1 column 1".)
  */
 function sendRequest(server: ActiveMCPServer, method: string, params?: Record<string, unknown>): Promise<unknown> {
   return new Promise((resolve, reject) => {
     const id = server.nextRequestId++;
     const request: JSONRPCRequest = { jsonrpc: "2.0", id, method, params };
     const body = JSON.stringify(request);
-    const message = `Content-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`;
+    // NDJSON: JSON object followed by a single newline. No Content-Length header.
+    const message = body + "\n";
 
     server.pendingRequests.set(id, { resolve, reject });
 
@@ -266,42 +271,72 @@ function sendRequest(server: ActiveMCPServer, method: string, params?: Record<st
 }
 
 /**
- * Parse Content-Length framed messages from the server's stdout buffer.
- * Returns an array of parsed JSON-RPC response objects.
+ * Parse incoming MCP messages from the server's stdout buffer.
+ *
+ * Supports TWO framing formats (auto-detected per chunk):
+ *   1. NDJSON (MCP spec — https://spec.modelcontextprotocol.io/):
+ *      each message is a JSON object on its own line, delimited by `\n`.
+ *   2. LSP-style Content-Length framing (legacy, used by some older servers):
+ *      `Content-Length: <n>\r\n\r\n<json body>`
+ *
+ * Auto-detection: if the buffer contains `\r\n\r\n` with a Content-Length
+ * header, parse as LSP. Otherwise, parse as NDJSON (split by newlines).
  */
 function parseMessages(buffer: string): { messages: JSONRPCResponse[]; remaining: string } {
   const messages: JSONRPCResponse[] = [];
   let remaining = buffer;
 
-  while (true) {
-    const headerEnd = remaining.indexOf("\r\n\r\n");
-    if (headerEnd === -1) break;
+  // Check if this looks like LSP-style Content-Length framing
+  const hasLspHeader = /Content-Length:\s*\d+/i.test(remaining) && remaining.includes("\r\n\r\n");
 
-    const header = remaining.slice(0, headerEnd);
-    const match = /Content-Length:\s*(\d+)/i.exec(header);
-    if (!match) break;
+  if (hasLspHeader) {
+    // Legacy LSP-style parsing (for backward compat with old servers)
+    while (true) {
+      const headerEnd = remaining.indexOf("\r\n\r\n");
+      if (headerEnd === -1) break;
 
-    const contentLength = Number.parseInt(match[1], 10);
-    const bodyStart = headerEnd + 4;
-    const bodyEnd = bodyStart + contentLength;
+      const header = remaining.slice(0, headerEnd);
+      const match = /Content-Length:\s*(\d+)/i.exec(header);
+      if (!match) break;
 
-    if (remaining.length < bodyEnd) break; // incomplete message
+      const contentLength = Number.parseInt(match[1], 10);
+      const bodyStart = headerEnd + 4;
+      const bodyEnd = bodyStart + contentLength;
 
-    const body = remaining.slice(bodyStart, bodyEnd);
-    remaining = remaining.slice(bodyEnd);
+      if (remaining.length < bodyEnd) break; // incomplete message
 
-    try {
-      const parsed = JSON.parse(body) as JSONRPCResponse;
-      messages.push(parsed);
-    } catch { /* skip malformed messages */ }
+      const body = remaining.slice(bodyStart, bodyEnd);
+      remaining = remaining.slice(bodyEnd);
+
+      try {
+        const parsed = JSON.parse(body) as JSONRPCResponse;
+        messages.push(parsed);
+      } catch { /* skip malformed messages */ }
+    }
+  } else {
+    // NDJSON parsing (MCP spec)
+    const lines = remaining.split("\n");
+    // Last element is the incomplete line (no trailing newline yet) — keep it as remaining
+    remaining = lines.pop() ?? "";
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed) continue; // skip empty lines
+      try {
+        const parsed = JSON.parse(trimmed) as JSONRPCResponse;
+        messages.push(parsed);
+      } catch {
+        // Not valid JSON — could be a partial message or server log output.
+        // Skip silently; if it's a partial, the rest will arrive in the next chunk.
+      }
+    }
   }
 
   return { messages, remaining };
 }
 
 /**
- * Set up stdout line parsing for a server. Buffers data and extracts
- * Content-Length framed JSON-RPC messages.
+ * Set up stdout parsing for a server. Buffers data and extracts JSON-RPC
+ * messages (auto-detects NDJSON vs LSP-style Content-Length framing).
  */
 function setupMessageParser(server: ActiveMCPServer): void {
   server.process.stdout!.on("data", (chunk: Buffer) => {
@@ -345,9 +380,9 @@ async function initializeServer(server: ActiveMCPServer): Promise<boolean> {
     server.capabilities = initResult.capabilities as Record<string, unknown> | undefined;
 
     // Send initialized notification (no id = notification)
+    // NDJSON framing: JSON object followed by newline (per MCP spec)
     const notification = JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" });
-    const framed = `Content-Length: ${Buffer.byteLength(notification)}\r\n\r\n${notification}`;
-    server.process.stdin!.write(framed);
+    server.process.stdin!.write(notification + "\n");
 
     server.initialized = true;
     return true;
@@ -761,10 +796,9 @@ export async function loadModeMCPs(modeName: string): Promise<void> {
 export function shutdownMCPServers() {
   for (const [, server] of activeMCPServers.entries()) {
     try {
-      // Send shutdown notification before killing
+      // Send shutdown notification before killing (NDJSON framing per MCP spec)
       const notification = JSON.stringify({ jsonrpc: "2.0", method: "notifications/cancelled" });
-      const framed = `Content-Length: ${Buffer.byteLength(notification)}\r\n\r\n${notification}`;
-      server.process.stdin!.write(framed);
+      server.process.stdin!.write(notification + "\n");
     } catch { /* ignore */ }
     try {
       server.process.kill();

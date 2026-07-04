@@ -107,6 +107,125 @@ function handlePluginsCommand(): CommandResult {
   return { handled: true, message: `MCP Servers:\n${text}` };
 }
 
+/**
+ * BUG FIX (BUG 3C): /mcp slash command for managing MCP servers.
+ *
+ * Subcommands:
+ *   /mcp                 — list active MCP servers + supported config locations
+ *   /mcp list            — alias for /mcp
+ *   /mcp add <name> <command> [args...]
+ *                         — add MCP server to ~/.claude-killer/config.json
+ *   /mcp remove <name>   — remove MCP server from ~/.claude-killer/config.json
+ *
+ * Note: adding/removing requires a CLI restart to take effect (MCPs are loaded
+ * at startup). This is the same UX as Claude Code's `claude mcp add`.
+ */
+function handleMcpCommand(arg: string | null): CommandResult {
+  const subcommand = arg?.split(/\s+/)[0]?.toLowerCase() ?? "";
+
+  // /mcp or /mcp list
+  if (!subcommand || subcommand === "list") {
+    const servers = getActiveMCPServers();
+    const lines: string[] = ["MCP Servers:"];
+    if (servers.length === 0) {
+      lines.push("  (none active)");
+    } else {
+      for (const s of servers) lines.push(`  * ${s}`);
+    }
+    lines.push(
+      "",
+      "Config locations (loaded at startup, in precedence order):",
+      "  1. ./.mcp.json                                    (project-local, Claude Code format)",
+      "  2. ~/.claude-killer/config.json → mcpServers      (native dotfile)",
+      "  3. ~/.claude.json → mcpServers                    (Claude Code global)",
+      "  4. ~/.claude-killer/plugins/*/plugin.json         (plugins)",
+      "  5. ~/.claude-killer/modes/<mode>/mcps/*.json      (mode-specific)",
+      "",
+      "Usage:",
+      "  /mcp add <name> <command> [args...]   — add server to ~/.claude-killer/config.json",
+      "  /mcp remove <name>                    — remove server",
+      "  /mcp list                             — list active servers",
+      "",
+      "Example:",
+      '  /mcp add Roblox_Studio cmd.exe /c %LOCALAPPDATA%\\Roblox\\mcp.bat',
+      "  (restart CLI to load the new server)",
+    );
+    return { handled: true, message: lines.join("\n") };
+  }
+
+  // /mcp add <name> <command> [args...]
+  if (subcommand === "add") {
+    const rest = arg!.slice(3).trim(); // remove "add"
+    const parts = rest.split(/\s+/).filter(Boolean);
+    if (parts.length < 2) {
+      return {
+        handled: true,
+        message: 'Usage: /mcp add <name> <command> [args...]\nExample: /mcp add Roblox_Studio cmd.exe /c %LOCALAPPDATA%\\Roblox\\mcp.bat',
+      };
+    }
+    const [name, command, ...args] = parts;
+    try {
+      const { loadConfig, updateConfig } = require("../dotfileConfig.js");
+      const current = loadConfig();
+      const existingServers = current.mcpServers ?? {};
+      const updated = updateConfig({
+        mcpServers: {
+          ...existingServers,
+          [name!]: { command, args: args.length > 0 ? args : undefined },
+        },
+      });
+      const total = Object.keys(updated.mcpServers ?? {}).length;
+      return {
+        handled: true,
+        message:
+          `[OK] MCP server "${name}" added to ~/.claude-killer/config.json\n` +
+          `  command: ${command}\n` +
+          `  args:    ${args.length > 0 ? args.join(" ") : "(none)"}\n` +
+          `  total servers in config: ${total}\n\n` +
+          `Restart the CLI to load it. (MCPs are spawned at startup.)`,
+      };
+    } catch (err) {
+      return { handled: true, message: `Failed to add MCP server: ${(err as Error).message}` };
+    }
+  }
+
+  // /mcp remove <name>
+  if (subcommand === "remove" || subcommand === "rm" || subcommand === "delete") {
+    const name = arg!.split(/\s+/)[1];
+    if (!name) {
+      return { handled: true, message: "Usage: /mcp remove <name>" };
+    }
+    try {
+      const { loadConfig, saveConfig } = require("../dotfileConfig.js");
+      const current = loadConfig();
+      const existingServers = current.mcpServers ?? {};
+      if (!existingServers[name]) {
+        return { handled: true, message: `MCP server "${name}" not found in ~/.claude-killer/config.json` };
+      }
+      delete existingServers[name];
+      saveConfig({ ...current, mcpServers: existingServers });
+      return {
+        handled: true,
+        message:
+          `[OK] MCP server "${name}" removed from ~/.claude-killer/config.json\n` +
+          `Restart the CLI to unload it.`,
+      };
+    } catch (err) {
+      return { handled: true, message: `Failed to remove MCP server: ${(err as Error).message}` };
+    }
+  }
+
+  return {
+    handled: true,
+    message:
+      `Unknown subcommand: "${subcommand}"\n` +
+      `Usage: /mcp [list|add|remove]\n` +
+      `  /mcp                    — list active servers + config locations\n` +
+      `  /mcp add <name> <cmd> [args...]  — add server\n` +
+      `  /mcp remove <name>      — remove server`,
+  };
+}
+
 function handleCavemanCommand(arg: string | null): CommandResult {
   const validLevels = ["lite", "full", "ultra", "wenyan-lite", "wenyan-full", "wenyan-ultra"];
   if (!arg) {
@@ -353,6 +472,7 @@ const COMMAND_HANDLERS: Record<string, (arg: string | null) => CommandResult> = 
   "/history": () => handleHistoryCommand(),
   "/skills": () => handleSkillsCommand(),
   "/plugins": () => handlePluginsCommand(),
+  "/mcp": (arg) => handleMcpCommand(arg),
   "/tools": (arg) => handleToolsCommand(arg),
   "/toolinfo": (arg) => handleToolInfoCommand(arg),
   "/effort": (arg) => handleEffortCommand(arg),

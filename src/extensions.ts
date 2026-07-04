@@ -370,12 +370,49 @@ async function startAndInitMCPServer(name: string, config: MCPConfig): Promise<v
   const command = override?.command ?? config.command;
   const args = override?.args ?? config.args ?? [];
 
+  // BUG FIX (BUG 3B): Platform guard — skip spawn when the command is clearly
+  // Windows-only and we're not on Windows. Previously, `cmd.exe /c foo.bat`
+  // on Linux would silently fail with ENOENT and the user would have no idea
+  // why the MCP didn't load.
+  if (platform !== "win32") {
+    const isWindowsCommand =
+      command.toLowerCase().endsWith("cmd.exe") ||
+      command.toLowerCase().endsWith(".bat") ||
+      command.toLowerCase().endsWith(".cmd") ||
+      command.toLowerCase().endsWith(".ps1");
+    const hasWindowsVar = args.some((a) => /%[A-Z_]+%/.test(a));
+    if (isWindowsCommand) {
+      console.error(
+        `[MCP] Server "${name}" skipped: command "${command}" is Windows-only but you're on ${platform}.\n` +
+        `  Either provide a platformOverrides.${platform} entry in the MCP config, or run on Windows.\n` +
+        `  Original config: command=${JSON.stringify(command)} args=${JSON.stringify(args)}`,
+      );
+      return;
+    }
+    if (hasWindowsVar) {
+      console.error(
+        `[MCP] Server "${name}" warning: args contain Windows-style %VAR% patterns ` +
+        `(${args.filter((a) => /%[A-Z_]+%/.test(a)).join(", ")}). ` +
+        `On ${platform}, these will NOT be expanded — use $VAR (POSIX) or platformOverrides.${platform}.`,
+      );
+    }
+  }
+
   const env = { ...process.env, ...config.env };
-  const child = spawn(command, args, {
-    env,
-    stdio: ["pipe", "pipe", "pipe"],
-    shell: true,
-  });
+  let child: import("child_process").ChildProcess;
+  try {
+    child = spawn(command, args, {
+      env,
+      stdio: ["pipe", "pipe", "pipe"],
+      shell: true,
+    });
+  } catch (err) {
+    console.error(
+      `[MCP] Server "${name}" failed to spawn on ${platform}: ${(err as Error).message}\n` +
+      `  command=${JSON.stringify(command)} args=${JSON.stringify(args)}`,
+    );
+    return;
+  }
 
   const server: ActiveMCPServer = {
     name,
@@ -391,7 +428,10 @@ async function startAndInitMCPServer(name: string, config: MCPConfig): Promise<v
   setupMessageParser(server);
 
   child.on("error", (err) => {
-    console.error(`[MCP] Server "${name}" spawn error: ${err.message}`);
+    console.error(
+      `[MCP] Server "${name}" spawn error on ${platform}: ${err.message}\n` +
+      `  command=${JSON.stringify(command)} args=${JSON.stringify(args)}`,
+    );
     activeMCPServers.delete(name);
   });
 
@@ -416,6 +456,86 @@ async function startAndInitMCPServer(name: string, config: MCPConfig): Promise<v
 }
 
 // --- Public API -------------------------------------------------------------
+
+/**
+ * BUG FIX (BUG 3A): Load MCP configs from multiple standard locations.
+ *
+ * Supports 3 formats the user might already have:
+ *   1. `~/.claude-killer/config.json` → `{ mcpServers: { name: { command, args, env } } }`
+ *      (our native dotfile format — previously defined but never read)
+ *   2. `./.mcp.json` (project-local) → `{ mcpServers: { ... } }`
+ *      (Claude Code native format — widely used)
+ *   3. `~/.claude.json` → `{ mcpServers: { ... } }`
+ *      (Claude Code global format — for users migrating from Claude Code)
+ *
+ * Precedence (most specific first): project .mcp.json > ~/.claude-killer/config.json > ~/.claude.json
+ * Earlier-loaded entries are NOT overridden by later ones (first wins).
+ */
+function loadMCPsFromConfigFiles(): Record<string, MCPConfig> {
+  const result: Record<string, MCPConfig> = {};
+  const home = process.env.HOME ?? process.env.USERPROFILE ?? os.homedir();
+
+  // Helper: merge MCPs from a parsed JSON object
+  const mergeFromJson = (obj: any, source: string) => {
+    if (!obj || typeof obj !== "object") return;
+    const servers = obj.mcpServers ?? obj.mcp_servers;
+    if (!servers || typeof servers !== "object") return;
+    for (const [name, cfg] of Object.entries(servers)) {
+      if (result[name]) continue; // first wins
+      const c = cfg as { command?: string; args?: string[]; env?: Record<string, string>; cwd?: string };
+      if (!c.command) continue; // skip invalid entries
+      result[name] = {
+        command: c.command,
+        args: c.args ?? [],
+        env: c.env ?? {},
+      };
+      console.log(`[MCP] Loaded "${name}" from ${source}`);
+    }
+  };
+
+  // 1. Project-local .mcp.json (highest precedence)
+  const projectMcpJson = path.join(process.cwd(), ".mcp.json");
+  try {
+    if (fs.existsSync(projectMcpJson)) {
+      mergeFromJson(JSON.parse(fs.readFileSync(projectMcpJson, "utf8")), `./.mcp.json`);
+    }
+  } catch (err) {
+    console.error(`[MCP] Failed to parse ${projectMcpJson}: ${(err as Error).message}`);
+  }
+
+  // 2. ~/.claude-killer/config.json (our native dotfile)
+  try {
+    const { loadConfig } = require("./dotfileConfig.js");
+    const dotfileCfg = loadConfig();
+    if (dotfileCfg.mcpServers) {
+      for (const [name, cfg] of Object.entries(dotfileCfg.mcpServers)) {
+        if (result[name]) continue;
+        const c = cfg as { command: string; args?: string[]; env?: Record<string, string>; cwd?: string };
+        if (!c.command) continue;
+        result[name] = {
+          command: c.command,
+          args: c.args ?? [],
+          env: c.env ?? {},
+        };
+        console.log(`[MCP] Loaded "${name}" from ~/.claude-killer/config.json`);
+      }
+    }
+  } catch {
+    // dotfileConfig not available — skip
+  }
+
+  // 3. ~/.claude.json (Claude Code global format — for migration)
+  const claudeJson = path.join(home, ".claude.json");
+  try {
+    if (fs.existsSync(claudeJson)) {
+      mergeFromJson(JSON.parse(fs.readFileSync(claudeJson, "utf8")), `~/.claude.json`);
+    }
+  } catch (err) {
+    console.error(`[MCP] Failed to parse ${claudeJson}: ${(err as Error).message}`);
+  }
+
+  return result;
+}
 
 /**
  * Sprint 7: Load MCP configs from a mode's mcps/ directory.
@@ -516,7 +636,10 @@ export async function loadAllExtensions() {
   const localPlugins = loadPluginsFromDir(path.join(LOCAL_DIR, "plugins"));
   activeSkills = [...activeSkills, ...globalPlugins.skills, ...localPlugins.skills];
 
-  const mcpConfigs = { ...globalPlugins.mcps, ...localPlugins.mcps };
+  // Start with config-file MCPs (lowest precedence — mode/plugins can override)
+  // BUG FIX (BUG 3A): previously only plugin.json + mode dirs were loaded.
+  // Now also loads from ./.mcp.json, ~/.claude-killer/config.json, ~/.claude.json
+  const mcpConfigs = { ...loadMCPsFromConfigFiles(), ...globalPlugins.mcps, ...localPlugins.mcps };
 
   // Sprint 7: Load MCPs from the active mode's mcps/ folder
   try {

@@ -1090,11 +1090,15 @@ export function App() {
       // - BUG FIX: if the user typed the full command already (e.g., "/hub" matches
       //   selected.label "/hub"), submit immediately instead of adding a space and
       //   forcing the user to press Enter twice.
+      // - BUG FIX: /mode has TWO arguments (/mode roblox new) — autocomplete
+      //   was replacing "roblox" with the subcommand match. Now we only use
+      //   autocomplete for commands with exactly ONE argument (/effort low).
       if (showAutocomplete && acMatches.length > 0) {
         const selected = acMatches[acIndex];
     if (selected?.label) {
-          if (hasSpace) {
-            // Subcommand selected - build the full command + subcommand and continue to execute
+          const spaceCount = (trimmedValue.match(/\s/g) ?? []).length;
+          if (hasSpace && spaceCount === 1) {
+            // Single-argument command (e.g., "/effort low") — autocomplete the subcommand
             const spaceIdx = trimmedValue.indexOf(" ");
             const cmdPart = trimmedValue.slice(0, spaceIdx);
             trimmedValue = `${cmdPart} ${selected.label}`;
@@ -1103,14 +1107,18 @@ export function App() {
             // Fall through to actual command execution below
           } else if (selected.label === trimmedValue) {
             // User typed the full command (e.g., "/hub" === "/hub") — submit immediately.
-            // Don't add a space, don't force a second Enter press.
             setAcIndex(0);
             // Fall through to actual command execution below
-          } else {
+          } else if (!hasSpace) {
             // Command selected - add space so user can type subcommand
             setInput(selected.label + " ");
             setAcIndex(0);
             return;
+          } else {
+            // Multi-argument command (e.g., "/mode roblox new") —
+            // user already typed the full command, just submit it.
+            setAcIndex(0);
+            // Fall through to actual command execution below
           }
         }
       }
@@ -1118,13 +1126,18 @@ export function App() {
       setInput("");
       setAcIndex(0);
       isProcessing.current = true;
-      setStatus("thinking");
 
-      // Handle slash commands
+      // Handle slash commands — set status AFTER, not before.
+      // Slash commands handle their own status (idle, compacting, etc.)
+      // Setting "thinking" before slash commands causes the "pensando..."
+      // indicator to stay forever if the command doesn't set idle.
       if (trimmedValue.startsWith("/")) {
         const exitCalled = handleSlashCommandFlow(trimmedValue);
         if (exitCalled) return;
       }
+
+      // Only set "thinking" for non-slash commands (actual IA requests)
+      setStatus("thinking");
 
       // Add user message to display
       const userMsg: ChatMessage = { role: "user", content: trimmedValue };

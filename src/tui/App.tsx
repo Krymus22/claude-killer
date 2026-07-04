@@ -127,6 +127,7 @@ function handleMcpCommand(arg: string | null): CommandResult {
   // /mcp or /mcp list
   if (!subcommand || subcommand === "list") {
     const servers = getActiveMCPServers();
+    const claudeJsonEnabled = process.env.CLAUDE_KILLER_LOAD_CLAUDE_JSON === "1";
     const lines: string[] = ["MCP Servers:"];
     if (servers.length === 0) {
       lines.push("  (none active)");
@@ -137,18 +138,18 @@ function handleMcpCommand(arg: string | null): CommandResult {
       "",
       "Config locations (loaded at startup, in precedence order):",
       "  1. ./.mcp.json                                    (project-local, Claude Code format)",
-      "  2. ~/.claude-killer/config.json → mcpServers      (native dotfile)",
-      "  3. ~/.claude.json → mcpServers                    (Claude Code global)",
+      "  2. ~/.claude-killer/config.json -> mcpServers     (native dotfile)",
+      `  3. ~/.claude.json -> mcpServers                   (Claude Code global) ${claudeJsonEnabled ? "[ENABLED]" : "[DISABLED — set CLAUDE_KILLER_LOAD_CLAUDE_JSON=1 to enable]"}`,
       "  4. ~/.claude-killer/plugins/*/plugin.json         (plugins)",
       "  5. ~/.claude-killer/modes/<mode>/mcps/*.json      (mode-specific)",
       "",
       "Usage:",
       "  /mcp add <name> <command> [args...]   — add server to ~/.claude-killer/config.json",
-      "  /mcp remove <name>                    — remove server",
+      "  /mcp remove <name>                    — remove server (searches all 3 config files)",
       "  /mcp list                             — list active servers",
       "",
       "Example:",
-      '  /mcp add Roblox_Studio cmd.exe /c %LOCALAPPDATA%\\Roblox\\mcp.bat',
+      '  /mcp add Roblox_Studio "C:\\Users\\kryst\\AppData\\Local\\Roblox\\Versions\\version-XXX\\StudioMCP.exe"',
       "  (restart CLI to load the new server)",
     );
     return { handled: true, message: lines.join("\n") };

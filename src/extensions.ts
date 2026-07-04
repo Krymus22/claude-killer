@@ -571,14 +571,20 @@ function loadMCPsFromConfigFiles(): Record<string, MCPConfig> {
     // dotfileConfig not available — skip
   }
 
-  // 3. ~/.claude.json (Claude Code global format — for migration)
-  const claudeJson = path.join(home, ".claude.json");
-  try {
-    if (fs.existsSync(claudeJson)) {
-      mergeFromJson(JSON.parse(fs.readFileSync(claudeJson, "utf8")), `~/.claude.json`);
+  // 3. ~/.claude.json (Claude Code global format)
+  // OPT-IN: only load if CLAUDE_KILLER_LOAD_CLAUDE_JSON=1 is set.
+  // Default is OFF to avoid conflicts with Claude Desktop / Claude Code
+  // (which also use ~/.claude.json). Users who want to migrate their MCPs
+  // from Claude Code can set the env var to import them.
+  if (process.env.CLAUDE_KILLER_LOAD_CLAUDE_JSON === "1") {
+    const claudeJson = path.join(home, ".claude.json");
+    try {
+      if (fs.existsSync(claudeJson)) {
+        mergeFromJson(JSON.parse(fs.readFileSync(claudeJson, "utf8")), `~/.claude.json`);
+      }
+    } catch (err) {
+      console.error(`[MCP] Failed to parse ${claudeJson}: ${(err as Error).message}`);
     }
-  } catch (err) {
-    console.error(`[MCP] Failed to parse ${claudeJson}: ${(err as Error).message}`);
   }
 
   return result;

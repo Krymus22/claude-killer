@@ -82,6 +82,8 @@ export interface ActiveMCPServer {
   pendingRequests: Map<number, { resolve: (r: any) => void; reject: (e: Error) => void }>;
   buffer: string;
   initialized: boolean;
+  /** Captured stderr (for debugging initialize failures). */
+  stderrBuffer: string;
 }
 
 // --- Directory Paths --------------------------------------------------------
@@ -225,10 +227,20 @@ function sendRequest(server: ActiveMCPServer, method: string, params?: Record<st
 
     server.pendingRequests.set(id, { resolve, reject });
 
-    // Timeout: 10 seconds for any MCP request. If the server doesn't respond,
-    // reject the promise so the CLI doesn't hang forever.
-    // Use 100ms in test environment to avoid blocking tests.
-    const timeoutMs = process.env.NODE_ENV === "test" ? 100 : 10_000;
+    // Timeout per request type:
+    //   - initialize: 30s (cold start on Windows is slow, especially cmd.exe /c mcp.bat
+    //     that spawns Roblox Studio internally — easily 5-15s on first run)
+    //   - tools/list: 15s (some servers query remote services)
+    //   - tools/call: 60s (actual tool execution can be slow)
+    //   - other: 10s
+    // Test environment: 100ms to avoid blocking tests.
+    const baseTimeout = process.env.NODE_ENV === "test"
+      ? 100
+      : method === "initialize" ? 30_000
+      : method === "tools/list" ? 15_000
+      : method === "tools/call" ? 60_000
+      : 10_000;
+    const timeoutMs = baseTimeout;
     const timeout = setTimeout(() => {
       if (server.pendingRequests.has(id)) {
         server.pendingRequests.delete(id);
@@ -423,10 +435,27 @@ async function startAndInitMCPServer(name: string, config: MCPConfig): Promise<v
     pendingRequests: new Map(),
     buffer: "",
     initialized: false,
+    stderrBuffer: "",
   };
 
   // Set up message parsing before initializing
   setupMessageParser(server);
+
+  // Capture stderr for debugging (MCP servers log diagnostics here)
+  if (child.stderr) {
+    child.stderr.on("data", (chunk: Buffer) => {
+      const text = chunk.toString("utf8");
+      server.stderrBuffer += text;
+      // Cap stderr buffer at 4KB to avoid memory growth
+      if (server.stderrBuffer.length > 4096) {
+        server.stderrBuffer = server.stderrBuffer.slice(-4096);
+      }
+      // Log stderr lines as debug (visible with DEBUG=true)
+      if (process.env.DEBUG || process.env.MCP_DEBUG) {
+        process.stderr.write(`[MCP:${name}:stderr] ${text}`);
+      }
+    });
+  }
 
   child.on("error", (err) => {
     console.error(
@@ -444,14 +473,25 @@ async function startAndInitMCPServer(name: string, config: MCPConfig): Promise<v
   });
 
   activeMCPServers.set(name, server);
-  // Initialize and discover tools
-
-  // Initialize and discover tools
-  const ok = await initializeServer(server);
+  // Initialize and discover tools (with 1 retry on timeout)
+  let ok = await initializeServer(server);
+  if (!ok) {
+    // Retry once — MCP servers can be slow to cold-start on Windows
+    console.error(`[MCP] Retrying initialize for "${name}" (1/1)...`);
+    ok = await initializeServer(server);
+  }
   if (ok) {
     server.tools = await discoverTools(server);
     if (server.tools.length > 0) {
       console.error(`[MCP] Server "${name}": discovered ${server.tools.length} tool(s)`);
+    }
+  } else {
+    // Log captured stderr to help debug why initialize failed
+    if (server.stderrBuffer.trim()) {
+      console.error(
+        `[MCP] Server "${name}" stderr (last 1KB):\n` +
+        server.stderrBuffer.slice(-1024),
+      );
     }
   }
 }

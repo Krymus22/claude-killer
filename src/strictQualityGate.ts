@@ -111,7 +111,7 @@ function runCommandAsync(
     try {
       child = spawn(command, args, {
         cwd,
-        shell: false,
+        shell: true,
         env: { ...process.env },
         stdio: ["ignore", "pipe", "pipe"],
       });

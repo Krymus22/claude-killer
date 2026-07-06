@@ -42,11 +42,20 @@ export default defineConfig({
       "src/__tests__/lspClient-extended.test.ts",
       // Integration tests that may call external services
       "src/__tests__/integration-agent-flow.test.ts",
-      // Slash-commands-full: tests /cd which uses Ink rendering + process.chdir.
-      // In Stryker sandboxes, the Ink submit handler doesn't fire within the
-      // test delay, so process.cwd() doesn't change. Excluding to let Stryker
-      // run on all other test files.
+      // Tests that use process.chdir() — Stryker runs tests in worker threads,
+      // and process.chdir() throws "not supported in workers" in Node.js.
+      // These tests pass in normal CI (vitest run) but fail in Stryker.
       "src/__tests__/slash-commands-full.test.tsx",
+      "src/__tests__/taskState.test.ts",
+      "src/__tests__/taskState-extended.test.ts",
+      "src/__tests__/strictQualityGate.test.ts",
+      "src/__tests__/strictQualityGate-extended.test.ts",
+      "src/__tests__/rollbackStore-extended.test.ts",
+      "src/__tests__/agent-extended.test.ts",
+      "src/__tests__/modeMigration-extended.test.ts",
+      "src/__tests__/manifestLoader-extended.test.ts",
+      "src/__tests__/imagePaste-extended.test.ts",
+      "src/__tests__/integration-modes-system.test.ts",
     ],
     coverage: {
       provider: "v8",

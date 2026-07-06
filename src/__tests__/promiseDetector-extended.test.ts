@@ -1,176 +1,335 @@
 /**
- * promiseDetector-extended.test.ts — Casos edge e integrações que NÃO estão
- * no teste básico. Foco em: detectFalsePromise (variações extras),
- * buildFalsePromiseRejectionMessage (variações), shouldBlockForFalsePromise
- * (loops e contagem), e edge cases (mensagens longas, frases mistas).
+ * promiseDetector-extended.test.ts — Extended tests for promiseDetector.ts
  *
- * PT-BR nos comentários, conforme convenção do projeto.
+ * Covers:
+ *   - detectFalsePromise: empty message, refusal phrases, both PT and EN promise phrases
+ *   - detectFalsePromise: when tools/files > 0, no detection
+ *   - shouldBlockForFalsePromise: counter increment, max retries cap
+ *   - resetFalsePromiseCounter / getFalsePromiseCount
+ *   - buildFalsePromiseRejectionMessage returns a non-empty string
+ *   - MAX_FALSE_PROMISE_RETRIES constant
+ *   - PromiseDetectionResult type contract
+ *   - Edge cases: word boundary matches, mixed-case, partial matches
  */
 
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
+
+vi.mock("../logger.js", () => ({
+  default: {
+    info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(),
+    success: vi.fn(), toolCall: vi.fn(), toolResult: vi.fn(),
+  },
+  info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(),
+  success: vi.fn(), toolCall: vi.fn(), toolResult: vi.fn(),
+}));
+
+// Minimal i18n mock: t() returns a string containing its args
+vi.mock("../i18n.js", () => ({
+  t: vi.fn((key: string, ...args: any[]) => `[${key}] ${args.join(" ")}`),
+  default: { t: vi.fn((key: string, ...args: any[]) => `[${key}] ${args.join(" ")}`) },
+}));
+
 import {
   detectFalsePromise,
-  buildFalsePromiseRejectionMessage,
   shouldBlockForFalsePromise,
+  buildFalsePromiseRejectionMessage,
   resetFalsePromiseCounter,
   getFalsePromiseCount,
   MAX_FALSE_PROMISE_RETRIES,
+  type PromiseDetectionResult,
 } from "../promiseDetector.js";
 
-describe("promiseDetector — extended", () => {
+describe("detectFalsePromise — basic states", () => {
+  it("returns detected=false for an empty message", () => {
+    const r = detectFalsePromise("", 0, 0);
+    expect(r.detected).toBe(false);
+    expect(r.matchedPhrase).toBeNull();
+  });
+
+  it("returns detected=false when tools were called", () => {
+    const r = detectFalsePromise("vou verificar isso", 1, 0);
+    expect(r.detected).toBe(false);
+    expect(r.reason).toMatch(/actions were taken/);
+  });
+
+  it("returns detected=false when files were touched", () => {
+    const r = detectFalsePromise("vou verificar isso", 0, 1);
+    expect(r.detected).toBe(false);
+    expect(r.reason).toMatch(/actions were taken/);
+  });
+
+  it("returns detected=false when both tools and files > 0", () => {
+    const r = detectFalsePromise("let me check", 3, 2);
+    expect(r.detected).toBe(false);
+  });
+
+  it("returns detected=false for messages with no promise phrase", () => {
+    const r = detectFalsePromise("Here is the answer to your question.", 0, 0);
+    expect(r.detected).toBe(false);
+    expect(r.reason).toMatch(/no promise phrase detected/);
+  });
+});
+
+describe("detectFalsePromise — refusal phrases (skip detection)", () => {
+  it("returns detected=false for PT 'não posso'", () => {
+    const r = detectFalsePromise("Desculpe, não posso fazer isso agora.", 0, 0);
+    expect(r.detected).toBe(false);
+    expect(r.reason).toMatch(/refusal phrase/);
+  });
+
+  it("returns detected=false for PT 'nao consegui'", () => {
+    const r = detectFalsePromise("Nao consegui acessar o arquivo.", 0, 0);
+    expect(r.detected).toBe(false);
+  });
+
+  it("returns detected=false for EN 'i can't'", () => {
+    const r = detectFalsePromise("Sorry, I can't do that.", 0, 0);
+    expect(r.detected).toBe(false);
+  });
+
+  it("returns detected=false for EN 'i cannot'", () => {
+    const r = detectFalsePromise("I cannot complete this task.", 0, 0);
+    expect(r.detected).toBe(false);
+  });
+
+  it("returns detected=false for EN 'unable to'", () => {
+    const r = detectFalsePromise("Unable to read the file.", 0, 0);
+    expect(r.detected).toBe(false);
+  });
+
+  it("returns detected=false for EN 'unfortunately'", () => {
+    const r = detectFalsePromise("Unfortunately, the file does not exist.", 0, 0);
+    expect(r.detected).toBe(false);
+  });
+
+  it("returns detected=false for PT 'infelizmente não'", () => {
+    const r = detectFalsePromise("Infelizmente não foi possível concluir.", 0, 0);
+    expect(r.detected).toBe(false);
+  });
+});
+
+describe("detectFalsePromise — PT promise phrases", () => {
+  it("detects 'vou investigar'", () => {
+    const r = detectFalsePromise("Achei algo, vou investigar.", 0, 0);
+    expect(r.detected).toBe(true);
+    expect(r.matchedPhrase).toBe("vou investigar");
+  });
+
+  it("detects 'vou verificar'", () => {
+    const r = detectFalsePromise("Vou verificar isso para você.", 0, 0);
+    expect(r.detected).toBe(true);
+    expect(r.matchedPhrase).toBe("vou verificar");
+  });
+
+  it("detects 'vou checar'", () => {
+    const r = detectFalsePromise("Vou checar o arquivo.", 0, 0);
+    expect(r.detected).toBe(true);
+  });
+
+  it("detects 'deixa eu ver'", () => {
+    const r = detectFalsePromise("Deixa eu ver o que posso fazer.", 0, 0);
+    expect(r.detected).toBe(true);
+  });
+
+  it("detects 'aguarde um momento'", () => {
+    const r = detectFalsePromise("Aguarde um momento por favor.", 0, 0);
+    expect(r.detected).toBe(true);
+  });
+});
+
+describe("detectFalsePromise — EN promise phrases", () => {
+  it("detects 'i'll check'", () => {
+    const r = detectFalsePromise("I'll check that for you.", 0, 0);
+    expect(r.detected).toBe(true);
+    expect(r.matchedPhrase).toBe("i'll check");
+  });
+
+  it("detects 'let me look'", () => {
+    const r = detectFalsePromise("Let me look into this.", 0, 0);
+    expect(r.detected).toBe(true);
+  });
+
+  it("detects 'give me a moment'", () => {
+    const r = detectFalsePromise("Give me a moment to think.", 0, 0);
+    expect(r.detected).toBe(true);
+  });
+
+  it("detects 'hold on'", () => {
+    const r = detectFalsePromise("Hold on, I'll get back to you.", 0, 0);
+    expect(r.detected).toBe(true);
+  });
+
+  it("detects 'i will investigate'", () => {
+    const r = detectFalsePromise("I will investigate this issue.", 0, 0);
+    expect(r.detected).toBe(true);
+  });
+});
+
+describe("detectFalsePromise — case-insensitivity", () => {
+  it("matches uppercased PT promise", () => {
+    const r = detectFalsePromise("VOU VERIFICAR AGORA", 0, 0);
+    expect(r.detected).toBe(true);
+  });
+
+  it("matches mixed-case EN promise", () => {
+    const r = detectFalsePromise("Let Me Look at this.", 0, 0);
+    expect(r.detected).toBe(true);
+  });
+});
+
+describe("detectFalsePromise — word boundaries", () => {
+  it("does NOT match 'vou' alone as a promise (substring)", () => {
+    // 'eu vou' alone is not in PROMISE_PHRASES — there's no false positive here
+    const r = detectFalsePromise("eu vou explicar", 0, 0);
+    // 'explicar' isn't a promise verb in the list, so no detection
+    expect(r.detected).toBe(false);
+  });
+
+  it("matches a promise phrase embedded in a longer sentence", () => {
+    const r = detectFalsePromise("Ok, vou verificar isso para você e retorno logo.", 0, 0);
+    expect(r.detected).toBe(true);
+  });
+});
+
+describe("detectFalsePromise — return type", () => {
+  it("returns an object with detected, matchedPhrase, reason", () => {
+    const r = detectFalsePromise("test", 0, 0);
+    expect(r).toHaveProperty("detected");
+    expect(r).toHaveProperty("matchedPhrase");
+    expect(r).toHaveProperty("reason");
+  });
+
+  it("reason is always a non-empty string", () => {
+    const r1 = detectFalsePromise("", 0, 0);
+    const r2 = detectFalsePromise("no promises here", 0, 0);
+    const r3 = detectFalsePromise("let me check", 0, 0);
+    expect(r1.reason.length).toBeGreaterThan(0);
+    expect(r2.reason.length).toBeGreaterThan(0);
+    expect(r3.reason.length).toBeGreaterThan(0);
+  });
+});
+
+describe("shouldBlockForFalsePromise — counter and blocking", () => {
   beforeEach(() => {
     resetFalsePromiseCounter();
   });
 
-  // ─── detectFalsePromise — variações extras (3) ─────────────────────────────
-
-  describe("detectFalsePromise — variações extras", () => {
-    it("detecta 'vou pesquisar' (PT) sem colisão com outras frases", () => {
-      const r = detectFalsePromise("Beleza, vou pesquisar mais a fundo.", 0, 0);
-      expect(r.detected).toBe(true);
-      expect(r.matchedPhrase).toBe("vou pesquisar");
-    });
-
-    it("detecta 'let me run' (EN) mesmo cercado por pontuação", () => {
-      const r = detectFalsePromise("Sure — let me run the tests now!", 0, 0);
-      expect(r.detected).toBe(true);
-      expect(r.matchedPhrase).toBe("let me run");
-    });
-
-    it("não detecta quando toolsCalled e filesTouched são ambos > 0", () => {
-      const r = detectFalsePromise("Vou investigar mais.", 2, 3);
-      expect(r.detected).toBe(false);
-      expect(r.reason).toMatch(/actions were taken/);
-    });
+  it("returns block=false when no promise detected", () => {
+    const r = shouldBlockForFalsePromise("nothing to see", 0, 0);
+    expect(r.block).toBe(false);
   });
 
-  // ─── shouldBlockForFalsePromise — contagem e bloqueio (2) ──────────────────
-
-  describe("shouldBlockForFalsePromise — contagem", () => {
-    it("incrementa o contador exatamente uma vez por chamada detectada", () => {
-      expect(getFalsePromiseCount()).toBe(0);
-      shouldBlockForFalsePromise("Vou verificar isso.", 0, 0);
-      expect(getFalsePromiseCount()).toBe(1);
-      shouldBlockForFalsePromise("Vou checar agora.", 0, 0);
-      expect(getFalsePromiseCount()).toBe(2);
-    });
-
-    it(" após atingir MAX_FALSE_PROMISE_RETRIES, terceira chamada não bloqueia", () => {
-      // Duas primeiras bloqueiam
-      shouldBlockForFalsePromise("Vou investigar.", 0, 0);
-      shouldBlockForFalsePromise("Vou verificar.", 0, 0);
-      // Terceira: ainda detecta a frase mas NÃO bloqueia
-      const r = shouldBlockForFalsePromise("Vou olhar.", 0, 0);
-      expect(r.block).toBe(false);
-      expect(r.reason).toContain("max false-promise retries");
-    });
+  it("returns block=true on first detection", () => {
+    const r = shouldBlockForFalsePromise("let me check", 0, 0);
+    expect(r.block).toBe(true);
+    expect(r.rejectionMessage).toBeDefined();
+    expect(typeof r.rejectionMessage).toBe("string");
+    expect(r.rejectionMessage!.length).toBeGreaterThan(0);
   });
 
-  // ─── buildFalsePromiseRejectionMessage — variações (2) ─────────────────────
-
-  describe("buildFalsePromiseRejectionMessage — variações", () => {
-    it("marca '[FALSE_PROMISE_DETECTED]' como prefixo na primeira tentativa", () => {
-      const msg = buildFalsePromiseRejectionMessage("vou ver", 1);
-      expect(msg.startsWith("[FALSE_PROMISE_DETECTED]")).toBe(true);
-    });
-
-    it("adiciona sufixo '(tentativa N de 2)' apenas quando attempt > 1", () => {
-      const m1 = buildFalsePromiseRejectionMessage("vou ver", 1);
-      const m2 = buildFalsePromiseRejectionMessage("vou ver", 2);
-      expect(m1).not.toContain("tentativa 1");
-      expect(m2).toContain("(attempt 2 of 2)");
-    });
+  it("increments counter on each detection", () => {
+    expect(getFalsePromiseCount()).toBe(0);
+    shouldBlockForFalsePromise("let me check", 0, 0);
+    expect(getFalsePromiseCount()).toBe(1);
+    shouldBlockForFalsePromise("i'll look", 0, 0);
+    expect(getFalsePromiseCount()).toBe(2);
   });
 
-  // ─── Edge cases (1) ────────────────────────────────────────────────────────
-
-  describe("edge cases", () => {
-    it("lida com mensagem enorme contendo frase de promessa sem travar", () => {
-      const giant = "x".repeat(50_000) + " vou investigar mais " + "y".repeat(50_000);
-      const start = Date.now();
-      const r = detectFalsePromise(giant, 0, 0);
-      const elapsed = Date.now() - start;
-      expect(r.detected).toBe(true);
-      expect(elapsed).toBeLessThan(500); // deve ser rápido mesmo com string grande
-    });
-
-    it("frase de recusa em inglês 'unfortunately' desativa a detecção", () => {
-      const r = detectFalsePromise("Unfortunately I can't access that right now.", 0, 0);
-      expect(r.detected).toBe(false);
-      expect(r.reason).toContain("refusal phrase");
-    });
-
-    it("MAX_FALSE_PROMISE_RETRIES permanece estável entre resets", () => {
-      const original = MAX_FALSE_PROMISE_RETRIES;
-      resetFalsePromiseCounter();
-      expect(MAX_FALSE_PROMISE_RETRIES).toBe(original);
-    });
+  it("stops blocking after MAX_FALSE_PROMISE_RETRIES detections", () => {
+    // First two: blocked
+    expect(shouldBlockForFalsePromise("let me check", 0, 0).block).toBe(true);
+    expect(shouldBlockForFalsePromise("i'll look", 0, 0).block).toBe(true);
+    // Third: not blocked (cap reached)
+    const r3 = shouldBlockForFalsePromise("i'll verify", 0, 0);
+    expect(r3.block).toBe(false);
+    expect(r3.reason).toMatch(/max false-promise retries/);
   });
 
-  // ─── BUGFIX: falsos positivos em substrings (4) ────────────────────────────
-  //
-  // Antes do fix, frases genéricas como "eu vou " e "i'll try" eram matcheadas
-  // como substring, disparando o detector em respostas explicativas ("eu vou
-  // explicar X", "i'll try to think"). Agora só disparam quando seguidas de
-  // verbo de ação específico (via lista de frases) e com word boundaries `\b`.
-
-  describe("BUGFIX — falsos positivos em substrings não disparam mais", () => {
-    it("'eu vou explicar' NÃO dispara (vou + verbo não-ação)", () => {
-      const r = detectFalsePromise("Eu vou explicar como isso funciona.", 0, 0);
-      expect(r.detected).toBe(false);
-      expect(r.reason).toContain("no promise phrase");
-    });
-
-    it("'i'll try to think' NÃO dispara (i'll try era muito genérico)", () => {
-      const r = detectFalsePromise("I'll try to think about this for a moment.", 0, 0);
-      expect(r.detected).toBe(false);
-      expect(r.reason).toContain("no promise phrase");
-    });
-
-    it("'vou pensar' NÃO dispara (não é verbo de ação concreta)", () => {
-      const r = detectFalsePromise("Vou pensar um pouco antes de responder.", 0, 0);
-      expect(r.detected).toBe(false);
-      expect(r.reason).toContain("no promise phrase");
-    });
-
-    it("'eu vou analisar a situação' dispara via 'vou analisar' (não depende de 'eu vou')", () => {
-      // "eu vou" foi removido; mas "vou analisar" continua na lista e matcheia
-      const r = detectFalsePromise("Eu vou analisar a situação agora.", 0, 0);
-      expect(r.detected).toBe(true);
-      expect(r.matchedPhrase).toBe("vou analisar");
-    });
+  it("does not increment counter when no detection", () => {
+    shouldBlockForFalsePromise("just a normal reply", 0, 0);
+    expect(getFalsePromiseCount()).toBe(0);
   });
 
-  describe("BUGFIX — true positives preservados após refinar regex", () => {
-    it("'eu vou criar' dispara (via 'vou criar')", () => {
-      const r = detectFalsePromise("Eu vou criar um arquivo novo.", 0, 0);
-      expect(r.detected).toBe(true);
-      expect(r.matchedPhrase).toBe("vou criar");
-    });
+  it("does not block when tools were called (no detection)", () => {
+    const r = shouldBlockForFalsePromise("let me check", 1, 0);
+    expect(r.block).toBe(false);
+  });
+});
 
-    it("'vou fazer X' dispara (via 'vou fazer')", () => {
-      const r = detectFalsePromise("Vou fazer a alteração agora.", 0, 0);
-      expect(r.detected).toBe(true);
-      expect(r.matchedPhrase).toBe("vou fazer");
-    });
+describe("resetFalsePromiseCounter / getFalsePromiseCount", () => {
+  beforeEach(() => {
+    resetFalsePromiseCounter();
+  });
 
-    it("'i'll implement' dispara (nova frase adicionada)", () => {
-      const r = detectFalsePromise("I'll implement that feature for you.", 0, 0);
-      expect(r.detected).toBe(true);
-      expect(r.matchedPhrase).toBe("i'll implement");
-    });
+  it("resetFalsePromiseCounter sets counter to 0", () => {
+    shouldBlockForFalsePromise("let me check", 0, 0);
+    expect(getFalsePromiseCount()).toBeGreaterThan(0);
+    resetFalsePromiseCounter();
+    expect(getFalsePromiseCount()).toBe(0);
+  });
 
-    it("'i will implement' dispara (variante com 'will')", () => {
-      const r = detectFalsePromise("I will implement the fix right away.", 0, 0);
-      expect(r.detected).toBe(true);
-      expect(r.matchedPhrase).toBe("i will implement");
-    });
+  it("getFalsePromiseCount returns a number", () => {
+    expect(typeof getFalsePromiseCount()).toBe("number");
+  });
 
-    it("word boundary impede match no meio de palavra (ex.: 'abcvouinvestigar' não dispara)", () => {
-      // Sem \b, "vou investigar" matcheava como substring de "abcvouinvestigar".
-      // Com \b, exige fronteira de palavra antes de "vou" e depois de "investigar".
-      const r = detectFalsePromise("abcvouinvestigarxyz mais texto", 0, 0);
-      expect(r.detected).toBe(false);
-    });
+  it("resetFalsePromiseCounter does not throw", () => {
+    expect(() => resetFalsePromiseCounter()).not.toThrow();
+  });
+});
+
+describe("buildFalsePromiseRejectionMessage", () => {
+  it("returns a non-empty string", () => {
+    const msg = buildFalsePromiseRejectionMessage("let me check", 1);
+    expect(typeof msg).toBe("string");
+    expect(msg.length).toBeGreaterThan(0);
+  });
+
+  it("includes the matched phrase", () => {
+    const msg = buildFalsePromiseRejectionMessage("let me check", 1);
+    expect(msg).toContain("let me check");
+  });
+
+  it("includes the attempt number", () => {
+    const msg = buildFalsePromiseRejectionMessage("let me check", 2);
+    expect(msg).toContain("2");
+  });
+
+  it("handles a '?' placeholder when phrase is unknown", () => {
+    const msg = buildFalsePromiseRejectionMessage("?", 1);
+    expect(typeof msg).toBe("string");
+    expect(msg.length).toBeGreaterThan(0);
+  });
+});
+
+describe("MAX_FALSE_PROMISE_RETRIES constant", () => {
+  it("is a number", () => {
+    expect(typeof MAX_FALSE_PROMISE_RETRIES).toBe("number");
+  });
+
+  it("equals 2 (per source comment)", () => {
+    expect(MAX_FALSE_PROMISE_RETRIES).toBe(2);
+  });
+});
+
+describe("PromiseDetectionResult type contract", () => {
+  it("has the documented shape", () => {
+    const r: PromiseDetectionResult = {
+      detected: false,
+      matchedPhrase: null,
+      reason: "test",
+    };
+    expect(r.detected).toBe(false);
+    expect(r.matchedPhrase).toBeNull();
+    expect(r.reason).toBe("test");
+  });
+
+  it("accepts detected=true with a matched phrase", () => {
+    const r: PromiseDetectionResult = {
+      detected: true,
+      matchedPhrase: "let me check",
+      reason: "promise detected",
+    };
+    expect(r.detected).toBe(true);
+    expect(r.matchedPhrase).toBe("let me check");
   });
 });

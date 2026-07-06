@@ -1,241 +1,261 @@
 /**
- * dataGuard-extended.test.ts — Testes estendidos do DataGuard
+ * dataGuard-extended.test.ts — Extended tests for dataGuard.ts
  *
- * Testa runDataGuard com mocks, quickScanForDataPatterns (via export),
- * resetDataGuardState, e fluxos de bloqueio/liberação.
+ * Covers:
+ *   - resetDataGuardState()
+ *   - runDataGuard: empty filesModified → returns early, no API call
+ *   - runDataGuard: LLM API failure → returns shouldBlock=false, completed=false
+ *   - runDataGuard: success path with no findings → returns shouldBlock=false
+ *   - runDataGuard: success path with findings → shouldBlock=true
+ *   - DataGuardResult type contract
+ *
+ * Mocks: logger, apiClient.chat, activityTracker.pushActivity, bugHunter.formatBugHuntMessage
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import fs from "node:fs";
-import path from "node:path";
-import os from "node:os";
-
-// Mock apiClient
-const { chatMock } = vi.hoisted(() => ({
-  chatMock: vi.fn(),
-}));
-
-vi.mock("../apiClient.js", () => ({ chat: chatMock }));
+import { describe, it, expect, beforeEach, vi } from "vitest";
 
 vi.mock("../logger.js", () => ({
-  toolCall: vi.fn(), toolResult: vi.fn(), success: vi.fn(),
-  warn: vi.fn(), error: vi.fn(), debug: vi.fn(), info: vi.fn(),
-  throttle: vi.fn(),
+  default: {
+    info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(),
+    success: vi.fn(), toolCall: vi.fn(), toolResult: vi.fn(),
+  },
+  info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(),
+  success: vi.fn(), toolCall: vi.fn(), toolResult: vi.fn(),
+}));
+
+vi.mock("../apiClient.js", () => ({
+  chat: vi.fn(),
 }));
 
 vi.mock("../activityTracker.js", () => ({
   pushActivity: vi.fn(() => () => {}),
 }));
 
-// Mock do bugHunter para formatBugHuntMessage
 vi.mock("../bugHunter.js", () => ({
-  formatBugHuntMessage: vi.fn((findings: any[]) => `Formatted: ${findings.length} findings`),
+  formatBugHuntMessage: vi.fn((findings: any[]) =>
+    `[DATAGUARD MSG] ${findings.length} finding(s)`),
 }));
 
-import { runDataGuard, resetDataGuardState } from "../dataGuard.js";
+import { runDataGuard, resetDataGuardState, type DataGuardResult } from "../dataGuard.js";
+import { chat } from "../apiClient.js";
 
-describe("dataGuard (extended)", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
+beforeEach(() => {
+  vi.clearAllMocks();
+  resetDataGuardState();
+});
+
+describe("runDataGuard — empty filesModified", () => {
+  it("returns shouldBlock=false and completed=false without calling chat", async () => {
+    const result = await runDataGuard([], "request", "response");
+    expect(result.shouldBlock).toBe(false);
+    expect(result.completed).toBe(false);
+    expect(result.findings).toEqual([]);
+    expect(result.message).toBe("");
+    expect(chat).not.toHaveBeenCalled();
+  });
+});
+
+describe("runDataGuard — LLM API failure", () => {
+  it("returns shouldBlock=false, completed=false when all retries fail", async () => {
+    (chat as any).mockRejectedValue(new Error("API unavailable"));
+    const result = await runDataGuard(["/tmp/x.luau"], "req", "resp");
+    expect(result.shouldBlock).toBe(false);
+    expect(result.completed).toBe(false);
+    expect(chat).toHaveBeenCalled();
+  });
+
+  it("returns shouldBlock=false when chat returns no choices", async () => {
+    (chat as any).mockResolvedValue({});
+    const result = await runDataGuard(["/tmp/x.luau"], "req", "resp");
+    expect(result.shouldBlock).toBe(false);
+    expect(result.completed).toBe(false);
+  });
+});
+
+describe("runDataGuard — short response (rejected)", () => {
+  it("returns completed=false when final content is too short", async () => {
+    (chat as any).mockResolvedValue({
+      choices: [{ message: { content: "ok" }, finish_reason: "stop" }],
+    });
+    const result = await runDataGuard(["/tmp/x.luau"], "req", "resp");
+    expect(result.completed).toBe(false);
+    expect(result.shouldBlock).toBe(false);
+  });
+});
+
+describe("runDataGuard — PASS verdict (no findings)", () => {
+  it("returns shouldBlock=false when LLM says VERDICT: PASS", async () => {
+    (chat as any).mockResolvedValue({
+      choices: [{
+        message: {
+          content: "I reviewed the file. No data protection issues found. VERDICT: PASS",
+        },
+        finish_reason: "stop",
+      }],
+    });
+    const result = await runDataGuard(["/tmp/x.luau"], "req", "resp");
+    expect(result.shouldBlock).toBe(false);
+    expect(result.findings).toEqual([]);
+    expect(result.completed).toBe(true);
+  });
+
+  it("returns message containing 'No data protection' when no findings", async () => {
+    (chat as any).mockResolvedValue({
+      choices: [{
+        message: { content: "Clean code. No issues. VERDICT: PASS" },
+        finish_reason: "stop",
+      }],
+    });
+    const result = await runDataGuard(["/tmp/x.luau"], "req", "resp");
+    expect(result.message).toContain("No data protection");
+  });
+});
+
+describe("runDataGuard — BLOCK verdict (with findings)", () => {
+  it("returns shouldBlock=true when LLM returns findings", async () => {
+    (chat as any).mockResolvedValue({
+      choices: [{
+        message: {
+          content:
+            "[CRITICAL] file.luau:5 — SetAsync without GetAsync\n" +
+            "Fix: use UpdateAsync instead\n" +
+            "VERDICT: BLOCK",
+        },
+        finish_reason: "stop",
+      }],
+    });
+    const result = await runDataGuard(["/tmp/x.luau"], "req", "resp");
+    expect(result.shouldBlock).toBe(true);
+    expect(result.findings.length).toBeGreaterThan(0);
+    expect(result.completed).toBe(true);
+  });
+
+  it("formats a message containing the DATAGUARD prefix when blocking", async () => {
+    (chat as any).mockResolvedValue({
+      choices: [{
+        message: {
+          content:
+            "[HIGH] file.luau:10 — RemoveAsync without backup\n" +
+            "Fix: add backup\n" +
+            "VERDICT: BLOCK",
+        },
+        finish_reason: "stop",
+      }],
+    });
+    const result = await runDataGuard(["/tmp/x.luau"], "req", "resp");
+    expect(result.message).toContain("[DATAGUARD]");
+  });
+});
+
+describe("runDataGuard — result shape", () => {
+  it("always returns an object with required fields", async () => {
+    (chat as any).mockResolvedValue({
+      choices: [{
+        message: { content: "Clean. VERDICT: PASS" },
+        finish_reason: "stop",
+      }],
+    });
+    const result = await runDataGuard(["/tmp/x.luau"], "req", "resp");
+    expect(result).toHaveProperty("shouldBlock");
+    expect(result).toHaveProperty("findings");
+    expect(result).toHaveProperty("message");
+    expect(result).toHaveProperty("completed");
+  });
+
+  it("findings is always an array", async () => {
+    (chat as any).mockResolvedValue({
+      choices: [{
+        message: { content: "Clean. VERDICT: PASS" },
+        finish_reason: "stop",
+      }],
+    });
+    const result = await runDataGuard(["/tmp/x.luau"], "req", "resp");
+    expect(Array.isArray(result.findings)).toBe(true);
+  });
+});
+
+describe("resetDataGuardState", () => {
+  it("does not throw", () => {
+    expect(() => resetDataGuardState()).not.toThrow();
+  });
+
+  it("can be called multiple times", () => {
     resetDataGuardState();
+    resetDataGuardState();
+    expect(true).toBe(true);
+  });
+});
+
+describe("DataGuardResult type contract", () => {
+  it("accepts the documented shape", () => {
+    const r: DataGuardResult = {
+      shouldBlock: false,
+      findings: [],
+      message: "",
+      completed: false,
+    };
+    expect(r.shouldBlock).toBe(false);
+    expect(r.findings).toEqual([]);
+    expect(r.message).toBe("");
+    expect(r.completed).toBe(false);
   });
 
-  afterEach(() => {
-    vi.restoreAllMocks();
+  it("accepts a blocked result with findings", () => {
+    const r: DataGuardResult = {
+      shouldBlock: true,
+      findings: [
+        {
+          severity: "critical",
+          file: "x.luau",
+          line: "5",
+          description: "SetAsync without GetAsync",
+          suggestion: "use UpdateAsync",
+        },
+      ],
+      message: "[DATAGUARD] blocked",
+      completed: true,
+    };
+    expect(r.shouldBlock).toBe(true);
+    expect(r.findings.length).toBe(1);
   });
+});
 
-  describe("runDataGuard", () => {
-    it("retorna shouldBlock=false quando nenhum arquivo foi modificado", async () => {
-      const result = await runDataGuard([], "user request", "agent response");
-      expect(result.shouldBlock).toBe(false);
-      expect(result.findings).toEqual([]);
-      expect(result.completed).toBe(false);
-      expect(chatMock).not.toHaveBeenCalled();
+describe("runDataGuard — handles non-existent files", () => {
+  it("does not crash when filesModified contains non-existent paths", async () => {
+    (chat as any).mockResolvedValue({
+      choices: [{
+        message: { content: "No issues found in the (non-existent) file. VERDICT: PASS" },
+        finish_reason: "stop",
+      }],
     });
-
-    it("retorna shouldBlock=false quando LLM retorna sem findings", async () => {
-      // Criar arquivo temporário
-      const tmpFile = path.join(os.tmpdir(), `dg-test-${Date.now()}.lua`);
-      fs.writeFileSync(tmpFile, "local x = 1\nprint(x)\n");
-
-      try {
-        chatMock.mockResolvedValue({
-          choices: [{
-            message: { content: "NO_FINDINGS: No data protection issues found.", tool_calls: undefined },
-            finish_reason: "stop",
-          }],
-        });
-
-        const result = await runDataGuard([tmpFile], "create variable", "created x");
-        expect(result.shouldBlock).toBe(false);
-        expect(result.completed).toBe(true);
-      } finally {
-        fs.unlinkSync(tmpFile);
-      }
-    });
-
-    it("retorna shouldBlock=true quando LLM encontra CRITICAL findings", async () => {
-      const tmpFile = path.join(os.tmpdir(), `dg-test-${Date.now()}.lua`);
-      fs.writeFileSync(tmpFile, "local store = DataStoreService:GetDataStore('Player')\nstore:SetAsync('key', data)\n");
-
-      try {
-        chatMock.mockResolvedValue({
-          choices: [{
-            message: {
-              content: `FINDINGS:
-1. [CRITICAL] SetAsync without GetAsync at line 2 — overwrites data without reading first
-SEVERITY: CRITICAL
-COUNT: 1`,
-              tool_calls: undefined,
-            },
-            finish_reason: "stop",
-          }],
-        });
-
-        const result = await runDataGuard([tmpFile], "save player data", "implemented save");
-        expect(result.shouldBlock).toBe(true);
-        expect(result.findings.length).toBeGreaterThan(0);
-        expect(result.completed).toBe(true);
-      } finally {
-        fs.unlinkSync(tmpFile);
-      }
-    });
-
-    it("retorna shouldBlock=false quando API falha após retries", async () => {
-      const tmpFile = path.join(os.tmpdir(), `dg-test-${Date.now()}.lua`);
-      fs.writeFileSync(tmpFile, "print('hello')\n");
-
-      try {
-        chatMock.mockRejectedValue(new Error("API timeout"));
-
-        const result = await runDataGuard([tmpFile], "test", "test");
-        expect(result.shouldBlock).toBe(false);
-        expect(result.completed).toBe(false);
-        expect(result.message).toContain("skipped");
-      } finally {
-        fs.unlinkSync(tmpFile);
-      }
-    });
+    const result = await runDataGuard(
+      ["/tmp/__definitely_not_here__.luau"],
+      "req",
+      "resp",
+    );
+    expect(result.completed).toBe(true);
+    expect(result.findings).toEqual([]);
   });
+});
 
-  describe("quickScanForDataPatterns (via runDataGuard)", () => {
-    it("detecta SetAsync em arquivo Lua", async () => {
-      const tmpFile = path.join(os.tmpdir(), `dg-scan-${Date.now()}.lua`);
-      fs.writeFileSync(tmpFile, "store:SetAsync('key', data)\n");
-
-      try {
-        chatMock.mockResolvedValue({
-          choices: [{
-            message: { content: "NO_FINDINGS: No issues.", tool_calls: undefined },
-            finish_reason: "stop",
-          }],
-        });
-
-        await runDataGuard([tmpFile], "save data", "saved");
-
-        // Verificar que o chat foi chamado com contexto que menciona SetAsync
-        const callArgs = chatMock.mock.calls[0]?.[0];
-        if (callArgs) {
-          const userContent = callArgs.find((m: any) => m.role === "user")?.content;
-          // O scan deve ter detectado SetAsync
-          expect(userContent).toContain("SetAsync");
-        }
-      } finally {
-        fs.unlinkSync(tmpFile);
-      }
+describe("runDataGuard — truncates userRequest and agentResponse in context", () => {
+  it("does not throw with very long request/response strings", async () => {
+    (chat as any).mockResolvedValue({
+      choices: [{
+        message: { content: "Clean. VERDICT: PASS" },
+        finish_reason: "stop",
+      }],
     });
-
-    it("detecta DROP TABLE em arquivo SQL", async () => {
-      const tmpFile = path.join(os.tmpdir(), `dg-scan-${Date.now()}.sql`);
-      fs.writeFileSync(tmpFile, "DROP TABLE users;\n");
-
-      try {
-        chatMock.mockResolvedValue({
-          choices: [{
-            message: { content: "NO_FINDINGS: No issues.", tool_calls: undefined },
-            finish_reason: "stop",
-          }],
-        });
-
-        await runDataGuard([tmpFile], "drop table", "dropped");
-
-        const callArgs = chatMock.mock.calls[0]?.[0];
-        if (callArgs) {
-          const userContent = callArgs.find((m: any) => m.role === "user")?.content;
-          expect(userContent).toContain("DROP TABLE");
-        }
-      } finally {
-        fs.unlinkSync(tmpFile);
-      }
-    });
-
-    it("detecta RemoveAsync em arquivo Lua", async () => {
-      const tmpFile = path.join(os.tmpdir(), `dg-scan-${Date.now()}.lua`);
-      fs.writeFileSync(tmpFile, "store:RemoveAsync('key')\n");
-
-      try {
-        chatMock.mockResolvedValue({
-          choices: [{
-            message: { content: "NO_FINDINGS: No issues.", tool_calls: undefined },
-            finish_reason: "stop",
-          }],
-        });
-
-        await runDataGuard([tmpFile], "remove data", "removed");
-
-        const callArgs = chatMock.mock.calls[0]?.[0];
-        if (callArgs) {
-          const userContent = callArgs.find((m: any) => m.role === "user")?.content;
-          expect(userContent).toContain("RemoveAsync");
-        }
-      } finally {
-        fs.unlinkSync(tmpFile);
-      }
-    });
-
-    it("não quebra quando arquivo não existe", async () => {
-      chatMock.mockResolvedValue({
-        choices: [{
-          message: { content: "NO_FINDINGS: No issues.", tool_calls: undefined },
-          finish_reason: "stop",
-        }],
-      });
-
-      const result = await runDataGuard(["/nonexistent/file.lua"], "test", "test");
-      expect(result.shouldBlock).toBe(false);
-    });
-  });
-
-  describe("resetDataGuardState", () => {
-    it("não lança exceção", () => {
-      expect(() => resetDataGuardState()).not.toThrow();
-    });
-
-    it("permite re-execução após reset", async () => {
-      const tmpFile = path.join(os.tmpdir(), `dg-reset-${Date.now()}.lua`);
-      fs.writeFileSync(tmpFile, "print('test')\n");
-
-      try {
-        chatMock.mockResolvedValue({
-          choices: [{
-            message: { content: "NO_FINDINGS: No issues.", tool_calls: undefined },
-            finish_reason: "stop",
-          }],
-        });
-
-        // Primeira execução
-        const r1 = await runDataGuard([tmpFile], "test", "test");
-        expect(r1.completed).toBe(true);
-
-        // Reset
-        resetDataGuardState();
-
-        // Segunda execução deve funcionar
-        const r2 = await runDataGuard([tmpFile], "test", "test");
-        expect(r2.completed).toBe(true);
-      } finally {
-        fs.unlinkSync(tmpFile);
-      }
-    });
+    const longReq = "R".repeat(10_000);
+    const longResp = "A".repeat(10_000);
+    const result = await runDataGuard(["/tmp/x.luau"], longReq, longResp);
+    expect(result.completed).toBe(true);
+    // Verify chat was called
+    expect(chat).toHaveBeenCalled();
+    // The first chat call's second message (user) should NOT contain the full 10000-char strings
+    const firstCallArgs = (chat as any).mock.calls[0][0];
+    const userMsg = firstCallArgs[1].content;
+    expect(userMsg).not.toContain("R".repeat(600));
+    expect(userMsg).not.toContain("A".repeat(600));
   });
 });

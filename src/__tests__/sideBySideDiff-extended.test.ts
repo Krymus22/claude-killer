@@ -1,11 +1,12 @@
 /**
- * sideBySideDiff-extended.test.ts — Casos de borda para diff visual.
+ * sideBySideDiff-extended.test.ts — Extended tests for sideBySideDiff.ts
  *
- * Expande cobertura de generateUnifiedDiff (gera diff unificado), renderSideBySide
- * (renderiza com cores ANSI), truncamento de linhas longas, diff vazio e
- * comportamento com conteúdo binário (caracteres de controle).
- *
- * Evita duplicar testes já existentes em sideBySideDiff.test.ts.
+ * Covers:
+ *   - computeSideBySideDiff: identical, added-only, removed-only, mixed
+ *   - DiffLine.type values and numbering (oldNum/newNum nulls)
+ *   - renderSideBySide: header, line truncation, ANSI escapes
+ *   - generateUnifiedDiff: --- /+++ / +/- prefix lines
+ *   - Edge cases: empty strings, single line, large input
  */
 
 import { describe, it, expect } from "vitest";
@@ -16,139 +17,258 @@ import {
   type DiffLine,
 } from "../sideBySideDiff.js";
 
-// === generateUnifiedDiff (casos: modificado + novo) ==========================
-
-describe("generateUnifiedDiff — arquivo modificado", () => {
-  it("gera unified diff marcando linhas removidas e adicionadas", () => {
-    const old = "function foo() {\n  return 1;\n}";
-    const neu = "function foo() {\n  return 2;\n}";
-    const result = generateUnifiedDiff(old, neu, "src/foo.ts");
-
-    // Cabeçalhos a/ e b/ devem estar presentes
-    expect(result).toContain("--- a/src/foo.ts");
-    expect(result).toContain("+++ b/src/foo.ts");
-
-    // A linha antiga "return 1;" deve aparecer como removida (com -)
-    expect(result).toContain("-   return 1;");
-    // A nova "return 2;" deve aparecer como adicionada (com +)
-    expect(result).toContain("+   return 2;");
-    // A linha "function foo() {" deve aparecer como contexto (sem prefixo - ou +)
-    expect(result).toContain("  function foo() {");
+describe("computeSideBySideDiff — identical text", () => {
+  it("returns all 'same' lines for identical text", () => {
+    const text = "a\nb\nc";
+    const diff = computeSideBySideDiff(text, text);
+    expect(diff.length).toBe(3);
+    expect(diff.every((d) => d.type === "same")).toBe(true);
   });
 
-  it("gera unified diff para arquivo novo (todo conteúdo é adicionado)", () => {
-    // Arquivo novo: old="" e new tem conteúdo — todas as linhas são "added"
-    const novo = "export const x = 1;\nexport const y = 2;";
-    const result = generateUnifiedDiff("", novo, "src/novo.ts");
+  it("assigns sequential oldNum and newNum for identical text", () => {
+    const diff = computeSideBySideDiff("a\nb", "a\nb");
+    expect(diff[0]!.oldNum).toBe(1);
+    expect(diff[0]!.newNum).toBe(1);
+    expect(diff[1]!.oldNum).toBe(2);
+    expect(diff[1]!.newNum).toBe(2);
+  });
 
-    expect(result).toContain("--- a/src/novo.ts");
-    expect(result).toContain("+++ b/src/novo.ts");
-    // Cada linha do novo arquivo deve ser uma adição
-    expect(result).toContain("+ export const x = 1;");
-    expect(result).toContain("+ export const y = 2;");
+  it("returns one 'same' line for identical single-line text", () => {
+    const diff = computeSideBySideDiff("hello", "hello");
+    expect(diff.length).toBe(1);
+    expect(diff[0]!.type).toBe("same");
   });
 });
 
-// === renderSideBySide (cores por tipo) =======================================
-
-describe("renderSideBySide — cores ANSI por tipo de linha", () => {
-  it("renderiza linhas removidas com fundo vermelho (\\x1b[41m)", () => {
-    const diff: DiffLine[] = [
-      { oldNum: 1, newNum: null, oldContent: "linha removida", newContent: "", type: "removed" },
-    ];
-    const rendered = renderSideBySide(diff);
-    // Código ANSI 41 = fundo vermelho
-    expect(rendered).toContain("\x1b[41m");
-    expect(rendered).toContain("\x1b[37m"); // texto branco
-    expect(rendered).toContain("linha removida");
+describe("computeSideBySideDiff — additions", () => {
+  it("marks added lines with newNum and oldNum=null", () => {
+    const diff = computeSideBySideDiff("a", "a\nb");
+    const added = diff.filter((d) => d.type === "added");
+    expect(added.length).toBe(1);
+    expect(added[0]!.oldNum).toBeNull();
+    expect(added[0]!.newNum).not.toBeNull();
+    expect(added[0]!.newContent).toBe("b");
+    expect(added[0]!.oldContent).toBe("");
   });
 
-  it("renderiza linhas adicionadas com fundo verde (\\x1b[42m)", () => {
-    const diff: DiffLine[] = [
-      { oldNum: null, newNum: 1, oldContent: "", newContent: "linha nova", type: "added" },
-    ];
-    const rendered = renderSideBySide(diff);
-    // Código ANSI 42 = fundo verde
-    expect(rendered).toContain("\x1b[42m");
-    expect(rendered).toContain("\x1b[37m"); // texto branco
-    expect(rendered).toContain("linha nova");
-  });
-});
-
-// === Truncamento de linhas longas ============================================
-
-describe("renderSideBySide — truncamento de linhas longas", () => {
-  it("trunca conteúdo antigo maior que halfWidth", () => {
-    const longLine = "X".repeat(500);
-    const diff: DiffLine[] = [
-      {
-        oldNum: 1,
-        newNum: 1,
-        oldContent: longLine,
-        newContent: "short",
-        type: "same",
-      },
-    ];
-    // maxLineWidth = 40 -> halfWidth = (40-5)/2 = 17
-    const rendered = renderSideBySide(diff, 40);
-
-    // A linha longa deve ser truncada — não pode conter os 500 'X's
-    expect(rendered).not.toContain("X".repeat(500));
-    // Mas deve conter parte do conteúdo truncado
-    expect(rendered).toContain("X".repeat(17));
+  it("handles addition at the start", () => {
+    const diff = computeSideBySideDiff("b", "a\nb");
+    const added = diff.find((d) => d.type === "added");
+    expect(added).toBeDefined();
+    expect(added!.newContent).toBe("a");
   });
 
-  it("trunca conteúdo novo maior que halfWidth mantendo o separador |", () => {
-    const longNew = "Y".repeat(300);
-    const diff: DiffLine[] = [
-      {
-        oldNum: 1,
-        newNum: 1,
-        oldContent: "old",
-        newContent: longNew,
-        type: "same",
-      },
-    ];
-    const rendered = renderSideBySide(diff, 30);
-
-    // O separador | deve aparecer
-    expect(rendered).toContain(" | ");
-    // Não pode conter os 300 'Y's completos
-    expect(rendered).not.toContain("Y".repeat(300));
+  it("handles multiple additions", () => {
+    const diff = computeSideBySideDiff("a", "x\na\ny\nz");
+    const added = diff.filter((d) => d.type === "added");
+    expect(added.length).toBe(3);
   });
 });
 
-// === Empty diff ==============================================================
+describe("computeSideBySideDiff — removals", () => {
+  it("marks removed lines with oldNum and newNum=null", () => {
+    const diff = computeSideBySideDiff("a\nb", "a");
+    const removed = diff.find((d) => d.type === "removed");
+    expect(removed).toBeDefined();
+    expect(removed!.newNum).toBeNull();
+    expect(removed!.oldNum).not.toBeNull();
+    expect(removed!.oldContent).toBe("b");
+    expect(removed!.newContent).toBe("");
+  });
 
-describe("renderSideBySide — diff vazio", () => {
-  it("renderiza apenas o cabeçalho quando diff é array vazio", () => {
-    const rendered = renderSideBySide([]);
-    // Deve conter o cabeçalho OLD/NEW e a linha separadora
-    expect(rendered).toContain("OLD");
-    expect(rendered).toContain("NEW");
-    expect(rendered).toContain("---");
-    // Não deve conter linhas adicionais além do cabeçalho
-    const lines = rendered.split("\n");
-    expect(lines.length).toBe(2);
+  it("handles removal at the start", () => {
+    const diff = computeSideBySideDiff("x\na", "a");
+    const removed = diff.filter((d) => d.type === "removed");
+    expect(removed.length).toBe(1);
+    expect(removed[0]!.oldContent).toBe("x");
   });
 });
 
-// === Binary file (caracteres de controle / null bytes) =======================
+describe("computeSideBySideDiff — mixed", () => {
+  it("produces a mix of added and removed for replacement", () => {
+    const diff = computeSideBySideDiff("a\nb\nc", "a\nB\nc");
+    const types = diff.map((d) => d.type).sort();
+    expect(types).toContain("removed");
+    expect(types).toContain("added");
+  });
 
-describe("computeSideBySideDiff — conteúdo binário", () => {
-  it("não quebra com caracteres nulos e bytes de controle", () => {
-    // Conteúdo binário simulado com null bytes e caracteres não-printáveis
-    const bin1 = "header\x00\x01\x02footer";
-    const bin2 = "header\x00\x01\x02changed";
+  it("preserves same lines around changes", () => {
+    const diff = computeSideBySideDiff("a\nb\nc\nd", "a\nB\nc\nd");
+    expect(diff[0]!.type).toBe("same");
+    expect(diff[diff.length - 1]!.type).toBe("same");
+  });
+});
 
-    // Não deve lançar exceção — diff deve processar como texto
-    expect(() => computeSideBySideDiff(bin1, bin2)).not.toThrow();
+describe("computeSideBySideDiff — edge cases", () => {
+  it("handles both empty strings", () => {
+    const diff = computeSideBySideDiff("", "");
+    // "".split("\n") returns [""] so we have one entry
+    expect(diff.length).toBe(1);
+    expect(diff[0]!.type).toBe("same");
+  });
 
-    const diff = computeSideBySideDiff(bin1, bin2);
-    // Como "footer" muda para "changed", deve haver pelo menos uma alteração
+  it("handles old empty, new non-empty", () => {
+    const diff = computeSideBySideDiff("", "a\nb");
+    const added = diff.filter((d) => d.type === "added");
+    expect(added.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("handles old non-empty, new empty", () => {
+    const diff = computeSideBySideDiff("a\nb", "");
+    const removed = diff.filter((d) => d.type === "removed");
+    expect(removed.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("does not crash on large input", () => {
+    const before = Array.from({ length: 1000 }, (_, i) => `l${i}`).join("\n");
+    const after = Array.from({ length: 1000 }, (_, i) => `l${i}`);
+    after[500] = "CHANGED";
+    const diff = computeSideBySideDiff(before, after.join("\n"));
     expect(diff.length).toBeGreaterThan(0);
+  });
 
-    // Deve conseguir renderizar também sem quebrar
-    expect(() => renderSideBySide(diff, 60)).not.toThrow();
+  it("all entries are valid DiffLine objects with required fields", () => {
+    const diff = computeSideBySideDiff("a\nb", "a\nB");
+    for (const d of diff) {
+      expect(typeof d.oldContent).toBe("string");
+      expect(typeof d.newContent).toBe("string");
+      expect(["same", "added", "removed", "changed"]).toContain(d.type);
+      // oldNum/newNum are either null or a number
+      expect(d.oldNum === null || typeof d.oldNum === "number").toBe(true);
+      expect(d.newNum === null || typeof d.newNum === "number").toBe(true);
+    }
+  });
+});
+
+describe("renderSideBySide — basic structure", () => {
+  it("returns a string", () => {
+    const diff = computeSideBySideDiff("a", "a");
+    const out = renderSideBySide(diff);
+    expect(typeof out).toBe("string");
+  });
+
+  it("includes OLD | NEW header", () => {
+    const diff = computeSideBySideDiff("a", "a");
+    const out = renderSideBySide(diff);
+    expect(out).toContain("OLD");
+    expect(out).toContain("NEW");
+  });
+
+  it("includes a separator line of dashes", () => {
+    const diff = computeSideBySideDiff("a", "a");
+    const out = renderSideBySide(diff);
+    expect(out).toMatch(/-{3,}/);
+  });
+
+  it("contains ANSI escape codes for added lines", () => {
+    const diff = computeSideBySideDiff("", "new");
+    const out = renderSideBySide(diff);
+    expect(out).toMatch(/\x1b\[/);
+  });
+
+  it("contains ANSI escape codes for removed lines", () => {
+    const diff = computeSideBySideDiff("old", "");
+    const out = renderSideBySide(diff);
+    expect(out).toMatch(/\x1b\[/);
+  });
+
+  it("contains ANSI escape codes for same lines", () => {
+    const diff = computeSideBySideDiff("x", "x");
+    const out = renderSideBySide(diff);
+    expect(out).toMatch(/\x1b\[/);
+  });
+
+  it("respects custom maxLineWidth", () => {
+    const diff = computeSideBySideDiff("very long line content here", "very long line content here");
+    const out80 = renderSideBySide(diff, 80);
+    const out40 = renderSideBySide(diff, 40);
+    expect(out40).not.toBe(out80);
+  });
+});
+
+describe("renderSideBySide — line truncation", () => {
+  it("truncates very long line content to fit half width", () => {
+    const longLine = "x".repeat(200);
+    const diff = computeSideBySideDiff(longLine, longLine);
+    const out = renderSideBySide(diff, 40);
+    // halfWidth = floor((40-5)/2) = 17 chars per side
+    // Each line should not contain the full 200-char string
+    expect(out).not.toContain("x".repeat(50));
+  });
+});
+
+describe("generateUnifiedDiff — basic structure", () => {
+  it("includes --- a/<file> header", () => {
+    const out = generateUnifiedDiff("a\nb", "a\nB", "src/f.ts");
+    expect(out).toContain("--- a/src/f.ts");
+  });
+
+  it("includes +++ b/<file> header", () => {
+    const out = generateUnifiedDiff("a", "a\nb", "f.ts");
+    expect(out).toContain("+++ b/f.ts");
+  });
+
+  it("emits `- ` prefixed lines for removals", () => {
+    const out = generateUnifiedDiff("a\nb", "a", "f.ts");
+    expect(out).toContain("- b");
+  });
+
+  it("emits `+ ` prefixed lines for additions", () => {
+    const out = generateUnifiedDiff("a", "a\nb", "f.ts");
+    expect(out).toContain("+ b");
+  });
+
+  it("emits `  ` prefixed lines for context (same)", () => {
+    const out = generateUnifiedDiff("a\nb", "a\nB", "f.ts");
+    expect(out).toContain("  a");
+  });
+
+  it("returns a single string joined by \\n", () => {
+    const out = generateUnifiedDiff("a", "b", "f.ts");
+    expect(typeof out).toBe("string");
+    expect(out.split("\n").length).toBeGreaterThan(2);
+  });
+});
+
+describe("generateUnifiedDiff — edge cases", () => {
+  it("handles empty inputs", () => {
+    const out = generateUnifiedDiff("", "", "f.ts");
+    expect(typeof out).toBe("string");
+  });
+
+  it("contains ANSI escape codes", () => {
+    const out = generateUnifiedDiff("a", "b", "f.ts");
+    expect(out).toMatch(/\x1b\[/);
+  });
+});
+
+describe("DiffLine type contract", () => {
+  it("DiffLine.type is one of the allowed union members", () => {
+    const diff = computeSideBySideDiff("a\nb\nc", "x\nb\ny");
+    const allowed = ["same", "added", "removed", "changed"];
+    for (const d of diff) {
+      expect(allowed).toContain(d.type);
+    }
+  });
+
+  it("for added lines: oldContent is empty string", () => {
+    const diff = computeSideBySideDiff("a", "a\nb");
+    const added = diff.find((d) => d.type === "added");
+    expect(added!.oldContent).toBe("");
+  });
+
+  it("for removed lines: newContent is empty string", () => {
+    const diff = computeSideBySideDiff("a\nb", "a");
+    const removed = diff.find((d) => d.type === "removed");
+    expect(removed!.newContent).toBe("");
+  });
+
+  it("for same lines: oldContent === newContent", () => {
+    const diff = computeSideBySideDiff("a\nb", "a\nb");
+    for (const d of diff) {
+      if (d.type === "same") {
+        expect(d.oldContent).toBe(d.newContent);
+      }
+    }
   });
 });

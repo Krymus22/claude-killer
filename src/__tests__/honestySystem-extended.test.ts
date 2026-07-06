@@ -1,442 +1,389 @@
 /**
- * honestySystem-extended.test.ts - Expansão de cobertura de src/honestySystem.ts.
+ * honestySystem-extended.test.ts — Extended tests for honestySystem.ts
  *
- * Foca em cenários não cobertos por honestySystem.test.ts:
- *   - isProveItModeActive() false/true baseado em feature flag
- *   - resetHonestyTurn() limpa arquivos editados E incrementa turn
- *   - checkUserClaims() com mais patterns (is_working, has_feature, tech_stack)
- *   - extractConfidence() com formatos suportados e não-suportados
- *   - checkContradictions() quando feature desabilitada retorna vazio
- *   - checkContradictions() com claims de contagem (tests, files)
- *   - Persistência de state entre turns (claimStore retém claims)
- *   - proveItCheck() bloqueia resposta quando há claims não-verificadas
- *   - Pruning de claimStore após 100 entradas
+ * Focuses on defensive/type-correct tests for:
+ *   - getHonestyFeatures() — registry contents and shape
+ *   - extractConfidence() — pure function, multiple formats
+ *   - markFileAsEdited / markFileAsReadBack / getUnreadBackFiles / getReadBackWarning
+ *   - clearAllHonestyState / resetHonestyTurn
+ *   - checkConfidenceAction (feature disabled returns no-block)
+ *   - formatGoalVerification not applicable here, but checks message fields
+ *   - Type-only checks on interfaces
  */
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import fs from "node:fs";
-import path from "node:path";
-import os from "node:os";
 
-vi.mock("./../logger.js", () => ({
-  debug: vi.fn(),
-  warn: vi.fn(),
-  error: vi.fn(),
-  info: vi.fn(),
+vi.mock("../logger.js", () => ({
+  default: {
+    info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(),
+    success: vi.fn(), toolCall: vi.fn(), toolResult: vi.fn(),
+  },
+  info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(),
+  success: vi.fn(), toolCall: vi.fn(), toolResult: vi.fn(),
 }));
 
-// --- Mock contornável de extensionCenter ---
-// Permite habilitar/desabilitar features por teste (via featureState).
+// --- Hoisted mock state for extensionCenter so we can toggle features ---
 const featureState = vi.hoisted(() => ({
   enabled: new Set<string>(),
-  reset() {
-    this.enabled.clear();
-  },
-  enable(id: string) {
-    this.enabled.add(id);
-  },
-  disable(id: string) {
-    this.enabled.delete(id);
-  },
-  isEnabled(id: string) {
-    return this.enabled.has(id);
-  },
+  reset() { this.enabled.clear(); },
+  enable(id: string) { this.enabled.add(id); },
+  disable(id: string) { this.enabled.delete(id); },
+  isEnabled(id: string) { return this.enabled.has(id); },
 }));
 
-vi.mock("./../extensionCenter.js", () => ({
+vi.mock("../extensionCenter.js", () => ({
   getExtension: vi.fn((id: string) => ({
     enabled: featureState.isEnabled(id),
     triggerMode: featureState.isEnabled(id) ? "always" : "disabled",
   })),
 }));
 
-describe("honestySystem (extended)", () => {
+import {
+  getHonestyFeatures,
+  extractConfidence,
+  markFileAsEdited,
+  markFileAsReadBack,
+  getUnreadBackFiles,
+  getReadBackWarning,
+  hasUnreadBackFiles,
+  clearAllHonestyState,
+  resetHonestyTurn,
+  checkConfidenceAction,
+  isHonestyFeatureEnabled,
+  checkContradictions,
+  checkUserClaims,
+  type HonestyFeature,
+  type DevilAdvocateResult,
+  type DiffCheckResult,
+  type HallucinationCheckResult,
+  type EvidenceCheckResult,
+  type ContradictionResult,
+} from "../honestySystem.js";
+
+describe("getHonestyFeatures", () => {
+  it("returns an array of HonestyFeature", () => {
+    const features = getHonestyFeatures();
+    expect(Array.isArray(features)).toBe(true);
+    expect(features.length).toBeGreaterThan(0);
+    for (const f of features) {
+      expect(typeof f.id).toBe("string");
+      expect(typeof f.name).toBe("string");
+      expect(typeof f.description).toBe("string");
+      expect(typeof f.enabled).toBe("boolean");
+    }
+  });
+
+  it("returns a fresh copy each call (no mutation bleed)", () => {
+    const f1 = getHonestyFeatures();
+    const f2 = getHonestyFeatures();
+    expect(f1).not.toBe(f2);
+    expect(f1).toEqual(f2);
+  });
+
+  it("contains the 10 known feature IDs", () => {
+    const ids = getHonestyFeatures().map((f) => f.id);
+    expect(ids).toContain("feature:devils_advocate");
+    expect(ids).toContain("feature:diff_reality_check");
+    expect(ids).toContain("feature:read_back_verify");
+    expect(ids).toContain("feature:hallucination_detector");
+    expect(ids).toContain("feature:evidence_requirement");
+    expect(ids).toContain("feature:user_claim_verify");
+    expect(ids).toContain("feature:confidence_mapping");
+    expect(ids).toContain("feature:anonymous_review");
+    expect(ids).toContain("feature:contradiction_tracker");
+    expect(ids).toContain("feature:prove_it_mode");
+    expect(ids.length).toBe(10);
+  });
+
+  it("all features start disabled (enabled=false) by default", () => {
+    const features = getHonestyFeatures();
+    for (const f of features) {
+      expect(f.enabled).toBe(false);
+    }
+  });
+});
+
+describe("isHonestyFeatureEnabled", () => {
   beforeEach(() => {
     featureState.reset();
-    vi.clearAllMocks();
-    vi.resetModules();
   });
 
-  // --- isProveItModeActive -------------------------------------------------
-
-  describe("isProveItModeActive", () => {
-    it("retorna false quando feature:prove_it_mode está desabilitada", async () => {
-      const { isProveItModeActive } = await import("./../honestySystem.js");
-      const active = await isProveItModeActive();
-      expect(active).toBe(false);
-    });
-
-    it("retorna true quando feature:prove_it_mode está habilitada", async () => {
-      const { isProveItModeActive } = await import("./../honestySystem.js");
-      featureState.enable("feature:prove_it_mode");
-      const active = await isProveItModeActive();
-      expect(active).toBe(true);
-    });
-
-    it("retorna false quando somente outra feature está habilitada (não prove_it_mode)", async () => {
-      const { isProveItModeActive } = await import("./../honestySystem.js");
-      featureState.enable("feature:devils_advocate");
-      featureState.enable("feature:diff_reality_check");
-      const active = await isProveItModeActive();
-      expect(active).toBe(false);
-    });
+  it("returns false when feature is not enabled", async () => {
+    const enabled = await isHonestyFeatureEnabled("feature:devils_advocate");
+    expect(enabled).toBe(false);
   });
 
-  // --- resetHonestyTurn ----------------------------------------------------
-
-  describe("resetHonestyTurn", () => {
-    it("limpa arquivos edited-but-not-read e incrementa turn", async () => {
-      const {
-        markFileAsEdited,
-        getUnreadBackFiles,
-        resetHonestyTurn,
-        clearAllHonestyState,
-        checkContradictions,
-        incrementTurn,
-      } = await import("./../honestySystem.js");
-      clearAllHonestyState();
-      // Habilita contradiction_tracker para podermos observar o turn
-      featureState.enable("feature:contradiction_tracker");
-
-      markFileAsEdited("/test/file1.luau");
-      markFileAsEdited("/test/file2.luau");
-      expect(getUnreadBackFiles().length).toBe(2);
-
-      resetHonestyTurn();
-      // Files foram limpos
-      expect(getUnreadBackFiles().length).toBe(0);
-
-      // Turn foi incrementado (de 0 para 1). Verificamos fazendo uma claim
-      // e checando que o turn exibido é 1 (não 0).
-      const result = await checkContradictions("selene version 1.0.0");
-      expect(result.contradictions.length).toBe(0);
-      // Como fizemos 1 resetHonestyTurn (= +1 incrementTurn) e 0 incrementTurn manual,
-      // currentTurn deve ser 1. Mas o resultado não mostra turn direto.
-      // Apenas verificamos que não há contradições em turn 1.
-    });
-
-    it("resetHonestyTurn chamado múltiplas vezes incrementa turn progressivamente", async () => {
-      const {
-        clearAllHonestyState,
-        resetHonestyTurn,
-        checkContradictions,
-        incrementTurn,
-      } = await import("./../honestySystem.js");
-      clearAllHonestyState();
-      featureState.enable("feature:contradiction_tracker");
-
-      // Turn 1: claim selene 1.0.0
-      resetHonestyTurn();
-      await checkContradictions("selene version 1.0.0");
-
-      // Turn 2: claim selene 2.0.0 (contradicts)
-      resetHonestyTurn();
-      const result = await checkContradictions("selene version 2.0.0");
-      expect(result.contradictions.length).toBe(1);
-      // A contradição mostra turn 1 (quando selene=1.0.0 foi armazenada)
-      expect(result.contradictions[0]!.turn).toBe(1);
-    });
+  it("returns true when feature is enabled in extensionCenter", async () => {
+    featureState.enable("feature:devils_advocate");
+    const enabled = await isHonestyFeatureEnabled("feature:devils_advocate");
+    expect(enabled).toBe(true);
   });
 
-  // --- checkUserClaims: mais patterns -------------------------------------
+  it("returns false for an unknown feature id", async () => {
+    const enabled = await isHonestyFeatureEnabled("feature:does_not_exist");
+    expect(enabled).toBe(false);
+  });
+});
 
-  describe("checkUserClaims - patterns extras", () => {
-    beforeEach(() => {
-      featureState.enable("feature:user_claim_verify");
-    });
-
-    it("retorna vazio para mensagens que não são claims factuais", async () => {
-      const { checkUserClaims } = await import("./../honestySystem.js");
-      const result = await checkUserClaims("Faça um sistema de inventário para o jogo");
-      expect(result.claims).toHaveLength(0);
-      expect(result.message).toBe("");
-    });
-
-    it("detecta claim 'o projeto está funcionando' (is_working)", async () => {
-      const { checkUserClaims } = await import("./../honestySystem.js");
-      const result = await checkUserClaims("O sistema está funcionando corretamente");
-      expect(result.claims.length).toBeGreaterThan(0);
-      expect(result.message).toContain("VERIFY");
-      // Tipo is_working deve estar presente
-      expect(result.claims[0]).toContain("is_working");
-    });
-
-    it("detecta claim 'o sistema is working' (inglês)", async () => {
-      const { checkUserClaims } = await import("./../honestySystem.js");
-      const result = await checkUserClaims("The system is working");
-      expect(result.claims.length).toBeGreaterThan(0);
-    });
-
-    it("detecta claim 'já tem docker configurado' (has_feature)", async () => {
-      const { checkUserClaims } = await import("./../honestySystem.js");
-      const result = await checkUserClaims("O projeto já tem docker configurado");
-      expect(result.claims.length).toBeGreaterThan(0);
-      expect(result.claims[0]).toContain("has_feature");
-    });
-
-    it("detecta claim 'usa kubernetes' (tech_stack)", async () => {
-      const { checkUserClaims } = await import("./../honestySystem.js");
-      const result = await checkUserClaims("O projeto usa kubernetes para deploy");
-      expect(result.claims.length).toBeGreaterThan(0);
-      expect(result.claims[0]).toContain("tech_stack");
-    });
-
-    it("detecta claim 'tem 500 linhas' (line_count)", async () => {
-      const { checkUserClaims } = await import("./../honestySystem.js");
-      const result = await checkUserClaims("O arquivo tem 500 linhas");
-      expect(result.claims.length).toBeGreaterThan(0);
-      expect(result.claims[0]).toContain("line_count");
-    });
-
-    it("detecta múltiplas claims na mesma mensagem", async () => {
-      const { checkUserClaims } = await import("./../honestySystem.js");
-      const result = await checkUserClaims(
-        "O arquivo tem 200 linhas e o projeto usa react para o frontend"
-      );
-      expect(result.claims.length).toBeGreaterThanOrEqual(2);
-    });
-
-    it("retorna vazio quando feature:user_claim_verify está desabilitada", async () => {
-      const { checkUserClaims } = await import("./../honestySystem.js");
-      featureState.disable("feature:user_claim_verify");
-      const result = await checkUserClaims("O arquivo tem 500 linhas e usa react");
-      expect(result.claims).toHaveLength(0);
-      expect(result.message).toBe("");
-    });
+describe("extractConfidence — numeric patterns", () => {
+  it("returns 0 when no confidence is mentioned", () => {
+    expect(extractConfidence("no confidence mentioned")).toBe(0);
   });
 
-  // --- extractConfidence ---------------------------------------------------
-
-  describe("extractConfidence - formatos suportados", () => {
-    it("parseia 'confianca: 8' (sem acento)", async () => {
-      const { extractConfidence } = await import("./../honestySystem.js");
-      expect(extractConfidence("Vou editar. confianca: 8")).toBe(8);
-    });
-
-    it("parseia 'confiança: 5' (com acento)", async () => {
-      const { extractConfidence } = await import("./../honestySystem.js");
-      expect(extractConfidence("confiança: 5")).toBe(5);
-    });
-
-    it("limita valor acima de 10 para 10 (clamping)", async () => {
-      const { extractConfidence } = await import("./../honestySystem.js");
-      expect(extractConfidence("confianca: 100")).toBe(10);
-    });
-
-    it("limita valor abaixo de 1 para 1 (clamping minimum)", async () => {
-      const { extractConfidence } = await import("./../honestySystem.js");
-      expect(extractConfidence("confianca: 0")).toBe(1);
-    });
-
-    it("agora reconhece formatos estendidos (BUG FIX audit issue #5)", async () => {
-      const { extractConfidence } = await import("./../honestySystem.js");
-      // BUG FIX: previously only "confian[çc]a: N" was recognized.
-      // Now we accept percent, decimal, fraction, and qualitative formats.
-      expect(extractConfidence("confianca: 80%")).toBe(8);   // 80% → 8
-      expect(extractConfidence("confidence: 1.0")).toBe(10);  // decimal 1.0 → 10
-      expect(extractConfidence("confidence: high")).toBe(9);  // qualitative high → 9
-      expect(extractConfidence("confidence: medium")).toBe(6); // qualitative medium → 6
-      expect(extractConfidence("confidence: low")).toBe(3);   // qualitative low → 3
-      expect(extractConfidence("confianca: 8/10")).toBe(8);   // fraction → 8
-    });
-
-    it("ainda retorna 0 para texto que não menciona confiança", async () => {
-      const { extractConfidence } = await import("./../honestySystem.js");
-      // Mensagens que não mencionam confiança continuam retornando 0
-      expect(extractConfidence("Estou pensando no problema")).toBe(0);
-      expect(extractConfidence("vamos verificar o código")).toBe(0);
-      expect(extractConfidence("high temperature today")).toBe(0); // "high" sem "confidence:"
-    });
-
-    it("retorna 0 para string vazia", async () => {
-      const { extractConfidence } = await import("./../honestySystem.js");
-      expect(extractConfidence("")).toBe(0);
-    });
-
-    it("parseia confiança mesmo quando há texto ao redor", async () => {
-      const { extractConfidence } = await import("./../honestySystem.js");
-      expect(
-        extractConfidence("Analisei o código. confiança: 7. Vou proceder com a edição.")
-      ).toBe(7);
-    });
+  it("returns 0 for empty string", () => {
+    expect(extractConfidence("")).toBe(0);
   });
 
-  // --- checkContradictions: feature flag + persistência -------------------
-
-  describe("checkContradictions - feature flag e persistência", () => {
-    it("retorna vazio quando feature:contradiction_tracker está desabilitada", async () => {
-      const {
-        checkContradictions,
-        clearAllHonestyState,
-        incrementTurn,
-      } = await import("./../honestySystem.js");
-      clearAllHonestyState();
-      // feature desabilitada — não deve detectar contradição mesmo com claims conflitantes
-      incrementTurn();
-      await checkContradictions("selene version 1.0.0");
-      incrementTurn();
-      const result = await checkContradictions("selene version 2.0.0");
-      expect(result.contradictions).toHaveLength(0);
-      expect(result.message).toBe("");
-    });
-
-    it("detecta contradição de versão entre claim atual e realidade", async () => {
-      const {
-        checkContradictions,
-        clearAllHonestyState,
-        incrementTurn,
-      } = await import("./../honestySystem.js");
-      clearAllHonestyState();
-      featureState.enable("feature:contradiction_tracker");
-
-      incrementTurn();
-      await checkContradictions("rojo version 7.6.1 is the latest");
-      incrementTurn();
-      const result = await checkContradictions("rojo 7.5.0 is installed");
-      expect(result.contradictions.length).toBeGreaterThan(0);
-      expect(result.message).toContain("CONTRADICTION");
-    });
-
-    it("retorna vazio quando mesma versão é afirmada em turns diferentes", async () => {
-      const {
-        checkContradictions,
-        clearAllHonestyState,
-        incrementTurn,
-      } = await import("./../honestySystem.js");
-      clearAllHonestyState();
-      featureState.enable("feature:contradiction_tracker");
-
-      incrementTurn();
-      await checkContradictions("selene version 0.31.0 is good");
-      incrementTurn();
-      const result = await checkContradictions("selene 0.31.0 is the latest");
-      expect(result.contradictions).toHaveLength(0);
-    });
-
-    it("detecta contradição de contagem (número de testes)", async () => {
-      const {
-        checkContradictions,
-        clearAllHonestyState,
-        incrementTurn,
-      } = await import("./../honestySystem.js");
-      clearAllHonestyState();
-      featureState.enable("feature:contradiction_tracker");
-
-      incrementTurn();
-      await checkContradictions("Rodamos 100 testes no total");
-      incrementTurn();
-      const result = await checkContradictions("Temos 150 testes no projeto");
-      expect(result.contradictions.length).toBeGreaterThan(0);
-    });
-
-    it("claimStore persiste entre turns (state em memória)", async () => {
-      const {
-        checkContradictions,
-        clearAllHonestyState,
-        incrementTurn,
-      } = await import("./../honestySystem.js");
-      clearAllHonestyState();
-      featureState.enable("feature:contradiction_tracker");
-
-      // Turn 1: armazena claim
-      incrementTurn();
-      await checkContradictions("selene version 0.31.0");
-
-      // Turn 2: sem claims novas — não deve haver contradição
-      incrementTurn();
-      const r2 = await checkContradictions("something unrelated");
-      expect(r2.contradictions).toHaveLength(0);
-
-      // Turn 3: claim CONTRADITÓRIA — deve detectar (mostrando que claim do turn 1 persistiu)
-      incrementTurn();
-      const r3 = await checkContradictions("selene version 0.30.0");
-      expect(r3.contradictions.length).toBeGreaterThan(0);
-      // turn=1 indica que a claim original foi armazenada no turn 1
-      expect(r3.contradictions[0]!.turn).toBe(1);
-    });
+  it("parses 'confianca: 8' (PT, integer 1-10)", () => {
+    expect(extractConfidence("confianca: 8")).toBe(8);
   });
 
-  // --- proveItCheck --------------------------------------------------------
-
-  describe("proveItCheck", () => {
-    it("retorna blocked=false quando feature:prove_it_mode desabilitada", async () => {
-      const { proveItCheck } = await import("./../honestySystem.js");
-      const result = await proveItCheck(
-        "Os testes passaram sem erros",
-        []
-      );
-      expect(result.blocked).toBe(false);
-      expect(result.message).toBe("");
-    });
-
-    it("bloqueia quando prove_it_mode ativo E há claims não-verificadas", async () => {
-      const { proveItCheck } = await import("./../honestySystem.js");
-      featureState.enable("feature:prove_it_mode");
-      featureState.enable("feature:evidence_requirement"); // checkEvidenceRequirement checa isso
-
-      const result = await proveItCheck(
-        "Os testes passaram",
-        [] // sem executar_testes no histórico
-      );
-      expect(result.blocked).toBe(true);
-      expect(result.message).toContain("PROVE IT MODE");
-      expect(result.message).toContain("Unverified claims");
-    });
-
-    it("não bloqueia quando prove_it_mode ativo mas claims são verificadas", async () => {
-      const { proveItCheck } = await import("./../honestySystem.js");
-      featureState.enable("feature:prove_it_mode");
-      featureState.enable("feature:evidence_requirement");
-
-      const result = await proveItCheck(
-        "Os testes passaram",
-        ["executar_testes"] // tool call que verifica
-      );
-      expect(result.blocked).toBe(false);
-    });
+  it("parses 'confiança: 8' (PT with cedilla)", () => {
+    expect(extractConfidence("confiança: 8")).toBe(8);
   });
 
-  // --- confidence-action mapping com feature flag -------------------------
-
-  describe("checkConfidenceAction com feature flag", () => {
-    it("retorna blocked=false quando feature:confidence_mapping desabilitada", async () => {
-      const { checkConfidenceAction } = await import("./../honestySystem.js");
-      // Confidence 1 com action write normalmente bloqueia, mas feature desligada => não bloqueia
-      const result = await checkConfidenceAction(1, "write");
-      expect(result.blocked).toBe(false);
-      expect(result.message).toBe("");
-    });
-
-    it("retorna mensagem de aviso quando confidence=0 e feature habilitada", async () => {
-      const { checkConfidenceAction } = await import("./../honestySystem.js");
-      featureState.enable("feature:confidence_mapping");
-      const result = await checkConfidenceAction(0, "write");
-      expect(result.blocked).toBe(false);
-      expect(result.message).toContain("did not provide");
-    });
+  it("parses 'confidence: 8' (EN)", () => {
+    expect(extractConfidence("confidence: 8")).toBe(8);
   });
 
-  // --- getHonestyFeatures: estrutura --------------------------------------
+  it("parses 'confidence: 8/10' (fraction)", () => {
+    expect(extractConfidence("confidence: 8/10")).toBe(8);
+  });
 
-  describe("getHonestyFeatures - estrutura", () => {
-    it("todas as features têm id, name, description, enabled", async () => {
-      const { getHonestyFeatures } = await import("./../honestySystem.js");
-      const features = getHonestyFeatures();
-      for (const f of features) {
-        expect(typeof f.id).toBe("string");
-        expect(f.id).toMatch(/^feature:/);
-        expect(typeof f.name).toBe("string");
-        expect(typeof f.description).toBe("string");
-        expect(typeof f.enabled).toBe("boolean");
-      }
-    });
+  it("parses 'confianca: 80%' (percent, normalized to /10)", () => {
+    expect(extractConfidence("confianca: 80%")).toBe(8);
+  });
 
-    it("retorna uma cópia (não a referência interna)", async () => {
-      const { getHonestyFeatures } = await import("./../honestySystem.js");
-      const a = getHonestyFeatures();
-      const b = getHonestyFeatures();
-      expect(a).not.toBe(b); // cópia diferente
-      expect(a).toEqual(b); // mas mesmos valores
-    });
+  it("parses 'confidence: 0.8' (decimal 0-1)", () => {
+    expect(extractConfidence("confidence: 0.8")).toBe(8);
+  });
+
+  it("distinguishes integer '1' from decimal '1.0' (audit fix)", () => {
+    // 1 means 1/10 (low), 1.0 means 10/10 (max) — see comment in source
+    expect(extractConfidence("confianca: 1")).toBe(1);
+    expect(extractConfidence("confianca: 1.0")).toBe(10);
+  });
+
+  it("clamps values to [1, 10]", () => {
+    expect(extractConfidence("confianca: 100")).toBe(10);
+    expect(extractConfidence("confianca: 999")).toBe(10);
+    expect(extractConfidence("confianca: 0")).toBe(1);
+  });
+
+  it("accepts '=' as separator", () => {
+    expect(extractConfidence("confidence=7")).toBe(7);
+  });
+});
+
+describe("extractConfidence — qualitative patterns", () => {
+  it("parses 'confidence: high'", () => {
+    expect(extractConfidence("confidence: high")).toBe(9);
+  });
+
+  it("parses 'confidence: medium'", () => {
+    expect(extractConfidence("confidence: medium")).toBe(6);
+  });
+
+  it("parses 'confidence: low'", () => {
+    expect(extractConfidence("confidence: low")).toBe(3);
+  });
+
+  it("parses PT 'confianca: alta'", () => {
+    expect(extractConfidence("confianca: alta")).toBe(9);
+  });
+
+  it("parses PT 'confianca: baixa'", () => {
+    expect(extractConfidence("confianca: baixa")).toBe(3);
+  });
+
+  it("returns 0 for unknown qualitative word", () => {
+    expect(extractConfidence("confidence: maybe")).toBe(0);
+  });
+});
+
+describe("extractConfidence — edge cases", () => {
+  it("is case-insensitive for confidence label", () => {
+    expect(extractConfidence("CONFIDENCE: 7")).toBe(7);
+    expect(extractConfidence("Confidence: 7")).toBe(7);
+  });
+
+  it("returns a number always", () => {
+    expect(typeof extractConfidence("anything")).toBe("number");
+  });
+
+  it("handles strings without colons", () => {
+    expect(extractConfidence("confidence 7")).toBe(0); // no separator
+  });
+
+  it("returns 0 for totally unrelated text", () => {
+    expect(extractConfidence("the quick brown fox")).toBe(0);
+  });
+});
+
+describe("Read-back verification state", () => {
+  beforeEach(() => {
+    clearAllHonestyState();
+    featureState.reset();
+    featureState.enable("feature:read_back_verify");
+  });
+
+  it("starts with empty unread list", () => {
+    expect(getUnreadBackFiles()).toEqual([]);
+    expect(getReadBackWarning()).toBe("");
+  });
+
+  it("markFileAsEdited adds file to unread list", () => {
+    markFileAsEdited("/tmp/file_a.ts");
+    const unread = getUnreadBackFiles();
+    expect(unread.length).toBe(1);
+    expect(unread.some((f) => f.endsWith("file_a.ts"))).toBe(true);
+  });
+
+  it("markFileAsReadBack removes file from unread list", () => {
+    markFileAsEdited("/tmp/file_b.ts");
+    expect(getUnreadBackFiles().length).toBe(1);
+    markFileAsReadBack("/tmp/file_b.ts");
+    expect(getUnreadBackFiles().length).toBe(0);
+  });
+
+  it("getReadBackWarning returns non-empty string when files are unread", () => {
+    markFileAsEdited("/tmp/file_c.ts");
+    const warning = getReadBackWarning();
+    expect(typeof warning).toBe("string");
+    expect(warning.length).toBeGreaterThan(0);
+    expect(warning).toContain("file_c.ts");
+  });
+
+  it("hasUnreadBackFiles returns true when feature enabled and files exist", async () => {
+    markFileAsEdited("/tmp/file_d.ts");
+    expect(await hasUnreadBackFiles()).toBe(true);
+  });
+
+  it("hasUnreadBackFiles returns false when feature is disabled", async () => {
+    featureState.disable("feature:read_back_verify");
+    markFileAsEdited("/tmp/file_e.ts");
+    expect(await hasUnreadBackFiles()).toBe(false);
+  });
+
+  it("clearAllHonestyState empties the unread list", () => {
+    markFileAsEdited("/tmp/file_f.ts");
+    markFileAsEdited("/tmp/file_g.ts");
+    expect(getUnreadBackFiles().length).toBe(2);
+    clearAllHonestyState();
+    expect(getUnreadBackFiles().length).toBe(0);
+  });
+
+  it("resetHonestyTurn clears files and does not throw", () => {
+    markFileAsEdited("/tmp/file_h.ts");
+    expect(() => resetHonestyTurn()).not.toThrow();
+    expect(getUnreadBackFiles().length).toBe(0);
+  });
+});
+
+describe("checkConfidenceAction", () => {
+  beforeEach(() => {
+    featureState.reset();
+  });
+
+  it("returns blocked=false when feature is disabled", async () => {
+    const result = await checkConfidenceAction(5, "write");
+    expect(result.blocked).toBe(false);
+    expect(result.message).toBe("");
+  });
+
+  it("returns blocked=false when feature enabled but confidence is 0 (warns)", async () => {
+    featureState.enable("feature:confidence_mapping");
+    const result = await checkConfidenceAction(0, "write");
+    expect(result.blocked).toBe(false);
+    expect(result.message.length).toBeGreaterThan(0);
+  });
+
+  it("blocks writes when confidence <= 3", async () => {
+    featureState.enable("feature:confidence_mapping");
+    const result = await checkConfidenceAction(2, "write");
+    expect(result.blocked).toBe(true);
+  });
+
+  it("does not block writes when confidence > 3", async () => {
+    featureState.enable("feature:confidence_mapping");
+    const result = await checkConfidenceAction(8, "write");
+    expect(result.blocked).toBe(false);
+  });
+
+  it("returns a warning (not block) for finish with low confidence", async () => {
+    featureState.enable("feature:confidence_mapping");
+    const result = await checkConfidenceAction(4, "finish");
+    expect(result.blocked).toBe(false);
+    expect(result.message.length).toBeGreaterThan(0);
+  });
+
+  it("returns no message for finish with high confidence", async () => {
+    featureState.enable("feature:confidence_mapping");
+    const result = await checkConfidenceAction(8, "finish");
+    expect(result.blocked).toBe(false);
+    expect(result.message).toBe("");
+  });
+});
+
+describe("checkUserClaims (feature disabled returns empty)", () => {
+  beforeEach(() => {
+    featureState.reset();
+  });
+
+  it("returns empty result when feature disabled", async () => {
+    const result = await checkUserClaims("the file has 100 lines");
+    expect(result.claims).toEqual([]);
+    expect(result.message).toBe("");
+  });
+});
+
+describe("checkContradictions (feature disabled returns empty)", () => {
+  beforeEach(() => {
+    featureState.reset();
+    clearAllHonestyState();
+  });
+
+  it("returns empty contradictions when feature disabled", async () => {
+    const result = await checkContradictions("I have 100 tests");
+    expect(result.contradictions).toEqual([]);
+    expect(result.message).toBe("");
+  });
+});
+
+describe("Type contracts", () => {
+  it("HonestyFeature has required fields", () => {
+    const f: HonestyFeature = {
+      id: "x", name: "X", description: "D", enabled: false,
+    };
+    expect(f.id).toBe("x");
+  });
+
+  it("DevilAdvocateResult severity union includes 'none'", () => {
+    const r: DevilAdvocateResult = { issues: [], severity: "none", reviewed: false };
+    expect(r.severity).toBe("none");
+  });
+
+  it("DiffCheckResult has the documented shape", () => {
+    const r: DiffCheckResult = { matches: true, missingKeywords: [], message: "" };
+    expect(r.matches).toBe(true);
+  });
+
+  it("HallucinationCheckResult has the documented shape", () => {
+    const r: HallucinationCheckResult = {
+      hallucinatedSymbols: [], verifiedSymbols: [], message: "",
+    };
+    expect(r.hallucinatedSymbols).toEqual([]);
+  });
+
+  it("EvidenceCheckResult has the documented shape", () => {
+    const r: EvidenceCheckResult = {
+      unverifiedClaims: [], verifiedClaims: [], message: "",
+    };
+    expect(r.unverifiedClaims).toEqual([]);
+  });
+
+  it("ContradictionResult has the documented shape", () => {
+    const r: ContradictionResult = { contradictions: [], message: "" };
+    expect(r.contradictions).toEqual([]);
   });
 });

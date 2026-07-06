@@ -20,7 +20,7 @@
  * desativadas com comentário explicando o bug. Ver relatório do QA.
  */
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import fc from "fast-check";
 import {
   truncateMiddle,
@@ -28,6 +28,18 @@ import {
   calculateCardWidth,
 } from "../tui/useTerminal.js";
 import { extractConfidence } from "../honestySystem.js";
+
+// Mock logger so argsNormalizer/pokaYoke/etc. don't print debug noise during tests.
+vi.mock("../logger.js", () => ({
+  debug: vi.fn(),
+  warn: vi.fn(),
+  error: vi.fn(),
+  info: vi.fn(),
+  toolCall: vi.fn(),
+  toolResult: vi.fn(),
+  success: vi.fn(),
+  throttle: vi.fn(),
+}));
 
 // ---------------------------------------------------------------------------
 // CÓPIA LOCAL de formatTok (src/tui/StatusBar.tsx:57-74).
@@ -292,3 +304,491 @@ describe("property-pure-functions", () => {
     });
   });
 });
+
+// ============================================================================
+// 6-14. NEW property-based tests for additional pure functions
+//
+// These tests verify universal invariants for:
+//   - argsNormalizer.normalizeArgs (aliases, idempotency)
+//   - toolReduction.detectIntent (empty/null → "general")
+//   - effortLevels (set/get roundtrip, all levels produce non-empty snippets)
+//   - robloxMcpGuard (classify/extract/isRobloxStudioMcpTool)
+//   - syntaxHighlight.detectLanguageFromExt (defaults)
+//   - configSchema.validateModeConfig (empty/null invalid)
+//   - pokaYoke.pokaYokeCheck (empty path blocks for path-taking tools)
+//   - utf8Safety.listSystemLocales / pickBestUtf8Locale (return types)
+// ============================================================================
+
+import { normalizeArgs } from "../argsNormalizer.js";
+import { detectIntent } from "../toolReduction.js";
+import {
+  getEffortLevel,
+  setEffortLevel,
+  getEffortPromptSnippet,
+  getEffortLabel,
+  shouldAutoGenerateTests,
+  shouldUseSubAgents,
+  shouldUseIntelligentCompaction,
+  type EffortLevel,
+} from "../effortLevels.js";
+import {
+  classifyMcpTool,
+  extractToolName,
+  isRobloxStudioMcpTool,
+  evaluateMcpToolCall,
+  getAllowedRobloxMcpTools,
+  getBlockedRobloxMcpTools,
+} from "../robloxMcpGuard.js";
+import { detectLanguageFromExt } from "../syntaxHighlight.js";
+import { validateModeConfig, isValidModeConfig } from "../configSchema.js";
+import { pokaYokeCheck } from "../pokaYoke.js";
+import {
+  listSystemLocales,
+  pickBestUtf8Locale,
+} from "../utf8Safety.js";
+
+describe("property-pure-functions — additional (NEW)", () => {
+  // ========================================================================
+  // 6. argsNormalizer.normalizeArgs — 5 properties
+  // ========================================================================
+  describe("argsNormalizer.normalizeArgs (aliases)", () => {
+    it("aliases always copy correctly: { caminho: s } → args.path === s for any string s", () => {
+      fc.assert(
+        fc.property(fc.string({ maxLength: 200 }), (s) => {
+          const args: Record<string, unknown> = { caminho: s };
+          normalizeArgs("ler_arquivo", args);
+          return args.path === s;
+        }),
+        { numRuns: 50 },
+      );
+    });
+
+    it("aliases preserve original: { caminho: s } → args.caminho still === s after normalize", () => {
+      fc.assert(
+        fc.property(fc.string({ maxLength: 200 }), (s) => {
+          const args: Record<string, unknown> = { caminho: s };
+          normalizeArgs("ler_arquivo", args);
+          return args.caminho === s && args.path === s;
+        }),
+        { numRuns: 50 },
+      );
+    });
+
+    it("aliases never overwrite an existing canonical field", () => {
+      fc.assert(
+        fc.property(fc.string({ maxLength: 100 }), fc.string({ maxLength: 100 }), (orig, alias) => {
+          const args: Record<string, unknown> = { path: orig, caminho: alias };
+          normalizeArgs("ler_arquivo", args);
+          return args.path === orig;
+        }),
+        { numRuns: 50 },
+      );
+    });
+
+    it("type coercion is idempotent: normalize(normalize(args)) === normalize(args)", () => {
+      fc.assert(
+        fc.property(
+          fc.string({ maxLength: 50 }).map((s) => ({ maxResults: s })),
+          (baseArgs) => {
+            const schema = { properties: { maxResults: { type: "number" } } };
+            // First normalize
+            const args1: Record<string, unknown> = { ...baseArgs };
+            normalizeArgs("tool", args1, schema);
+            // Second normalize on top of already-normalized args
+            const args2: Record<string, unknown> = { ...args1 };
+            normalizeArgs("tool", args2, schema);
+            // Result should be deeply equal (idempotent)
+            return JSON.stringify(args1) === JSON.stringify(args2);
+          },
+        ),
+        { numRuns: 50 },
+      );
+    });
+
+    it("JSON-string parsing is idempotent: parsing an already-parsed array leaves it as array", () => {
+      fc.assert(
+        fc.property(fc.array(fc.record({ search: fc.string(), replace: fc.string() })), (edits) => {
+          const args: Record<string, unknown> = { edits };
+          normalizeArgs("editar_arquivo", args);
+          // edits was already an array — should still be an array (not double-parsed)
+          return Array.isArray(args.edits);
+        }),
+        { numRuns: 50 },
+      );
+    });
+  });
+
+  // ========================================================================
+  // 7. toolReduction.detectIntent — 5 properties
+  // ========================================================================
+  describe("toolReduction.detectIntent (defaults to general)", () => {
+    it("empty string always returns 'general'", () => {
+      fc.assert(
+        fc.property(fc.constant(""), (s) => detectIntent(s) === "general"),
+        { numRuns: 10 },
+      );
+    });
+
+    it("null input always returns 'general' (coerced to 'null' string, no pattern matches)", () => {
+      fc.assert(
+        fc.property(fc.constant(null), (n) => {
+          // detectIntent(n as unknown as string) — JS coerces null to "null"
+          const result = detectIntent(n as unknown as string);
+          return result === "general";
+        }),
+        { numRuns: 10 },
+      );
+    });
+
+    it("undefined input always returns 'general' (coerced to 'undefined' string)", () => {
+      fc.assert(
+        fc.property(fc.constant(undefined), (u) => {
+          const result = detectIntent(u as unknown as string);
+          return result === "general";
+        }),
+        { numRuns: 10 },
+      );
+    });
+
+    it("whitespace-only string always returns 'general' (no keywords match)", () => {
+      fc.assert(
+        fc.property(fc.stringMatching(/^\s+$/), (s) => {
+          return detectIntent(s) === "general";
+        }),
+        { numRuns: 30 },
+      );
+    });
+
+    it("deterministic: detectIntent(s) === detectIntent(s) for any s", () => {
+      fc.assert(
+        fc.property(fc.string({ maxLength: 100 }), (s) => {
+          return detectIntent(s) === detectIntent(s);
+        }),
+        { numRuns: 50 },
+      );
+    });
+  });
+
+  // ========================================================================
+  // 8. effortLevels — 5 properties
+  // ========================================================================
+  describe("effortLevels (set/get roundtrip + invariants)", () => {
+    it("setEffortLevel(L) then getEffortLevel() returns L for all 4 valid levels", () => {
+      const levels: EffortLevel[] = ["low", "medium", "high", "max"];
+      for (const level of levels) {
+        setEffortLevel(level);
+        expect(getEffortLevel()).toBe(level);
+      }
+    });
+
+    it("all 4 levels produce non-empty prompt snippets", () => {
+      const levels: EffortLevel[] = ["low", "medium", "high", "max"];
+      for (const level of levels) {
+        setEffortLevel(level);
+        const snippet = getEffortPromptSnippet();
+        expect(typeof snippet).toBe("string");
+        expect(snippet.length).toBeGreaterThan(0);
+      }
+    });
+
+    it("setEffortLevel returns false for any invalid level (random strings)", () => {
+      fc.assert(
+        fc.property(
+          fc.string({ maxLength: 30 }).filter((s) => !["low", "medium", "high", "max"].includes(s)),
+          (invalidLevel) => {
+            const result = setEffortLevel(invalidLevel as unknown as EffortLevel);
+            return result === false;
+          },
+        ),
+        { numRuns: 50 },
+      );
+      // Restore valid level after property runs
+      setEffortLevel("medium");
+    });
+
+    it("getEffortLabel always returns a non-empty string for any valid level", () => {
+      const levels: EffortLevel[] = ["low", "medium", "high", "max"];
+      for (const level of levels) {
+        setEffortLevel(level);
+        const label = getEffortLabel();
+        expect(typeof label).toBe("string");
+        expect(label.length).toBeGreaterThan(0);
+      }
+    });
+
+    it("shouldAutoGenerateTests/shouldUseSubAgents/shouldUseIntelligentCompaction always return boolean", () => {
+      const levels: EffortLevel[] = ["low", "medium", "high", "max"];
+      for (const level of levels) {
+        setEffortLevel(level);
+        expect(typeof shouldAutoGenerateTests()).toBe("boolean");
+        expect(typeof shouldUseSubAgents()).toBe("boolean");
+        expect(typeof shouldUseIntelligentCompaction()).toBe("boolean");
+      }
+    });
+  });
+
+  // ========================================================================
+  // 9. robloxMcpGuard — 5 properties
+  // ========================================================================
+  describe("robloxMcpGuard (classify / extract / isRobloxStudioMcpTool)", () => {
+    it("classifyMcpTool always returns 'unknown' for any unrecognized tool name", () => {
+      fc.assert(
+        fc.property(
+          fc.string({ maxLength: 50 }).filter(
+            (s) =>
+              s.length > 0 &&
+              ![
+                "script_read", "script_search", "script_grep", "search_game_tree",
+                "inspect_instance", "explore_subagent", "list_roblox_studios",
+                "console_output", "get_studio_state",
+                "multi_edit", "insert_from_creator_store", "generate_mesh",
+                "generate_material", "generate_procedural_model",
+                "execute_luau", "run_script_in_play_mode",
+                "start_stop_play", "screen_capture", "playtest_subagent",
+                "character_navigation", "keyboard_input", "mouse_input",
+                "set_active_studio",
+              ].includes(s),
+          ),
+          (tool) => classifyMcpTool(tool) === "unknown",
+        ),
+        { numRuns: 50 },
+      );
+    });
+
+    it("extractToolName roundtrip: extract(prefix+name) then extract(prefix+extract(...)) is stable", () => {
+      fc.assert(
+        fc.property(
+          fc.constantFrom("Roblox_Studio__", "roblox_studio__", "RobloxStudio__"),
+          fc.string({ minLength: 1, maxLength: 30 }).filter((s) => !s.includes("__")),
+          (prefix, toolName) => {
+            const fullName = `${prefix}${toolName}`;
+            const first = extractToolName(fullName);
+            const second = extractToolName(`${prefix}${first}`);
+            return first === second && first === toolName;
+          },
+        ),
+        { numRuns: 50 },
+      );
+    });
+
+    it("isRobloxStudioMcpTool returns true for all 3 documented prefix variations", () => {
+      fc.assert(
+        fc.property(
+          fc.constantFrom("Roblox_Studio__", "roblox_studio__", "RobloxStudio__"),
+          fc.string({ minLength: 1, maxLength: 30 }),
+          (prefix, tool) => isRobloxStudioMcpTool(`${prefix}${tool}`) === true,
+        ),
+        { numRuns: 50 },
+      );
+    });
+
+    it("isRobloxStudioMcpTool returns false for any name WITHOUT a recognized prefix", () => {
+      fc.assert(
+        fc.property(
+          fc.string({ maxLength: 50 }).filter(
+            (s) =>
+              !s.startsWith("Roblox_Studio__") &&
+              !s.startsWith("roblox_studio__") &&
+              !s.startsWith("RobloxStudio__"),
+          ),
+          (s) => s.length === 0 || isRobloxStudioMcpTool(s) === false,
+        ),
+        { numRuns: 50 },
+      );
+    });
+
+    it("evaluateMcpToolCall never throws for any string input (stringent robustness check)", () => {
+      fc.assert(
+        fc.property(fc.string({ maxLength: 100 }), fc.object({ maxKeys: 5 }), (name, args) => {
+          let threw = false;
+          try {
+            evaluateMcpToolCall(name, args as Record<string, unknown>);
+          } catch {
+            threw = true;
+          }
+          return !threw;
+        }),
+        { numRuns: 50 },
+      );
+    });
+
+    it("getAllowedRobloxMcpTools and getBlockedRobloxMcpTools never share a tool name", () => {
+      const allowed = new Set(getAllowedRobloxMcpTools());
+      const blocked = new Set(getBlockedRobloxMcpTools());
+      for (const tool of allowed) {
+        expect(blocked.has(tool)).toBe(false);
+      }
+      for (const tool of blocked) {
+        expect(allowed.has(tool)).toBe(false);
+      }
+    });
+  });
+
+  // ========================================================================
+  // 10. syntaxHighlight.detectLanguageFromExt — 3 properties
+  // ========================================================================
+  describe("syntaxHighlight.detectLanguageFromExt (defaults)", () => {
+    it("unknown extensions always return 'typescript' (fallback default)", () => {
+      fc.assert(
+        fc.property(
+          fc.string({ minLength: 1, maxLength: 10 }).filter(
+            (s) =>
+              ![
+                ".ts", ".tsx", ".mts", ".js", ".jsx", ".mjs",
+                ".py", ".pyw", ".rs", ".go", ".java",
+              ].includes(s.toLowerCase()),
+          ),
+          (ext) => detectLanguageFromExt(ext) === "typescript",
+        ),
+        { numRuns: 50 },
+      );
+    });
+
+    it("empty string returns 'typescript' (fallback default)", () => {
+      expect(detectLanguageFromExt("")).toBe("typescript");
+    });
+
+    it("case-insensitive: detectLanguageFromExt(ext.toUpperCase()) === detectLanguageFromExt(ext.toLowerCase())", () => {
+      fc.assert(
+        fc.property(
+          fc.constantFrom(".ts", ".tsx", ".js", ".py", ".rs", ".go", ".java", ".xyz", ".unknown"),
+          (ext) => detectLanguageFromExt(ext.toUpperCase()) === detectLanguageFromExt(ext.toLowerCase()),
+        ),
+        { numRuns: 30 },
+      );
+    });
+  });
+
+  // ========================================================================
+  // 11. configSchema.validateModeConfig — 4 properties
+  // ========================================================================
+  describe("configSchema.validateModeConfig (invalid inputs)", () => {
+    it("empty object always invalid (returns at least one error)", () => {
+      const errors = validateModeConfig({});
+      expect(Array.isArray(errors)).toBe(true);
+      expect(errors.length).toBeGreaterThan(0);
+    });
+
+    it("null input always invalid (returns at least one error)", () => {
+      const errors = validateModeConfig(null);
+      expect(errors.length).toBeGreaterThan(0);
+      expect(errors.some((e) => e.field === "root")).toBe(true);
+    });
+
+    it("array input always invalid (config must be a non-null object, not array)", () => {
+      fc.assert(
+        fc.property(fc.array(fc.anything(), { maxLength: 5 }), (arr) => {
+          const errors = validateModeConfig(arr);
+          return errors.some((e) => e.field === "root");
+        }),
+        { numRuns: 30 },
+      );
+    });
+
+    it("config with name containing spaces but missing label always invalid", () => {
+      fc.assert(
+        fc.property(
+          fc.string({ minLength: 1, maxLength: 30 }).filter((s) => s.includes(" ") || s.trim().length === 0),
+          (nameWithSpaces) => {
+            const errors = validateModeConfig({ name: nameWithSpaces });
+            // Without label, config is always invalid (regardless of name content)
+            return errors.length > 0 && errors.some((e) => e.field === "label");
+          },
+        ),
+        { numRuns: 30 },
+      );
+    });
+
+    it("isValidModeConfig(emptyObject) === false (consistent with validateModeConfig)", () => {
+      expect(isValidModeConfig({})).toBe(false);
+    });
+  });
+
+  // ========================================================================
+  // 12. pokaYoke.pokaYokeCheck — 4 properties
+  // ========================================================================
+  describe("pokaYoke.pokaYokeCheck (empty path blocks path-taking tools)", () => {
+    const PATH_TAKING_TOOLS = [
+      "ler_arquivo", "ler_arquivo_avancado", "aplicar_diff",
+      "editar_arquivo", "desfazer_edicao", "git_blame", "git_show", "parse_ast",
+    ];
+
+    it("empty path always blocks for any path-taking tool", () => {
+      for (const tool of PATH_TAKING_TOOLS) {
+        const result = pokaYokeCheck(tool, {});
+        expect(result.ok).toBe(false);
+      }
+    });
+
+    it("null path always blocks for any path-taking tool", () => {
+      for (const tool of PATH_TAKING_TOOLS) {
+        const result = pokaYokeCheck(tool, { caminho: null });
+        expect(result.ok).toBe(false);
+      }
+    });
+
+    it("non-string path (number/boolean/object/array) always blocks for path-taking tools", () => {
+      fc.assert(
+        fc.property(
+          fc.constantFrom(...PATH_TAKING_TOOLS),
+          fc.oneof(fc.integer(), fc.boolean(), fc.object(), fc.array(fc.anything())),
+          (tool, nonStringPath) => {
+            const result = pokaYokeCheck(tool, { caminho: nonStringPath });
+            return result.ok === false;
+          },
+        ),
+        { numRuns: 50 },
+      );
+    });
+
+    it("pokaYokeCheck never throws for any tool name and args combination (robustness)", () => {
+      fc.assert(
+        fc.property(
+          fc.string({ maxLength: 50 }),
+          fc.object({ maxKeys: 5, values: [fc.string(), fc.integer(), fc.boolean(), fc.constant(null)] }),
+          (toolName, args) => {
+            let threw = false;
+            try {
+              pokaYokeCheck(toolName, args as Record<string, unknown>);
+            } catch {
+              threw = true;
+            }
+            return !threw;
+          },
+        ),
+        { numRuns: 50 },
+      );
+    });
+  });
+
+  // ========================================================================
+  // 13. utf8Safety.listSystemLocales / pickBestUtf8Locale — 3 properties
+  // ========================================================================
+  describe("utf8Safety (return type invariants)", () => {
+    it("listSystemLocales always returns an array", () => {
+      const result = listSystemLocales();
+      expect(Array.isArray(result)).toBe(true);
+    });
+
+    it("pickBestUtf8Locale always returns an object with 'locale' and 'tried' properties", () => {
+      const result = pickBestUtf8Locale();
+      expect(result).toBeTypeOf("object");
+      expect(result).not.toBeNull();
+      expect("locale" in result).toBe(true);
+      expect("tried" in result).toBe(true);
+    });
+
+    it("pickBestUtf8Locale 'tried' is always an array, and 'locale' is string or null", () => {
+      const result = pickBestUtf8Locale();
+      expect(Array.isArray(result.tried)).toBe(true);
+      expect(result.locale === null || typeof result.locale === "string").toBe(true);
+    });
+
+    it("listSystemLocales is cached: calling twice returns the same reference", () => {
+      const a = listSystemLocales();
+      const b = listSystemLocales();
+      expect(a).toBe(b); // same reference (cache)
+    });
+  });
+});
+

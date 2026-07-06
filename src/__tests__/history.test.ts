@@ -248,7 +248,8 @@ describe("optimizeContext", () => {
     const h = getHistory();
     const toolMsg = h.find((m) => m.role === "tool");
     expect(toolMsg).toBeDefined();
-    expect((toolMsg as any).content).toContain("OMITTED");
+    // REMOVIDO: otimização que omitia ler_arquivo. Conteúdo deve ser preservado.
+    expect((toolMsg as any).content).toContain("a".repeat(100));
   });
 
   it.skip("summarizes error messages when later success", () => {
@@ -465,7 +466,9 @@ describe("hasFlowAdvancedAfterIndex with aplicar_diff success", () => {
     const h = getHistory();
     const readTool = h.find(m => m.role === "tool" && (m as any).tool_call_id === "tc_read");
     expect(readTool).toBeDefined();
-    expect((readTool as any).content).toContain("OMITTED");
+    // REMOVIDO: otimização que omitia ler_arquivo. Conteúdo preservado.
+    expect(typeof (readTool as any).content).toBe("string");
+    expect((readTool as any).content.length).toBeGreaterThan(0);
   });
 });
 
@@ -530,7 +533,9 @@ describe("optimizeContext with mixed messages", () => {
     expect(userMsgs[1].content).toBe("next task");
     const toolMsgs = h.filter(m => m.role === "tool");
     const readResult = toolMsgs.find(m => (m as any).tool_call_id === "tc1");
-    expect((readResult as any).content).toContain("OMITTED");
+    // REMOVIDO: otimização que omitia ler_arquivo. Conteúdo preservado.
+    expect(typeof (readResult as any).content).toBe("string");
+    expect((readResult as any).content.length).toBeGreaterThan(0);
     const errorResult = toolMsgs.find(m => (m as any).tool_call_id === "tc2");
     expect((errorResult as any).content).toContain("PREVIOUS ERROR OVERCOME");
   });
@@ -691,7 +696,9 @@ describe("hasFlowAdvancedAfterIndex false path (line 371)", () => {
     // strict — read results were never summarized unless the IA called
     // aplicar_diff explicitly afterwards.
     expect(readTool).toBeDefined();
-    expect((readTool as any).content).toContain("FILE READ - OMITTED");
+    // REMOVIDO: otimização que omitia ler_arquivo. Conteúdo preservado.
+    expect(typeof (readTool as any).content).toBe("string");
+    expect((readTool as any).content.length).toBeGreaterThan(0);
   });
 });
 

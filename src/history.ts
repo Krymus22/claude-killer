@@ -1004,16 +1004,12 @@ function optimizeToolMessage(i: number): boolean {
   }
 
   // ─── Read tool results (ler_arquivo, etc) ──────────────────────────────
-  // BUG FIX: limiar era 800 chars — muito baixo. Arquivos de 2.5KB estavam
-  // sendo omitidos, fazendo a IA perder acesso ao conteúdo quando precisava
-  // referenciar de novo. Aumentado para 5000 chars (arquivos pequenos/médios
-  // ficam intactos; só arquivos realmente grandes são otimizados).
-  if (isReadTool(toolName) && content.length > 5000 && !content.startsWith("[FILE READ")) {
-    if (hasFlowAdvancedAfterIndex(i)) {
-      (history[i] as any).content = `[FILE READ - OMITTED FOR CONTEXT OPTIMIZATION. ORIGINAL LENGTH: ${content.length} CHARS. Use ler_arquivo(path) to re-read if needed.]`;
-      return true;
-    }
-  }
+  // REMOVIDO: otimização que omitia conteúdo de ler_arquivo.
+  // Se a IA chamou ler_arquivo, é porque PRECISA do conteúdo. Omitir
+  // o conteúdo faz a IA perder acesso ao que ela mesma pediu pra ler,
+  // causando loop de re-leitura e respostas incorretas.
+  // A otimização de contexto deve acontecer via /compact (LLM-based),
+  // não removendo conteúdo que a IA explicitamente solicitou.
 
   // ─── Error messages that have been overcome ────────────────────────────
   if (isErrorMessage(content) && !content.startsWith("[ERRO ANTERIOR")) {

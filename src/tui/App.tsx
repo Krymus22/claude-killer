@@ -1734,28 +1734,31 @@ export function App() {
         </Box>
       )}
 
-      {/* Bottom bar: Input (left) + Status (right) */}
-      <Box flexDirection="row" marginTop={1}>
-        {/* Input section - hidden when Hub is open to prevent key leaks */}
-        <Box flexGrow={1}>
-          {showHub || showFolderBrowser ? (
-            <Text color={colors.muted}>[ Navegador aberto - pressione Esc para fechar ]</Text>
-          ) : (
-            <>
-              <Text color={colors.primary} bold>{"> "}</Text>
-              <TextInput
-                value={input}
-                onChange={handleChange}
-                onSubmit={handleSubmit}
-                placeholder={status === "idle" ? "Digite sua mensagem..." : ""}
-              />
-            </>
-          )}
+      {/* Bottom section: Input (top) + Status (bottom), stacked vertically to
+          prevent input text from overlapping the status bar when it wraps. */}
+      <Box flexDirection="column" marginTop={1}>
+        {/* Input row */}
+        <Box flexDirection="row">
+          <Box flexGrow={1}>
+            {showHub || showFolderBrowser ? (
+              <Text color={colors.muted}>[ Navegador aberto - pressione Esc para fechar ]</Text>
+            ) : (
+              <>
+                <Text color={colors.primary} bold>{"> "}</Text>
+                <TextInput
+                  value={input}
+                  onChange={handleChange}
+                  onSubmit={handleSubmit}
+                  placeholder={status === "idle" ? "Digite sua mensagem..." : ""}
+                />
+              </>
+            )}
+          </Box>
         </Box>
 
-        {/* Status bar section (right side) */}
+        {/* Status bar row (below input, not beside it) */}
         {lastUsage && (
-          <Box marginLeft={2}>
+          <Box marginTop={0}>
             <StatusBar
               promptTokens={lastUsage.prompt_tokens}
               completionTokens={lastUsage.completion_tokens}

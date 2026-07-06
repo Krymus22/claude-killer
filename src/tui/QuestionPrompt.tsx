@@ -117,29 +117,32 @@ export function QuestionPrompt({ question, onRespond }: Readonly<QuestionPromptP
 
   return (
     <Box flexDirection="column" borderStyle="round" borderColor={colors.warning} paddingX={1} paddingY={0} marginY={1}>
-      {/* Header */}
-      <Box>
+      {/* Header — uses textWrap to show full question without truncation */}
+      <Box flexDirection="column">
         <Text color={colors.warning} bold>
-          {" "}{"❓"} {question.pergunta}
+          {" "}{"❓"} Pergunta da IA:
+        </Text>
+        <Text color={colors.white} wrap="wrap">
+          {" "}{question.pergunta}
         </Text>
       </Box>
 
-      {/* Context (if provided) */}
+      {/* Context (if provided) — also wrapped */}
       {question.contexto && (
         <Box marginTop={0}>
-          <Text color={colors.muted}> {" "}Contexto: {question.contexto}</Text>
+          <Text color={colors.muted} wrap="wrap"> {" "}Contexto: {question.contexto}</Text>
         </Box>
       )}
 
-      {/* Alternativas */}
+      {/* Alternativas — each alternative wraps if long */}
       <Box flexDirection="column" marginTop={0}>
         {alternatives.map((alt, i) => {
           const isSelected = i === selectedIndex && mode === "select";
           const prefix = isSelected ? `${icons.arrowRight} ` : "  ";
           const num = `[${i + 1}]`;
           return (
-            <Box key={`alt-${i}`}>
-              <Text color={isSelected ? colors.primary : colors.muted}>
+            <Box key={`alt-${i}`} flexDirection="column">
+              <Text color={isSelected ? colors.primary : colors.muted} wrap="wrap">
                 {" "}{prefix}{num} {alt}
               </Text>
             </Box>
@@ -169,7 +172,7 @@ export function QuestionPrompt({ question, onRespond }: Readonly<QuestionPromptP
       {/* Selected indicator (only in select mode) */}
       {mode === "select" && (
         <Box>
-          <Text color={colors.primary}>
+          <Text color={colors.primary} wrap="wrap">
             {" "}Selecionado: {alternatives[selectedIndex]}
           </Text>
         </Box>

@@ -86,13 +86,27 @@ export async function retryWithTimeout<T>(
 ): Promise<T> {
   return withRetry(
     async () => {
-      const result = await Promise.race([
-        fn(),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error(`Timeout after ${timeoutMs}ms`)), timeoutMs)
-        ),
-      ]);
-      return result;
+      // BUG FIX: the setTimeout used for the per-attempt timeout was never
+      // cleared when fn() settled first. Each call leaked a pending timer
+      // that would fire later and reject an already-settled promise (causing
+      // unhandled-rejection warnings in some runtimes and keeping the event
+      // loop alive longer than necessary). Capture the handle and clear it
+      // as soon as fn() settles.
+      let timeout: ReturnType<typeof setTimeout> | null = null;
+      try {
+        const result = await Promise.race([
+          fn(),
+          new Promise<never>((_, reject) => {
+            timeout = setTimeout(
+              () => reject(new Error(`Timeout after ${timeoutMs}ms`)),
+              timeoutMs
+            );
+          }),
+        ]);
+        return result;
+      } finally {
+        if (timeout) clearTimeout(timeout);
+      }
     },
     opts
   );

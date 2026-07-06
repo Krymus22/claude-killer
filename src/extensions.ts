@@ -238,8 +238,6 @@ function sendRequest(server: ActiveMCPServer, method: string, params?: Record<st
     // NDJSON: JSON object followed by a single newline. No Content-Length header.
     const message = body + "\n";
 
-    server.pendingRequests.set(id, { resolve, reject });
-
     // Timeout per request type:
     //   - initialize: 30s (cold start on Windows is slow, especially cmd.exe /c mcp.bat
     //     that spawns Roblox Studio internally — easily 5-15s on first run)
@@ -255,23 +253,28 @@ function sendRequest(server: ActiveMCPServer, method: string, params?: Record<st
       : 10_000;
     const timeoutMs = baseTimeout;
     const timeout = setTimeout(() => {
-      if (server.pendingRequests.has(id)) {
-        server.pendingRequests.delete(id);
+      if (server.pendingRequests.delete(id)) {
         reject(new Error(`MCP request "${method}" timed out after ${timeoutMs / 1000}s`));
       }
     }, timeoutMs);
 
-    // Clear timeout when resolved/rejected
-    const originalResolve = resolve;
-    const originalReject = reject;
+    // Store wrapped resolve/reject that clear the timeout, so any code path
+    // that settles the promise (response received, server exited, etc.) also
+    // cancels the pending timer.
     server.pendingRequests.set(id, {
-      resolve: (val: unknown) => { clearTimeout(timeout); originalResolve(val); },
-      reject: (err: Error) => { clearTimeout(timeout); originalReject(err); },
+      resolve: (val: unknown) => { clearTimeout(timeout); resolve(val); },
+      reject: (err: Error) => { clearTimeout(timeout); reject(err); },
     });
 
     try {
       server.process.stdin!.write(message);
     } catch (err) {
+      // BUG FIX: previously this catch deleted the pendingRequest and called
+      // the bare reject() WITHOUT clearing `timeout`. The timer kept running
+      // for up to 60s (tools/call) and would later fire, try to delete an
+      // already-deleted entry, and attempt to reject an already-settled
+      // promise — a slow timer leak per failed write. Clear it now.
+      clearTimeout(timeout);
       server.pendingRequests.delete(id);
       reject(err instanceof Error ? err : new Error(String(err)));
     }
@@ -457,10 +460,25 @@ async function startAndInitMCPServer(name: string, config: MCPConfig): Promise<v
   const env = { ...process.env, ...config.env };
   let child: import("child_process").ChildProcess;
   try {
+    // BUG FIX: shell: true spawns a wrapper shell (sh -c "..." on POSIX,
+    // cmd.exe /d /s /c "..." on Windows). `child.pid` is the shell's PID,
+    // not the actual MCP server's PID. When shutdownMCPServers() called
+    // child.kill(), only the shell died — the MCP server process kept
+    // running orphaned, leaking resources and holding ports open.
+    //
+    // Fix: on POSIX, spawn the child in its own process group
+    // (detached: true) so shutdownMCPServers() can kill the entire group
+    // with process.kill(-pid). On Windows, detached: true would create a
+    // new console window, so we skip it there (Windows kills use
+    // child.kill() which is best-effort; a future improvement would be to
+    // shell out to `taskkill /T /F /PID` to kill the whole tree).
+    const isWindows = process.platform === "win32";
     child = spawn(command, args, {
       env,
       stdio: ["pipe", "pipe", "pipe"],
       shell: true,
+      windowsHide: true,
+      detached: !isWindows,
     });
   } catch (err) {
     console.error(
@@ -844,7 +862,27 @@ export function shutdownMCPServers() {
       server.process.stdin!.write(notification + "\n");
     } catch { /* ignore */ }
     try {
-      server.process.kill();
+      // BUG FIX: with shell: true, server.process is the wrapper shell, not
+      // the actual MCP server. Calling server.process.kill() only kills the
+      // shell, leaving the MCP server orphaned (still holding its stdio
+      // pipes, ports, etc.).
+      //
+      // On POSIX (where we now spawn with detached: true), child.pid is the
+      // PGID of the new process group that contains both the shell and the
+      // real MCP server. process.kill(-pid) sends the signal to the entire
+      // group, killing both. We fall back to child.kill() if the group kill
+      // fails (e.g., the process already exited, or spawn was mocked in
+      // tests and no real process group exists).
+      const pid = server.process.pid;
+      if (pid && process.platform !== "win32") {
+        try {
+          process.kill(-pid, "SIGTERM");
+        } catch {
+          server.process.kill();
+        }
+      } else {
+        server.process.kill();
+      }
     } catch { /* ignore */ }
   }
   activeMCPServers.clear();

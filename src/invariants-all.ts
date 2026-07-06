@@ -8,6 +8,7 @@
  * múltiplos módulos (cross-module invariants).
  */
 
+import * as path from "node:path";
 import { invariant } from "./invariants.js";
 
 /**
@@ -506,7 +507,14 @@ export function verifyFileValidatorInvariants(opts: {
   matches: boolean;
 }): void {
   // If file extension matches pattern, matches should be true
-  const ext = "." + opts.filePath.split(".").pop();
+  //
+  // BUG FIX: previously this computed the extension as
+  //   `"." + opts.filePath.split(".").pop()`
+  // which is wrong for files without an extension: for "Makefile" it produces
+  // ".Makefile" (treating the basename as the extension). It also disagrees
+  // with fileValidator.ts which uses `path.extname()`. We now use
+  // `path.extname()` so the invariant matches the real matcher's behavior.
+  const ext = path.extname(opts.filePath);
   if (opts.pattern === "*" + ext) {
     invariant(
       opts.matches,

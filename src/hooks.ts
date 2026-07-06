@@ -59,12 +59,24 @@ interface HookEntry<T> {
   priority: number;
 }
 
+/**
+ * Module-level counter that guarantees hook IDs are unique across ALL
+ * registries (preToolCall, postToolCall, preFileWrite, postFileWrite).
+ *
+ * BUG FIX: previously each HookRegistry had its own `nextId` counter starting
+ * at 0, so `hook_0` could exist in multiple registries at the same time.
+ * `unregisterHook(id)` uses `||` short-circuiting, so it would return `true`
+ * after unregistering from the FIRST registry that had the id, leaving the
+ * same-id hook in the other registries still registered. This silently leaked
+ * hooks. A shared counter makes every emitted id globally unique.
+ */
+let globalHookIdCounter = 0;
+
 class HookRegistry<T extends (...args: any[]) => any> {
   private hooks: HookEntry<T>[] = [];
-  private nextId = 0;
 
   register(handler: T, priority: number = 0): string {
-    const id = `hook_${this.nextId++}`;
+    const id = `hook_${globalHookIdCounter++}`;
     this.hooks.push({ id, handler, priority });
     this.hooks.sort((a, b) => a.priority - b.priority);
     return id;

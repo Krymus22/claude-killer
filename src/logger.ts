@@ -392,8 +392,11 @@ export function statusBar(input: StatusBarInput): void {
   } = input;
 
   const pct = contextWindow > 0 ? totalTokens / contextWindow : 0;
-  const fillCount = Math.round(pct * 40);
-  const emptyCount = 40 - fillCount;
+  // BUG FIX: clamp fillCount/emptyCount to [0,40] — when totalTokens exceeds
+  // contextWindow (pct > 1) the unclamped emptyCount becomes negative and
+  // String.prototype.repeat(-N) throws RangeError, crashing the status bar.
+  const fillCount = Math.min(40, Math.max(0, Math.round(pct * 40)));
+  const emptyCount = Math.max(0, 40 - fillCount);
 
   let color = "#34D399"; // green
   if (pct >= compactThreshold) color = "#F87171";      // red
@@ -403,7 +406,10 @@ export function statusBar(input: StatusBarInput): void {
 
   // Estimate cost if rates configured (both must be > 0)
   let costStr = "";
-  if (costPerKPrompt > 0 || costPerKCompletion > 0) {
+  // BUG FIX: original used `||`, but the comment says "both must be > 0".
+  // With `||`, if only one rate is set, cost is computed using 0 for the
+  // other — yielding a misleadingly low estimate. Use `&&` to require both.
+  if (costPerKPrompt > 0 && costPerKCompletion > 0) {
     const cost =
       (promptTokens / 1000) * costPerKPrompt +
       (completionTokens / 1000) * costPerKCompletion;

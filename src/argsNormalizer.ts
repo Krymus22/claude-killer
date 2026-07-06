@@ -114,7 +114,11 @@ export function normalizeArgs(
   }
 
   // 3. Parse JSON strings that should be arrays/objects
-  corrections += parseJsonStrings(args);
+  // BUG FIX: pass the schema so parseJsonStrings can skip fields whose schema
+  // type is "string". Without this, a string field whose value happens to look
+  // like JSON (e.g. `'[1,2,3]'`) would be parsed into an array, breaking the
+  // handler that expects a string.
+  corrections += parseJsonStrings(args, schema?.properties);
 
   // 4. Fill defaults from schema
   if (schema?.properties) {
@@ -209,11 +213,19 @@ function coerceTypes(
 
 // --- JSON string parsing ----------------------------------------------------
 
-function parseJsonStrings(args: Record<string, unknown>): number {
+function parseJsonStrings(
+  args: Record<string, unknown>,
+  properties?: Record<string, { type?: string; default?: unknown }>,
+): number {
   let count = 0;
 
   for (const [key, val] of Object.entries(args)) {
     if (typeof val !== "string") continue;
+    // BUG FIX: if the schema explicitly declares this field as a string,
+    // do NOT parse it as JSON — even if the value looks like JSON. Parsing
+    // would convert `'[1,2,3]'` into an array, violating the schema and
+    // breaking downstream handlers that expect a string.
+    if (properties?.[key]?.type === "string") continue;
     const trimmed = val.trim();
     if (!trimmed.startsWith("[") && !trimmed.startsWith("{")) continue;
 

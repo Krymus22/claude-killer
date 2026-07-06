@@ -42,7 +42,16 @@ function buildGrepRegex(opts: GrepOptions): RegExp | null {
 }
 
 function resolveGrepFiles(opts: GrepOptions, searchPath: string, ignore: string[]): string[] {
-  const stat = fs.statSync(searchPath);
+  // BUG FIX: previously fs.statSync(searchPath) was called without a try/catch.
+  // If `searchPath` did not exist (typo, race condition, deleted directory),
+  // the ENOENT error propagated up and crashed the whole grepSearch call,
+  // instead of being treated as "no files to search" → return [].
+  let stat: fs.Stats;
+  try {
+    stat = fs.statSync(searchPath);
+  } catch {
+    return [];
+  }
   if (stat.isFile()) return [searchPath];
 
   const globPattern = opts.include ? `**/${opts.include}` : "**/*";

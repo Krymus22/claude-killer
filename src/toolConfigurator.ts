@@ -288,7 +288,21 @@ Passos:
 
 Comece agora.`;
 
-  const messages: Array<{ role: "system" | "user" | "assistant" | "tool"; content: string }> = [
+  // BUG FIX: the messages array type previously only allowed { role, content }.
+  // When the assistant returned tool_calls, we pushed { role: "assistant", content: "" }
+  // WITHOUT the tool_calls array, and then pushed { role: "tool", content } WITHOUT
+  // a tool_call_id. The OpenAI Chat Completions API rejects this: each "tool"
+  // message MUST reference a tool_call_id that matches a tool_call in the
+  // immediately preceding assistant message. Without the fix, the second chat()
+  // call would 400 with "An assistant message with 'tool_calls' must be followed
+  // by tool messages responding to each 'tool_call_id'". The type now allows the
+  // optional tool_calls / tool_call_id fields so we can carry them through.
+  const messages: Array<{
+    role: "system" | "user" | "assistant" | "tool";
+    content: string;
+    tool_calls?: Array<{ id: string; type: "function"; function: { name: string; arguments: string } }>;
+    tool_call_id?: string;
+  }> = [
     { role: "system", content: CONFIGURATOR_SYSTEM_PROMPT },
     { role: "user", content: initialMessage },
   ];
@@ -321,8 +335,22 @@ Comece agora.`;
       const choice = response.choices[0];
       if (!choice) break;
 
-      // Add assistant message
-      messages.push({ role: "assistant", content: choice.message.content ?? "" });
+      // BUG FIX: push the FULL assistant message (including tool_calls when
+      // present) so the API can correlate the following "tool" messages with
+      // their tool_call_ids. Previously we dropped tool_calls and only stored
+      // content, which breaks the request contract on the next iteration.
+      const assistantMsg: typeof messages[number] = {
+        role: "assistant",
+        content: choice.message.content ?? "",
+      };
+      if (choice.message.tool_calls?.length) {
+        assistantMsg.tool_calls = choice.message.tool_calls.map((tc: any) => ({
+          id: tc.id,
+          type: "function",
+          function: { name: tc.function.name, arguments: tc.function.arguments },
+        }));
+      }
+      messages.push(assistantMsg);
 
       if (choice.message.content) {
         onMessage?.(choice.message.content);
@@ -337,7 +365,10 @@ Comece agora.`;
           onMessage?.(`[Tool: ${name}]`);
 
           const result = await handleConfiguratorTool(name, args, modeName, onAskUser);
-          messages.push({ role: "tool", content: result } as any);
+          // BUG FIX: include tool_call_id so the API can match this tool
+          // result to the corresponding tool_call in the preceding assistant
+          // message. Without it, the API rejects the next request.
+          messages.push({ role: "tool", content: result, tool_call_id: toolCall.id });
         }
         continue; // next iteration
       }

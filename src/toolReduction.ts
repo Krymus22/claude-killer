@@ -127,7 +127,13 @@ export function filterToolsByIntent(
     return allTools;  // Don't filter for general tasks
   }
 
-  const allowedTools = INTENT_TOOL_MAP[intent] ?? new Set<string>();
+  // BUG FIX: previously we grabbed a reference to the module-level Set in
+  // INTENT_TOOL_MAP[intent] and called .add() on it, permanently polluting
+  // the shared Set with CORE_TOOLS on the first call. Subsequent calls would
+  // see a mutated Set. We now copy into a fresh local Set so the module
+  // state stays pristine.
+  const intentTools = INTENT_TOOL_MAP[intent] ?? new Set<string>();
+  const allowedTools = new Set<string>(intentTools);
 
   // Always include core tools
   for (const core of CORE_TOOLS) {

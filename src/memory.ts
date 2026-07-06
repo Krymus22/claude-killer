@@ -231,18 +231,58 @@ export function readCheckpoint(config: MemoryConfig): SessionCheckpoint | null {
   const taskMatch = taskRegex.exec(content);
   if (taskMatch) checkpoint.currentTask = taskMatch[1].trim();
 
-  const summaryRegex = /Summary:\s*([\s\S]*?)(?=\n## |\n$)/;
+  // BUG FIX: the lookahead `(?=\n## |\n$)` only matched when the file ended
+  // with a trailing newline. Files written without a final `\n` (or where the
+  // section is the last one) failed to parse, silently dropping the summary.
+  // Use `$` (end of string) directly so the regex works regardless of
+  // trailing newline.
+  const summaryRegex = /Summary:\s*([\s\S]*?)(?=\n## |$)/;
   const summaryMatch = summaryRegex.exec(content);
   if (summaryMatch) checkpoint.contextSummary = summaryMatch[1].trim();
 
   // Extract decisions
-  const decisionsRegex = /Recent Decisions:\s*([\s\S]*?)(?=\n## |\n$)/;
+  const decisionsRegex = /Recent Decisions:\s*([\s\S]*?)(?=\n## |$)/;
   const decisionsMatch = decisionsRegex.exec(content);
   if (decisionsMatch) {
     checkpoint.recentDecisions = decisionsMatch[1]
       .split("\n")
       .map((line) => line.replace(/^-\s*/, "").trim())
       .filter(Boolean);
+  }
+
+  // BUG FIX: fileChanges and activeTools were written by writeCheckpoint()
+  // but never parsed back here, making the checkpoint round-trip lossy.
+  // After a restart, fileChanges was always [] and activeTools was always [],
+  // even though the data was on disk. Parse them back now.
+  const fileChangesRegex = /## File Changes\s*([\s\S]*?)(?=\n## |$)/;
+  const fileChangesMatch = fileChangesRegex.exec(content);
+  if (fileChangesMatch) {
+    const lineRegex = /^-\s*(created|modified|deleted):\s*(.+?)\s*-\s*(.+)$/;
+    for (const line of fileChangesMatch[1].split("\n")) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      const m = lineRegex.exec(trimmed);
+      if (m) {
+        checkpoint.fileChanges.push({
+          action: m[1] as FileChange["action"],
+          path: m[2].trim(),
+          timestamp: checkpoint.timestamp || new Date().toISOString(),
+          summary: m[3].trim(),
+        });
+      }
+    }
+  }
+
+  const activeToolsRegex = /## Active Tools\s*([\s\S]*?)(?=\n## |$)/;
+  const activeToolsMatch = activeToolsRegex.exec(content);
+  if (activeToolsMatch) {
+    const raw = activeToolsMatch[1].trim();
+    if (raw && raw !== "(none)") {
+      checkpoint.activeTools = raw
+        .split(",")
+        .map((t) => t.trim())
+        .filter(Boolean);
+    }
   }
 
   return checkpoint;

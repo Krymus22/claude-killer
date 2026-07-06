@@ -220,8 +220,16 @@ export function listSessions(cwd?: string): SessionMeta[] {
         .slice(1)
         .map((l) => { try { return JSON.parse(l); } catch { return null; } })
         .find((m) => m?.role === "user");
-      const summary = firstUserMsg?.content
-        ? firstUserMsg.content.slice(0, 60)
+      // BUG FIX: content can be either a string ("hello") OR an array of
+      // content parts ([{type:"text", text:"..."}, ...]) per the OpenAI chat
+      // spec. Previously we called .slice(0, 60) unconditionally, which on an
+      // array would return an array slice (not a string) and silently violate
+      // the SessionMeta.summary: string contract — the TUI would then render
+      // "[object Object]" or similar. We now only slice when content is a
+      // string; otherwise we fall back to the message-count summary.
+      const rawContent = firstUserMsg?.content;
+      const summary = typeof rawContent === "string" && rawContent.length > 0
+        ? rawContent.slice(0, 60)
         : `${msgCount} messages`;
 
       const stat = fs.statSync(filePath);

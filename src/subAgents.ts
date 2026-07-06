@@ -296,6 +296,20 @@ async function runSubAgentInner(
   let consecutiveFailures = 0;
 
   // Set agent ID env var for rollback tracking (fileLock.ts reads this)
+  //
+  // BUG (known limitation): process.env is process-global, NOT per-async-
+  // task. If two sub-agents run in parallel (e.g. via dynamicWorkflow's
+  // parallel() which uses Promise.all), they will overwrite each other's
+  // CLAUDE_KILLER_AGENT_ID. Sub-agent A's file-lock acquisitions would be
+  // attributed to sub-agent B, and the finally-block restore below would
+  // clobber the still-running sibling's ID.
+  //
+  // The proper fix is AsyncLocalStorage (node:async_hooks) — store the
+  // agent ID there and have fileLock.ts/rollbackStore.ts read from the
+  // ALS instead of process.env. That requires coordinated changes across
+  // three modules and is out of scope for this audit. Sequential
+  // sub-agents (the common case) work correctly; only parallel powerful
+  // sub-agents at /effort max are affected.
   const previousAgentId = process.env.CLAUDE_KILLER_AGENT_ID;
   process.env.CLAUDE_KILLER_AGENT_ID = subAgentId;
 
@@ -326,8 +340,26 @@ async function runSubAgentInner(
             const toolResult = await agentMod.dispatchToolCallPublic(tc);
             result = toolResult.resultStr;
           } else {
-            // Use read-only sub-agent tool executor
-            result = await executeSubAgentTool(tc.function.name, JSON.parse(tc.function.arguments), cwd);
+            // Use read-only sub-agent tool executor.
+            // BUG FIX: previously JSON.parse(tc.function.arguments) was
+            // called inline, OUTSIDE executeSubAgentTool's own try/catch.
+            // If the model emitted malformed JSON arguments (rare but it
+            // happens — truncated streaming, model errors), the parse
+            // threw synchronously, aborted the entire tool-call loop, and
+            // propagated to the outer catch — which would retry the whole
+            // chat() call, get the same malformed args again, and burn
+            // all retries before giving up. Parse here with a local
+            // try/catch so one bad tool call becomes an error string the
+            // model can recover from, instead of killing the sub-agent.
+            let parsedArgs: unknown;
+            try {
+              parsedArgs = JSON.parse(tc.function.arguments);
+            } catch (parseErr) {
+              result = `[ERROR] Invalid JSON arguments for ${tc.function.name}: ${(parseErr as Error).message}`;
+              subHistory.push({ role: "tool", tool_call_id: tc.id, content: result });
+              continue;
+            }
+            result = await executeSubAgentTool(tc.function.name, parsedArgs, cwd);
           }
           subHistory.push({ role: "tool", tool_call_id: tc.id, content: result });
         }

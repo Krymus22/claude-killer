@@ -15,6 +15,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
+import { fileURLToPath } from "node:url";
 import * as log from "./logger.js";
 
 interface MigrationResult {
@@ -121,20 +122,27 @@ export function migrateToModeStructure(): MigrationResult {
   }
 
   // 2. Create mode folder structures from defaults
-  const defaultsModesDir = path.join(process.cwd(), "defaults", "modes");
-  if (!fs.existsSync(defaultsModesDir)) {
-    // Try relative to __dirname (when running from dist/)
-    const altPath = path.join(__dirname, "..", "defaults", "modes");
-    if (fs.existsSync(altPath)) {
-      // use altPath
-    } else {
-      result.errors.push("Cannot find defaults/modes/ directory");
-      return result;
-    }
+  // BUG FIX (ESM): previously used `path.join(__dirname, "..", "defaults", "modes")`
+  // as a fallback when `process.cwd()/defaults/modes` didn't exist. But
+  // `__dirname` is NOT defined in ESM modules (this project is "type": "module"),
+  // so that line threw ReferenceError at runtime whenever the cwd-based path
+  // was missing — silently aborting the whole migration. Replaced with the
+  // same `fileURLToPath(import.meta.url)` pattern already used by modes.ts
+  // findBundledModesDir() and configSeeder.ts findDefaultsDir().
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  const defaultsModesDirCandidates = [
+    path.join(process.cwd(), "defaults", "modes"),
+    path.join(here, "..", "defaults", "modes"),        // dist/ -> ../defaults/modes
+    path.join(here, "..", "..", "defaults", "modes"),  // src/ -> ../../defaults/modes
+  ];
+  const defaultsModesDir = defaultsModesDirCandidates.find((c) => fs.existsSync(c));
+  if (!defaultsModesDir) {
+    result.errors.push("Cannot find defaults/modes/ directory");
+    return result;
   }
 
   // Find mode directories (folders with config.json)
-  const modesBaseDir = fs.existsSync(defaultsModesDir) ? defaultsModesDir : path.join(__dirname, "..", "defaults", "modes");
+  const modesBaseDir = defaultsModesDir;
 
   try {
     for (const entry of fs.readdirSync(modesBaseDir)) {

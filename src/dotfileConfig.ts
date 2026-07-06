@@ -4,10 +4,18 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import * as os from "node:os";
 import * as log from "./logger.js";
 
+// BUG FIX: previously fell back to "." (current working directory) when both
+// HOME and USERPROFILE were unset. That meant the config file would be written
+// to ./<cwd>/.claude-killer/config.json — silently polluting whatever
+// directory the user happened to run the CLI from, and producing different
+// configs per cwd. Every other module in this codebase (configSeeder.ts,
+// modes.ts, modeMigration.ts) uses `os.homedir()` as the final fallback — we
+// align with that pattern here.
 const CONFIG_DIR = path.join(
-  process.env.HOME ?? process.env.USERPROFILE ?? ".",
+  process.env.HOME ?? process.env.USERPROFILE ?? os.homedir(),
   ".claude-killer"
 );
 
@@ -61,16 +69,26 @@ export function loadConfig(): DotfileConfig {
   try {
     if (fs.existsSync(CONFIG_FILE)) {
       const raw = fs.readFileSync(CONFIG_FILE, "utf8");
-      cachedConfig = JSON.parse(raw);
+      // BUG FIX: previously, a parse failure (e.g., user typo in config.json)
+      // fell through to `cachedConfig = {}` below, which PERMANENTLY cached
+      // the empty object. Every subsequent loadConfig() returned `{}` even
+      // after the user fixed the JSON — the only way out was to call
+      // saveConfig(). Now we cache ONLY successful parses and return a fresh
+      // `{` (not cached) on failure, so the next call retries reading the
+      // file.
+      cachedConfig = JSON.parse(raw) as DotfileConfig;
       log.debug(`Loaded config from ${CONFIG_FILE}`);
-      return cachedConfig!;
+      return cachedConfig;
     }
+    // File doesn't exist — cache the empty object. Cache invalidation here
+    // is handled by saveConfig()/updateConfig() writing through the cache.
+    cachedConfig = {};
+    return cachedConfig;
   } catch (err) {
     log.error(`Failed to load config: ${(err as Error).message}`);
+    // Don't cache — let the next call retry.
+    return {};
   }
-
-  cachedConfig = {};
-  return cachedConfig;
 }
 
 export function saveConfig(config: DotfileConfig): void {

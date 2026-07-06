@@ -139,7 +139,13 @@ List every issue you find. If none, say "Nada encontrado".`;
     // Parse severity from result
     const lower = result.toLowerCase();
     let severity: DevilAdvocateResult["severity"] = "none";
-    if (lower.includes("crITICAL") || lower.includes("grave") || lower.includes("high")) severity = "high";
+    // BUG FIX (case-sensitivity): `lower` is already lowercased via toLowerCase().
+    // The previous check `lower.includes("crITICAL")` could NEVER match because
+    // "critical" (all lowercase) does not contain the mixed-case substring
+    // "crITICAL". This meant critical-severity findings silently fell through
+    // to the default "medium" branch, understating severity. Now we compare
+    // against the lowercase "critical".
+    if (lower.includes("critical") || lower.includes("grave") || lower.includes("high")) severity = "high";
     else if (lower.includes("medium") || lower.includes("medio") || lower.includes("moderado")) severity = "medium";
     else if (lower.includes("low") || lower.includes("baixo") || lower.includes("leve")) severity = "low";
     else if (!lower.includes("nada encontrado")) severity = "medium"; // default if issues found

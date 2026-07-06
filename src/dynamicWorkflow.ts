@@ -99,13 +99,36 @@ export async function executeWorkflow(script: string): Promise<WorkflowResult> {
   };
 
   try {
-    // Execute in VM with timeout
+    // Execute in VM with timeout.
+    //
+    // BUG FIX: vm.runInNewContext's `timeout` option only applies to the
+    // SYNCHRONOUS part of script execution. wrappedScript is
+    // `(async () => { ... })()` — it returns a Promise almost instantly,
+    // so the VM timeout fires against an already-completed sync phase
+    // and never observes the async work. A workflow that calls
+    // `await agent(...)` (which can take 30+ seconds per sub-agent) could
+    // blow past the 60s budget indefinitely. Wrap the VM result in a
+    // real wall-clock Promise.race so the workflow actually times out.
+    const WORKFLOW_TIMEOUT_MS = 60_000;
     const context = vm.createContext(sandbox);
     const wrappedScript = `(async () => {\n${script}\n})()`;
-    await vm.runInNewContext(wrappedScript, context, {
-      timeout: 60_000,
+    const workflowPromise = vm.runInNewContext(wrappedScript, context, {
       displayErrors: true,
     });
+
+    let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timeoutHandle = setTimeout(
+        () => reject(new Error(`Workflow timed out after ${WORKFLOW_TIMEOUT_MS}ms`)),
+        WORKFLOW_TIMEOUT_MS,
+      );
+    });
+
+    try {
+      await Promise.race([workflowPromise, timeoutPromise]);
+    } finally {
+      if (timeoutHandle) clearTimeout(timeoutHandle);
+    }
 
     const durationMs = Date.now() - start;
     log.info(`[WORKFLOW] Completed in ${durationMs}ms, ${steps.length} steps`);

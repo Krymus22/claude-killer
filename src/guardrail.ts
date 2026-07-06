@@ -174,7 +174,16 @@ function validateJava(content: string): ValidationResult {
 
 /** HTML - heuristic tag-balance check */
 function validateHtml(content: string): ValidationResult {
-  const openCount = (content.match(/<[a-zA-Z][^/!][^>]*>/g) ?? []).length;
+  // BUG FIX: the previous regex `/<[a-zA-Z][^/!][^>]*>/g` required a character
+  // after the first tag-name letter (the `[^/!]` class consumed one char).
+  // That meant short single-letter tags like `<a>`, `<p>`, `<b>` were NEVER
+  // counted as open tags, under-counting opens and producing false negatives
+  // for HTML with many short tags. The `[^/!]` was also redundant — closing
+  // tags (`</...>`) and comments (`<!...`) are already excluded by the
+  // leading `[a-zA-Z]` (since `/` and `!` aren't letters). Dropping the
+  // redundant class fixes the short-tag case without changing the
+  // exclusions.
+  const openCount = (content.match(/<[a-zA-Z][^>]*>/g) ?? []).length;
   const closeCount = (content.match(/<\/[a-zA-Z][^>]*>/g) ?? []).length;
   const delta = Math.abs(openCount - closeCount);
   if (delta > 5) {

@@ -91,19 +91,35 @@ Was this task actually completed? Answer in JSON.`,
     const jsonEnd = content.lastIndexOf("}");
     if (jsonStart >= 0 && jsonEnd > jsonStart) {
       const jsonStr = content.slice(jsonStart, jsonEnd + 1);
-      const parsed = JSON.parse(jsonStr);
+      // BUG FIX: wrap JSON.parse in its own try-catch. Previously, a malformed
+      // JSON payload (e.g. `{"done": true,}` — trailing comma) would throw and
+      // be caught by the OUTER catch, which returns `{ done: true, verified: false }`.
+      // That silently bypassed the keyword-fallback below, marking incomplete
+      // tasks as done. Now a parse failure falls through to the keyword path.
+      try {
+        const parsed = JSON.parse(jsonStr);
 
-      return {
-        done: parsed.done === true,
-        missingItems: Array.isArray(parsed.missing) ? parsed.missing : [],
-        reasoning: typeof parsed.reasoning === "string" ? parsed.reasoning : "",
-        verified: true,
-      };
+        return {
+          done: parsed.done === true,
+          missingItems: Array.isArray(parsed.missing) ? parsed.missing : [],
+          reasoning: typeof parsed.reasoning === "string" ? parsed.reasoning : "",
+          verified: true,
+        };
+      } catch {
+        // malformed JSON — fall through to keyword matching below
+      }
     }
 
     // Fallback: keyword matching
     const lower = content.toLowerCase();
-    const done = !lower.includes("not done") && !lower.includes("not_complete") && !lower.includes("missing");
+    // BUG FIX: also match "not complete" (with space). The previous check only
+    // looked for "not_complete" (underscore), which is unusual in natural
+    // language. LLMs typically write "the task is not complete" — that would
+    // have been missed, incorrectly returning done=true.
+    const done = !lower.includes("not done")
+      && !lower.includes("not complete")
+      && !lower.includes("not_complete")
+      && !lower.includes("missing");
     return {
       done,
       missingItems: [],

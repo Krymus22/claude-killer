@@ -91,7 +91,22 @@ export const readOnlyCache = new ToolCache(30_000); // 30 second TTL
 export const searchCache = new ToolCache(120_000); // 2 minute TTL
 
 export function shouldCacheResult(toolName: string): boolean {
-  const cacheableTools = ["ler_arquivo", "buscar_arquivos", "buscar_texto_no_projeto", "git_status", "git_log"];
+  // BUG FIX: the list previously contained only "buscar_texto_no_projeto"
+  // (an internal log identifier used by contentSearch.ts), but the actual
+  // tool name exposed to the model via TOOL_DEFINITIONS in apiClient.ts is
+  // "buscar_texto". The agent's dispatchToolCall invokes
+  // shouldCacheResult(name) with the model-facing name, so buscar_texto
+  // results were NEVER cached. We now include BOTH the model-facing name
+  // (buscar_texto) and the legacy internal alias (buscar_texto_no_projeto)
+  // so existing callers/tests that use the alias still work.
+  const cacheableTools = [
+    "ler_arquivo",
+    "buscar_arquivos",
+    "buscar_texto",            // model-facing name (apiClient TOOL_DEFINITIONS)
+    "buscar_texto_no_projeto", // legacy internal alias (contentSearch.ts log)
+    "git_status",
+    "git_log",
+  ];
   return cacheableTools.includes(toolName);
 }
 

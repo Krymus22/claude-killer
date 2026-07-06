@@ -16,7 +16,18 @@
 import { execSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { createRequire } from "node:module";
 import * as log from "./logger.js";
+
+// BUG FIX: this project is ESM ("type": "module" in package.json), so the
+// `require()` calls previously used in isInstalled() always threw
+// ReferenceError and were silently swallowed by the surrounding try/catch.
+// That made the mode-aware tool detector (findToolBinary) unreachable, so
+// the registry always fell through to the slow `execSync --version` fallback
+// and never honoured per-mode tool directories. Use createRequire() — the
+// ESM-safe bridge to CommonJS-style synchronous imports — so findToolBinary
+// is actually reached.
+const require = createRequire(import.meta.url);
 
 // --- Types ------------------------------------------------------------------
 

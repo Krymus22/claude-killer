@@ -514,7 +514,26 @@ export function getActiveMode(): ModeDefinition | null {
       enableFeatures: [],
     } as ModeDefinition;
   }
-  return getMode(name);
+  // BUG FIX: previously returned getMode(name) directly, which is null when
+  // the named mode no longer exists (e.g., user deleted the file, or
+  // active.json points to a mode that was never created). That violated
+  // the documented contract "getActiveMode() NEVER returns null" (Sprint 6
+  // + Sprint 12) and crashed downstream callers in modeExtensions.ts /
+  // fileValidator.ts that dereferenced the result. Fall back to "normal"
+  // (then minimal default) to preserve the contract.
+  const named = getMode(name);
+  if (named) return named;
+  const normalMode = getMode("normal");
+  if (normalMode) return normalMode;
+  return {
+    name: "normal",
+    label: "Default",
+    description: "Default mode",
+    builtIn: true,
+    enableTools: [],
+    enableSkills: [],
+    enableFeatures: [],
+  } as ModeDefinition;
 }
 
 /**
@@ -554,12 +573,21 @@ export function setActiveMode(name: string | null): void {
     // tools (selene, stylua) are installed. Without them, the fileValidator
     // blocks all .luau writes — warn the user proactively.
     if (name === "roblox") {
-      try {
-        const { warnIfMissingTools } = require("./ensureRobloxTools.js");
-        warnIfMissingTools();
-      } catch {
-        // best-effort — don't crash if module not available
-      }
+      // BUG FIX (ESM): previously used `require("./ensureRobloxTools.js")`
+      // which is not defined in ESM modules (this project is "type": "module").
+      // The require() threw ReferenceError, the catch swallowed it silently,
+      // and warnIfMissingTools() was NEVER called — a silent failure.
+      // Switched to dynamic import() in a fire-and-forget IIFE so the
+      // sync setActiveMode signature stays unchanged (matches the pattern
+      // already used by deactivateMode below).
+      void (async () => {
+        try {
+          const { warnIfMissingTools } = await import("./ensureRobloxTools.js");
+          warnIfMissingTools();
+        } catch {
+          // best-effort — don't crash if module not available
+        }
+      })();
     }
   } else {
     log.info(`modes: active mode cleared`);

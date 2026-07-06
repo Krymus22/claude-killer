@@ -96,8 +96,20 @@ export const config = {
   /** Top-p for nucleus sampling (0.0-1.0). Default: 0.95 (NVIDIA recommended). */
   topP: optionalFloat("TOP_P", 0.95),
 
-  /** Max tokens per response. Default: 16384. */
-  maxTokens: optionalInt("MAX_TOKENS", 16384),
+  /**
+   * Max tokens per response.
+   *
+   * BUG FIX: previously hardcoded to 16384, which capped reasoning models
+   * (deepseek-r1, glm-5.2) at 16k even though they support 32k. Reasoning
+   * content is generated BEFORE visible content, so a 16k cap left no room
+   * for the actual response after reasoning ate the budget. Now we default
+   * to the active model's maxOutputTokens from the registry (capped at the
+   * model limit by apiClient via Math.min).
+   */
+  maxTokens: optionalInt(
+    "MAX_TOKENS",
+    getModelMaxOutputTokens(process.env.MODEL ?? "moonshotai/kimi-k2.6"),
+  ),
 
   /**
    * Maximum requests per minute the CLI is allowed to send.

@@ -82,6 +82,16 @@ export function validateModeConfig(config: any): ConfigValidationError[] {
   // Validate validators structure
   if (Array.isArray(config.validators)) {
     config.validators.forEach((v: any, i: number) => {
+      // BUG FIX: missing null check — if a user wrote `"validators": [null]`
+      // or `[{}]` (object literal without prototype tricks), accessing
+      // `v.tool` below threw TypeError: Cannot read properties of null.
+      // validateModeConfig is supposed to RETURN errors, not throw, so the
+      // crash propagated up to the caller (which then aborted mode loading
+      // for the whole file). Guard each entry explicitly.
+      if (!v || typeof v !== "object") {
+        errors.push({ field: `validators[${i}]`, message: "validator entry must be a non-null object" });
+        return;
+      }
       if (!v.tool || typeof v.tool !== "string") {
         errors.push({ field: `validators[${i}].tool`, message: "tool is required" });
       }
@@ -97,6 +107,12 @@ export function validateModeConfig(config: any): ConfigValidationError[] {
   // Validate hooks structure
   if (Array.isArray(config.hooks)) {
     config.hooks.forEach((h: any, i: number) => {
+      // BUG FIX: same null-check issue as validators above — `h.name` on a
+      // null entry threw TypeError instead of returning a validation error.
+      if (!h || typeof h !== "object") {
+        errors.push({ field: `hooks[${i}]`, message: "hook entry must be a non-null object" });
+        return;
+      }
       if (!h.name || typeof h.name !== "string") {
         errors.push({ field: `hooks[${i}].name`, message: "name is required" });
       }

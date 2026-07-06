@@ -126,10 +126,15 @@ export function loadHooks(modeName: string | null): HookConfig[] {
 
 /**
  * Resolve the directory that actually contains the hooks for a mode.
- * Returns the user dir if it exists (and has files), else the bundled dir.
+ * Returns the user dir if it exists, else the bundled dir.
  * Returns "" if neither exists.
  *
  * Exported for testing.
+ *
+ * NOTE: this returns the first dir that EXISTS on disk, which may differ from
+ * the dir that `loadHooks` actually pulls hooks from when the user dir is
+ * empty. `runHooks` uses `loadHooksWithDir` (not this function) to guarantee
+ * it resolves hook .js files from the same dir the hook configs came from.
  */
 export function resolveHooksDir(modeName: string | null): string {
   if (!modeName) return "";
@@ -137,6 +142,30 @@ export function resolveHooksDir(modeName: string | null): string {
     if (fs.existsSync(dir)) return dir;
   }
   return "";
+}
+
+/**
+ * Load hooks for a mode AND return the directory they came from.
+ *
+ * BUG FIX: `runHooks` previously called `loadHooks(modeName)` to get the hooks
+ * and `resolveHooksDir(modeName)` to get the dir — but those two functions
+ * use DIFFERENT selection criteria. `loadHooks` returns hooks from the first
+ * dir that HAS hooks; `resolveHooksDir` returns the first dir that EXISTS.
+ * When the user dir existed but was empty, `loadHooks` fell through to the
+ * bundled dir and returned its hooks, while `resolveHooksDir` still returned
+ * the empty user dir. `runHooks` then joined the bundled hook filenames with
+ * the user dir path, producing "Hook file not found" warnings for every
+ * hook. This helper guarantees the dir matches the hooks.
+ */
+function loadHooksWithDir(
+  modeName: string | null,
+): { hooks: HookConfig[]; dir: string } {
+  if (!modeName) return { hooks: [], dir: "" };
+  for (const dir of candidateHooksDirs(modeName)) {
+    const hooks = loadHooksFromDir(dir);
+    if (hooks.length > 0) return { hooks, dir };
+  }
+  return { hooks: [], dir: "" };
 }
 
 /**
@@ -152,12 +181,16 @@ export async function runHooks(
   context: HookContext,
   modeName: string | null,
 ): Promise<HookResult[]> {
-  const all = loadHooks(modeName);
+  // BUG FIX: load hooks AND their source dir atomically. Previously this
+  // called `loadHooks(modeName)` for the hooks and `resolveHooksDir(modeName)`
+  // for the dir — but the two pick directories by different criteria, so a
+  // empty user dir could cause hooks from the bundled dir to be looked up
+  // under the user dir path. `loadHooksWithDir` guarantees they match.
+  const { hooks: all, dir: hooksDir } = loadHooksWithDir(modeName);
   const hooks = all.filter((h) => h.trigger === trigger);
   if (hooks.length === 0) return [];
 
   const results: HookResult[] = [];
-  const hooksDir = resolveHooksDir(modeName);
 
   for (const hook of hooks) {
     try {

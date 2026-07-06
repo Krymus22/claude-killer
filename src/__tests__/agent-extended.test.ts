@@ -128,8 +128,7 @@ vi.mock("../multiFileEdit.js", () => ({
 }));
 
 vi.mock("../session.js", () => ({
-  saveSession: vi.fn(() => "session-1"),
-  loadSession: vi.fn(() => true),
+  startSession: vi.fn(() => "test-session"), appendMessage: vi.fn(),
   listSessions: vi.fn(() => []),
 }));
 

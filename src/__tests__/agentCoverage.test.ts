@@ -106,7 +106,7 @@ vi.mock("../gitTool.js", () => ({
   gitBranch: vi.fn(), gitCheckout: vi.fn(),
 }));
 vi.mock("../multiFileEdit.js", () => ({ multiFileEdit: vi.fn() }));
-vi.mock("../session.js", () => ({ saveSession: vi.fn(), loadSession: vi.fn(), listSessions: vi.fn() }));
+vi.mock("../session.js", () => ({ startSession: vi.fn(() => "test-session"), appendMessage: vi.fn(), getLastSession: vi.fn(() => null), loadSessionMessages: vi.fn(() => []), setActiveSession: vi.fn(), getActiveSessionId: vi.fn(() => null), listSessions: vi.fn(() => []), deleteSession: vi.fn(() => true), renameSession: vi.fn(() => true) }));
 vi.mock("../lspAst.js", () => ({ parseFile: vi.fn() }));
 vi.mock("../toolCache.js", () => ({ readOnlyCache: { get: vi.fn(() => null), set: vi.fn(), invalidate: vi.fn() }, shouldCacheResult: vi.fn(() => false) }));
 vi.mock("../parallelTools.js", () => ({ executeParallelTools: vi.fn(() => []) }));

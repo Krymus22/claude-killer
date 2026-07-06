@@ -150,7 +150,7 @@ vi.mock("../memory.js", () => ({
 }));
 
 vi.mock("../session.js", () => ({
-  saveSession: vi.fn(() => "s1"), loadSession: vi.fn(() => true), listSessions: vi.fn(() => []),
+  startSession: vi.fn(() => "test-session"), appendMessage: vi.fn(), getLastSession: vi.fn(() => null), loadSessionMessages: vi.fn(() => []), setActiveSession: vi.fn(), getActiveSessionId: vi.fn(() => null), listSessions: vi.fn(() => []), deleteSession: vi.fn(() => true), renameSession: vi.fn(() => true),
 }));
 
 vi.mock("../gracefulShutdown.js", () => ({

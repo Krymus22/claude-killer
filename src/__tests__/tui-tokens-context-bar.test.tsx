@@ -128,7 +128,7 @@ vi.mock("../todo.js", () => ({
 }));
 
 vi.mock("../memory.js", () => ({ getMemoryConfig: vi.fn(() => ({})) }));
-vi.mock("../session.js", () => ({ saveSession: vi.fn(), loadSession: vi.fn(), listSessions: vi.fn(() => []) }));
+vi.mock("../session.js", () => ({ startSession: vi.fn(() => "test-session"), appendMessage: vi.fn(), getLastSession: vi.fn(() => null), loadSessionMessages: vi.fn(() => []), setActiveSession: vi.fn(), getActiveSessionId: vi.fn(() => null), listSessions: vi.fn(() => []), deleteSession: vi.fn(() => true), renameSession: vi.fn(() => true) }));
 vi.mock("../gracefulShutdown.js", () => ({ registerShutdownHandlers: vi.fn() }));
 vi.mock("../configSeeder.js", () => ({ seedUserConfig: vi.fn() }));
 vi.mock("../toolUpdater.js", () => ({ performUpdateCheck: vi.fn(async () => ({})) }));

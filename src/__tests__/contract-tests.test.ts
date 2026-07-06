@@ -227,7 +227,7 @@ describe("Contract: Infrastructure", () => {
   ]));
 
   it("session exports", expectExports("../session.js", [
-    "saveSession", "loadSession", "listSessions",
+    "startSession", "appendMessage", "getLastSession", "loadSessionMessages", "setActiveSession", "getActiveSessionId", "listSessions", "deleteSession", "renameSession",
   ]));
 
   it("logger exports", expectExports("../logger.js", [

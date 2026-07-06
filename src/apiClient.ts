@@ -949,6 +949,16 @@ function buildChatResponse(state: StreamState): ChatResponse {
     if (!content) content = null;
   }
 
+  // BUG FIX: se content é vazio mas houve reasoning, o modelo pode ter
+  // enviado tudo no reasoning_content sem transferir pro content. Isso
+  // acontece com GLM 5.2 e outros modelos de reasoning. Retornar vazio
+  // faz o agent loop terminar com "(resposta vazia)" — frustrante.
+  // Solução: se content é null E não há tool_calls, retornar mensagem
+  // explicando que o modelo só gerou reasoning sem resposta visível.
+  if (!content && toolCallsList.length === 0) {
+    content = "[O modelo gerou apenas raciocínio interno (reasoning) sem produzir uma resposta visível. Tente reformular sua pergunta ou dê mais contexto.]";
+  }
+
   return {
     id: state.responseId,
     object: "chat.completion",
@@ -1250,20 +1260,29 @@ export async function chat(
   onThinking?: () => void,
   tools?: OpenAI.Chat.Completions.ChatCompletionTool[]
 ): Promise<ChatResponse> {
-  // IDEIA: Multi-key pool - if NVIDIA_API_KEYS is configured, use the pool
-  // instead of the single-key mutex+rateLimiter. Each call picks a free key,
-  // allowing sub-agents to run truly in parallel without contending.
-  const poolActive = getPoolSize() > 0 || initApiKeyPool();
+  // Global timeout: 5 minutes (300s). If the API doesn't respond in 5 min,
+  // abort and return an error. This prevents infinite hangs.
+  const GLOBAL_TIMEOUT_MS = 300_000;
 
-  if (poolActive) {
-    try {
-      return await chatWithPool(messages, tools, onStreamStart, onToken, onThinking);
-    } catch (err) {
-      // Pool acquisition failed entirely - fall back to single-key mode
-      log.warn(`[POOL] Falling back to single-key mode: ${(err as Error).message}`);
+  const timeoutPromise = new Promise<ChatResponse>((_, reject) => {
+    setTimeout(() => {
+      reject(new Error(`Tempo limite excedido (${GLOBAL_TIMEOUT_MS / 1000}s). A API não respondeu. Possíveis causas: servidor sobrecarregado, modelo em cold start, ou problema de rede. Tente novamente.`));
+    }, GLOBAL_TIMEOUT_MS);
+  });
+
+  const chatPromise = (async (): Promise<ChatResponse> => {
+    const poolActive = getPoolSize() > 0 || initApiKeyPool();
+    if (poolActive) {
+      try {
+        return await chatWithPool(messages, tools, onStreamStart, onToken, onThinking);
+      } catch (err) {
+        log.warn(`[POOL] Falling back to single-key mode: ${(err as Error).message}`);
+      }
     }
-  }
-  return chatSingleKey(messages, tools, onStreamStart, onToken, onThinking);
+    return chatSingleKey(messages, tools, onStreamStart, onToken, onThinking);
+  })();
+
+  return Promise.race([chatPromise, timeoutPromise]);
 }
 
 // BUG FIX (BUG 6): helper for cancelar/abortar um stream perdedor do hedging.

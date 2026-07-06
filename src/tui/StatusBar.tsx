@@ -94,11 +94,13 @@ export function StatusBar({
   // Bar reflects CURRENT context usage (last turn), not cumulative.
   // Cumulative would always max out the bar after a few turns.
   const pct = contextWindow > 0 ? totalTokens / contextWindow : 0;
-  // Clamp fillCount to [0, 15] so emptyCount never goes negative.
-  // Without this, when totalTokens > contextWindow (e.g., user has more
-  // tokens than the context window), emptyCount becomes negative and
-  // "-".repeat(-8) throws RangeError, breaking the entire StatusBar.
-  const fillCount = Math.max(0, Math.min(15, Math.round(pct * 15)));
+
+  // Use LOGARITHMIC scale for the bar so it's useful even with 1M context.
+  // Linear scale with 1M: 50k tokens = 5% = 0.75 chars → rounds to 1 (barely visible).
+  // Log scale: maps 0-100% to 0-15 chars but amplifies small values.
+  // log2(1 + pct * 15) / log2(16) * 15 = visual amplification
+  const logPct = pct > 0 ? Math.log2(1 + pct * 15) / Math.log2(16) : 0;
+  const fillCount = Math.max(0, Math.min(15, Math.round(logPct * 15)));
   const emptyCount = Math.max(0, 15 - fillCount);
 
   let barColor: string = colors.success;

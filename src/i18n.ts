@@ -639,6 +639,34 @@ export const COMMAND_I18N: Record<string, Record<Language, CommandI18n>> = {
     "pt-BR": { desc: "Sair" },
     en: { desc: "Exit" },
   },
+  "/session": {
+    "pt-BR": {
+      desc: "Gerenciar sessões (auto-salvas)",
+      subcommands: ["list", "load", "delete", "rename", "new"],
+    },
+    en: {
+      desc: "Manage sessions (auto-saved)",
+      subcommands: ["list", "load", "delete", "rename", "new"],
+    },
+  },
+  "/cd": {
+    "pt-BR": { desc: "Trocar diretório (seletor visual)" },
+    en: { desc: "Change working directory (visual picker)" },
+  },
+  "/mcp": {
+    "pt-BR": {
+      desc: "Gerenciar MCP servers",
+      subcommands: ["list", "add", "remove"],
+    },
+    en: {
+      desc: "Manage MCP servers",
+      subcommands: ["list", "add", "remove"],
+    },
+  },
+  "/buscar": {
+    "pt-BR": { desc: "Procurar arquivo na máquina" },
+    en: { desc: "Search for file on machine" },
+  },
   "/organize": {
     "pt-BR": { desc: "Organizar arquivos do inbox do modo ativo" },
     en: { desc: "Organize files in the active mode's inbox" },

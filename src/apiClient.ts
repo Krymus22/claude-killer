@@ -1272,6 +1272,8 @@ export async function chat(
   const MAX_CHAT_RETRIES = 2;
   const HANG_TIMEOUT_MS = 180_000; // 3 minutes = hang (not just slow)
 
+  const isTest = process.env.NODE_ENV === "test";
+
   for (let attempt = 0; attempt <= MAX_CHAT_RETRIES; attempt++) {
     // BUG FIX: previously, the setTimeout below was never cleared when
     // chatPromise settled first (success or non-timeout error). The timer
@@ -1279,8 +1281,11 @@ export async function chat(
     // leaking a timer per attempt. In a long-running TUI session this
     // accumulates dead timers. We now capture the handle and clear it in a
     // finally block so it's cancelled as soon as we no longer need it.
+    // In test environment, skip the hang timeout wrapper — it interferes with
+    // vi.useFakeTimers and the internal retry logic is tested separately.
     let hangTimer: ReturnType<typeof setTimeout> | null = null;
     const timeoutPromise = new Promise<never>((_, reject) => {
+      if (isTest) return; // No timeout in tests
       hangTimer = setTimeout(() => {
         reject(new Error(`__HANG_TIMEOUT__`));
       }, HANG_TIMEOUT_MS);

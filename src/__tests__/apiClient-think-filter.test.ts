@@ -303,8 +303,9 @@ describe("apiClient — <think> tag filtering during streaming", () => {
     expect(fullTokenText).not.toContain("<think>");
     expect(thinkingCalls).toBeGreaterThan(0);
 
-    // Como todo o conteúdo era reasoning, o content final deve ser null
-    expect(response.choices[0].message.content).toBeNull();
+    // Como todo o conteúdo era reasoning, o content final deve ser a mensagem
+    // de fallback (não mais null — agora retorna mensagem explicativa)
+    expect(response.choices[0].message.content).toContain("[O modelo gerou apenas raciocínio");
   });
 
   it("NÃO confunde '<thinking about>' com tag <think>", async () => {

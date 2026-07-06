@@ -17,6 +17,17 @@ export default defineConfig({
   test: {
     globals: true,
     environment: "node",
+    // CRITICAL: pool must be "forks" with singleThread to allow process.chdir().
+    // Stryker runs tests in worker threads by default, and process.chdir() is
+    // NOT supported in workers — it throws "process.chdir() is not supported
+    // in workers". Using pool: "forks" + singleThread: true makes vitest use
+    // child processes (which support chdir) instead of worker threads.
+    pool: "forks",
+    poolOptions: {
+      forks: {
+        singleFork: true,
+      },
+    },
     include: ["src/__tests__/**/*.test.ts", "src/__tests__/**/*.test.tsx"],
     exclude: [
       "node_modules/**",
@@ -31,35 +42,6 @@ export default defineConfig({
       "src/__tests__/lspClient-extended.test.ts",
       // Integration tests that may call external services
       "src/__tests__/integration-agent-flow.test.ts",
-      // Slash command tests that use Ink rendering + process.chdir — flaky
-      // in Stryker sandboxes because process.cwd() doesn't change as expected
-      // inside .stryker-tmp/sandbox-XXXX/.
-      "src/__tests__/slash-commands-full.test.tsx",
-      "src/__tests__/slash-commands.test.tsx",
-      "src/__tests__/slash-commands-extra.test.tsx",
-      "src/__tests__/tui-interactions.test.tsx",
-      "src/__tests__/tui-edge-cases.test.tsx",
-      "src/__tests__/tui-deep-conversations.test.tsx",
-      "src/__tests__/tui-render-snapshots.test.tsx",
-      "src/__tests__/tui-tool-messages.test.tsx",
-      "src/__tests__/tui-tokens-context-bar.test.tsx",
-      "src/__tests__/tui-chatdisplay.test.tsx",
-      "src/__tests__/ConfiguratorChat.test.tsx",
-      "src/__tests__/QuestionPrompt.test.tsx",
-      "src/__tests__/app-state-flow.test.ts",
-      "src/__tests__/autocomplete-subcommands.test.ts",
-      "src/__tests__/fase7-tui.test.tsx",
-      "src/__tests__/integration-tui-new-components.test.tsx",
-      "src/__tests__/hub-e2e.test.tsx",
-      "src/__tests__/hub-mode-filter.test.tsx",
-      "src/__tests__/tui-hub-pagination.test.tsx",
-      "src/__tests__/tool-detection-hub.test.tsx",
-      "src/__tests__/integration-configurator-flow.test.ts",
-      "src/__tests__/integration-inbox-organize.test.ts",
-      "src/__tests__/integration-modes-system.test.ts",
-      "src/__tests__/integration-hub-modes-flow.test.tsx",
-      "src/__tests__/snapshot-tests.test.tsx",
-      "src/__tests__/cross-module-edge-cases.test.ts",
     ],
     coverage: {
       provider: "v8",

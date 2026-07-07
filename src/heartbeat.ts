@@ -182,7 +182,10 @@ async function sendHeartbeat(client: OpenAI): Promise<void> {
       messages: [{ role: "user", content: "hi" }],
       max_tokens: 1,
       stream: false,
-      temperature: 0,
+      // BUG FIX: temperature: 0 causes 400/hang on some NVIDIA models
+      // (mistral-medium-3.5-128b, possibly others). Use 0.01 instead —
+      // effectively deterministic but doesn't trigger the API bug.
+      temperature: 0.01,
     });
     const elapsed = Date.now() - start;
     lastHeartbeatLatencyMs = elapsed;

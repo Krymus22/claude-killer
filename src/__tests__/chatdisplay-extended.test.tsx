@@ -364,3 +364,56 @@ describe("ChatDisplay — Static/Live split (limite-historico fix)", () => {
     expect(out).toContain("msg5");
   });
 });
+
+// ─── Thinking leak regression (pensar/think tool results hidden) ─────────
+
+describe("ChatDisplay — pensar/think tool results hidden (thinking-vazando fix)", () => {
+  it("nao renderiza resultado da tool pensar (live session)", () => {
+    const messages: ChatMessage[] = [
+      { role: "user", content: "faz algo" },
+      { role: "tool", content: '{"pensamento":"preciso pensar..."}', toolName: "pensar", isResult: false },
+      { role: "tool", content: "[THINK] ✓ Pensamento registrado (planning, 156 chars)", toolName: "pensar", isResult: true, ok: true },
+      { role: "assistant", content: "Pronto, fiz!" },
+    ];
+    const { lastFrame } = render(<ChatDisplay messages={messages} />);
+    const out = stripAnsi(lastFrame() ?? "");
+    // The tool CALL can appear (it just shows args, not the thought content)
+    // But the tool RESULT must NOT appear — it contains the thinking content
+    expect(out).not.toContain("[THINK]");
+    expect(out).not.toContain("Pensamento registrado");
+    expect(out).not.toContain("planning, 156 chars");
+    // Other content should still appear
+    expect(out).toContain("faz algo");
+    expect(out).toContain("Pronto, fiz!");
+  });
+
+  it("nao renderiza resultado da tool think (alias de pensar)", () => {
+    // BUG FIX (thinking-vazando): "think" é um alias para "pensar" em agent.ts.
+    // Se a IA chamar think() em vez de pensar(), o resultado também deve
+    // ser escondido — senão o pensamento vaza.
+    const messages: ChatMessage[] = [
+      { role: "user", content: "faz algo" },
+      { role: "tool", content: '{"pensamento":"pensando..."}', toolName: "think", isResult: false },
+      { role: "tool", content: "[THINK] ✓ Pensamento registrado (analysis, 200 chars)", toolName: "think", isResult: true, ok: true },
+      { role: "assistant", content: "Feito!" },
+    ];
+    const { lastFrame } = render(<ChatDisplay messages={messages} />);
+    const out = stripAnsi(lastFrame() ?? "");
+    expect(out).not.toContain("[THINK]");
+    expect(out).not.toContain("Pensamento registrado");
+    expect(out).toContain("Feito!");
+  });
+
+  it("renderiza resultados de outras tools normalmente", () => {
+    // Garante que o filtro só esconde pensar/think, não outras tools
+    const messages: ChatMessage[] = [
+      { role: "tool", content: "conteúdo do arquivo...", toolName: "ler_arquivo", isResult: true, ok: true },
+      { role: "tool", content: "Error: not found", toolName: "executar_comando", isResult: true, ok: false },
+    ];
+    const { lastFrame } = render(<ChatDisplay messages={messages} />);
+    const out = stripAnsi(lastFrame() ?? "");
+    expect(out).toContain("ler_arquivo");
+    expect(out).toContain("conteúdo do arquivo");
+    expect(out).toContain("executar_comando");
+  });
+});

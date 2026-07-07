@@ -127,9 +127,16 @@ function renderMessage(msg: ChatMessage, keyPrefix: string): React.ReactElement 
 
   // Tool messages: render with icon, indented, grey
   if (msg.role === "tool") {
-    // Tool "pensar" — esconder resultado (é interno, não deve aparecer no chat)
-    if (msg.toolName === "pensar" && msg.isResult) {
-      return null; // não renderizar resultado do pensar
+    // Tool "pensar" / "think" — esconder resultado (é interno, não deve
+    // aparecer no chat). "think" é um alias para "pensar" (ver TOOL_ALIASES
+    // em agent.ts). Ambos devem ser filtrados para evitar que o pensamento
+    // da IA vaze para o chat visível.
+    // BUG FIX (thinking-vazando): o filtro anterior só checava "pensar",
+    // então se a IA chamasse "think()" em vez de "pensar()", o resultado
+    // vazava. Agora cobre ambos.
+    const isThinkTool = msg.toolName === "pensar" || msg.toolName === "think";
+    if (isThinkTool && msg.isResult) {
+      return null; // não renderizar resultado do pensar/think
     }
     const label = msg.isResult
       ? (msg.ok ? `${icons.check} ${msg.toolName ?? "tool"}` : `${icons.cross} ${msg.toolName ?? "tool"}`)

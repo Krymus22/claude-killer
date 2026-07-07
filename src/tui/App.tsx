@@ -1169,10 +1169,38 @@ function Autocomplete({ query, selectedIndex, onSelect }: Readonly<AutocompleteP
  * in the terminal). This function "explodes" assistant messages that contain
  * tool_calls into: [assistant text message] + [tool call message] entries.
  *
- * Tool results from the session file don't have toolName or ok status
- * (only tool_call_id), so we use fallbacks for display.
+ * BUG FIX (thinking-vazando): Tool results in the session file only store
+ * tool_call_id (not toolName). Previously this function used the literal
+ * string "tool" as toolName for ALL tool results — which meant the
+ * ChatDisplay filter that hides `pensar` tool results (`msg.toolName === "pensar"`)
+ * never matched during session reload, causing thinking content to leak
+ * into the visible chat.
+ *
+ * Fix: build a tool_call_id → toolName lookup from all assistant messages'
+ * tool_calls arrays, then resolve the real toolName for each tool result.
+ * This ensures the "pensar" filter works on session reload just like it
+ * does during the live session.
  */
-function convertSessionToVisualMessages(sessionMsgs: unknown[]): ChatMessage[] {
+/** @internal — exported for testing the session-reload thinking-leak fix. */
+export function convertSessionToVisualMessages(sessionMsgs: unknown[]): ChatMessage[] {
+  // Build a tool_call_id → toolName lookup from all assistant tool_calls.
+  // This lets us resolve the real tool name for tool result messages,
+  // which only store tool_call_id (not the name) in the session file.
+  const toolNameById = new Map<string, string>();
+  for (const raw of sessionMsgs) {
+    const m = raw as Record<string, unknown>;
+    if (m.role === "assistant") {
+      const tcs = m.tool_calls as Array<{ id?: string; function?: { name?: string } }> | undefined;
+      if (Array.isArray(tcs)) {
+        for (const tc of tcs) {
+          if (tc.id && tc.function?.name) {
+            toolNameById.set(tc.id, tc.function.name);
+          }
+        }
+      }
+    }
+  }
+
   const visual: ChatMessage[] = [];
   for (const raw of sessionMsgs) {
     const m = raw as Record<string, unknown>;
@@ -1202,12 +1230,15 @@ function convertSessionToVisualMessages(sessionMsgs: unknown[]): ChatMessage[] {
         }
       }
     } else if (m.role === "tool") {
-      // Tool result — session file only has tool_call_id + content.
-      // We don't have the toolName or ok status, so use fallbacks.
+      // Tool result — resolve the real toolName from the lookup map
+      // (built from preceding assistant tool_calls). Falls back to "tool"
+      // only if the tool_call_id can't be found (shouldn't happen normally).
+      const tcId = m.tool_call_id as string | undefined;
+      const resolvedName = (tcId && toolNameById.get(tcId)) ?? "tool";
       visual.push({
         role: "tool",
         content: String(m.content ?? ""),
-        toolName: "tool",
+        toolName: resolvedName,
         isResult: true,
         ok: true,
       });

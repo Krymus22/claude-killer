@@ -9,7 +9,7 @@
  *   - Slash command autocomplete overlay when typing /
  */
 
-import React, { useState, useCallback, useRef, useMemo } from "react";
+import React, { useState, useCallback, useRef, useMemo, useEffect } from "react";
 import { Box, Text, useInput, useApp } from "ink";
 import TextInput from "ink-text-input";
 import fs from "node:fs";
@@ -74,7 +74,7 @@ const SLASH_COMMANDS: Array<{ cmd: string; desc: string }> = [
   { cmd: "/session", desc: "Save/load/list/delete conversation sessions" },
 ];
 
-type CommandResult = { handled: boolean; message?: string; exit?: boolean; openHub?: boolean; openFolderBrowser?: boolean; resetChat?: boolean; openConfigurator?: boolean; configuratorTool?: string | null; compactDone?: boolean; compactStarted?: boolean; compactInstruction?: string; compactResult?: { removed: number; beforeTokens: number; afterTokens: number; method?: string } };
+type CommandResult = { handled: boolean; message?: string; exit?: boolean; openHub?: boolean; openFolderBrowser?: boolean; resetChat?: boolean; openConfigurator?: boolean; configuratorTool?: string | null; compactDone?: boolean; compactStarted?: boolean; compactInstruction?: string; compactResult?: { removed: number; beforeTokens: number; afterTokens: number; method?: string }; visualMessages?: ChatMessage[] };
 
 
 
@@ -167,24 +167,32 @@ function handleSessionCommand(arg: string | null): CommandResult {
   if (subcommand === "load") {
     const id = arg!.split(/\s+/)[1];
     if (!id) return { handled: true, message: "Usage: /session load <id>" };
-    const messages = loadSessionMessages(id);
-    if (!messages) {
+    const loaded = loadSessionMessages(id);
+    if (!loaded) {
       return { handled: true, message: `[ERROR] Session not found: ${id}` };
     }
-    // Reset and restore history
-    history.resetHistory();
-    for (const msg of messages) {
-      const m = msg as Record<string, unknown>;
-      if (m.role === "user") {
-        history.addUserMessage(m.content as string);
-      } else if (m.role === "assistant") {
-        history.addRawAssistantMessage(m as any);
-      } else if (m.role === "tool") {
-        history.addToolResult(m.tool_call_id as string, m.content as string);
-      }
-    }
+    // Set active session FIRST — prevents appendMessage from auto-creating
+    // a new session file (double-write bug fix).
     setActiveSession(id);
-    return { handled: true, resetChat: true, message: `[OK] Session loaded: ${id}\n${messages.length} messages restored.` };
+    // Reset history and load directly (no re-persisting to session file).
+    history.resetHistory();
+    if (loaded.lastSnapshot && loaded.lastSnapshot.messages.length > 0) {
+      // Compaction happened — restore the exact compacted state (guaranteed
+      // to fit in context because it was the IA's context at last compaction).
+      history.loadHistoryDirect(loaded.lastSnapshot.messages as any);
+    } else {
+      // No compaction — full message list IS what the IA had at shutdown.
+      history.loadHistoryDirect(loaded.messages as any);
+    }
+    return {
+      handled: true,
+      resetChat: true,
+      // Also populate visual messages — the caller (handleSlashCommandFlow)
+      // will use resetChat to clear the visual state, then we need to
+      // re-populate it with the loaded session's messages.
+      visualMessages: convertSessionToVisualMessages(loaded.messages),
+      message: `[OK] Session loaded: ${id}\n${loaded.messages.length} messages restored${loaded.lastSnapshot ? ` (from ${loaded.lastSnapshot.method} compaction snapshot)` : ""}.`,
+    };
   }
 
   // /session delete <id>
@@ -1145,6 +1153,70 @@ function Autocomplete({ query, selectedIndex, onSelect }: Readonly<AutocompleteP
   );
 }
 
+// --- Session → Visual message conversion -----------------------------------
+
+/**
+ * Convert raw session messages (from JSONL file) to ChatMessage[] for
+ * visual display in the terminal.
+ *
+ * Session file stores messages in API format:
+ *   - user:      { role: "user", content: "..." }
+ *   - assistant: { role: "assistant", content: "...", tool_calls: [...] }
+ *   - tool:      { role: "tool", tool_call_id: "...", content: "..." }
+ *
+ * Visual display needs a flat list of ChatMessage objects, where tool calls
+ * and tool results are SEPARATE entries (so the user sees them individually
+ * in the terminal). This function "explodes" assistant messages that contain
+ * tool_calls into: [assistant text message] + [tool call message] entries.
+ *
+ * Tool results from the session file don't have toolName or ok status
+ * (only tool_call_id), so we use fallbacks for display.
+ */
+function convertSessionToVisualMessages(sessionMsgs: unknown[]): ChatMessage[] {
+  const visual: ChatMessage[] = [];
+  for (const raw of sessionMsgs) {
+    const m = raw as Record<string, unknown>;
+    if (m.role === "user") {
+      visual.push({ role: "user", content: String(m.content ?? "") });
+    } else if (m.role === "assistant") {
+      // Add text content if present (some assistant messages are ONLY
+      // tool_calls with no text)
+      const content = m.content;
+      if (typeof content === "string" && content.length > 0) {
+        visual.push({ role: "assistant", content });
+      }
+      // Explode tool_calls into individual visual tool call messages
+      const toolCalls = m.tool_calls as Array<{
+        id?: string;
+        type?: string;
+        function: { name: string; arguments: string };
+      }> | undefined;
+      if (Array.isArray(toolCalls)) {
+        for (const tc of toolCalls) {
+          visual.push({
+            role: "tool",
+            content: tc.function?.arguments ?? "{}",
+            toolName: tc.function?.name ?? "tool",
+            isResult: false,
+          });
+        }
+      }
+    } else if (m.role === "tool") {
+      // Tool result — session file only has tool_call_id + content.
+      // We don't have the toolName or ok status, so use fallbacks.
+      visual.push({
+        role: "tool",
+        content: String(m.content ?? ""),
+        toolName: "tool",
+        isResult: true,
+        ok: true,
+      });
+    }
+    // system messages are skipped (not shown in chat display)
+  }
+  return visual;
+}
+
 // --- App Component ----------------------------------------------------------
 
 export function App() {
@@ -1152,22 +1224,63 @@ export function App() {
 
   // -- Auto-load last session on startup (like Claude Code) ------------------
   // Checks for the most recent session file for the current project directory.
-  // If found, loads it silently. If not, DON'T create a session yet —
-  // session is auto-created on first message (lazy init in appendMessage).
+  // If found, loads it. If not, DON'T create a session yet — session is
+  // auto-created on first message (lazy init in appendMessage).
+  //
+  // BUG FIX (double-write + contexto-expandido):
+  //   1. Previously, loading called addUserMessage/addRawAssistantMessage/
+  //      addToolResult, which internally called tryAppendToSession. Since
+  //      activeSessionPath wasn't set yet, appendMessage auto-created a NEW
+  //      session file and wrote all loaded messages to it — DUPLICATING the
+  //      entire conversation on disk every time the app started.
+  //   2. Previously, ALL messages from the JSONL were loaded into the IA's
+  //      context — including messages that had been compacted away in memory.
+  //      This could exceed the context window on load.
+  //
+  //   Fix:
+  //   - Call setActiveSession() FIRST, so appendMessage doesn't auto-create.
+  //   - Use loadHistoryDirect() (bypasses tryAppendToSession entirely).
+  //   - If a compaction snapshot exists, load the SNAPSHOT into IA context
+  //     (exact compacted state — guaranteed to fit). Load ALL messages into
+  //     the visual `messages` state for display.
+  //   - If no snapshot (no compaction happened), load all messages into IA
+  //     context directly (they fit — they were the IA's context at shutdown).
+  // Ref to hold loaded visual messages — populated during session load
+  // (in the useState initializer below) and consumed by useEffect to
+  // populate the `messages` state after the first render.
+  const loadedVisualMessagesRef = useRef<ChatMessage[]>([]);
+
   useState(() => {
     try {
       const last = getLastSession();
       if (last) {
-        const msgs = loadSessionMessages(last.id);
-        if (msgs && msgs.length > 0) {
-          for (const msg of msgs) {
-            const m = msg as Record<string, unknown>;
-            if (m.role === "user") history.addUserMessage(m.content as string);
-            else if (m.role === "assistant") history.addRawAssistantMessage(m as any);
-            else if (m.role === "tool") history.addToolResult(m.tool_call_id as string, m.content as string);
-          }
+        const loaded = loadSessionMessages(last.id);
+        if (loaded && loaded.messages.length > 0) {
+          // Set active session FIRST — prevents appendMessage from
+          // auto-creating a new session file (double-write bug fix).
           setActiveSession(last.id);
-          console.error(`[SESSION] Resumed: ${last.id} (${msgs.length} messages)`);
+
+          // ── IA context: use snapshot if available, else full messages ──
+          if (loaded.lastSnapshot && loaded.lastSnapshot.messages.length > 0) {
+            // Compaction happened during the session — restore the EXACT
+            // compacted state (summary + recent messages). This is
+            // guaranteed to fit because it was the IA's context at the
+            // last compaction.
+            history.loadHistoryDirect(loaded.lastSnapshot.messages as any);
+          } else {
+            // No compaction happened — the full message list IS what the
+            // IA had at shutdown. Load directly (no re-persisting).
+            history.loadHistoryDirect(loaded.messages as any);
+          }
+
+          console.error(`[SESSION] Resumed: ${last.id} (${loaded.messages.length} messages${loaded.lastSnapshot ? `, snapshot from ${loaded.lastSnapshot.method} compaction` : ""})`);
+
+          // ── Visual messages: convert ALL messages for display ──────
+          // The user sees the FULL conversation history (including messages
+          // that were compacted away from the IA's context). This is
+          // separate from the IA's context — visual is for the USER, IA
+          // context is for the MODEL.
+          loadedVisualMessagesRef.current = convertSessionToVisualMessages(loaded.messages);
         }
         // If session has 0 messages, don't load it and don't create new —
         // lazy init will handle it on first real message.
@@ -1182,6 +1295,16 @@ export function App() {
 
   // -- State --------------------------------------------------------------
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+
+  // Populate visual messages from loaded session (after first render).
+  // The session was loaded in the useState initializer above; the ref holds
+  // the converted visual messages. This effect runs once on mount.
+  useEffect(() => {
+    if (loadedVisualMessagesRef.current.length > 0) {
+      setMessages(loadedVisualMessagesRef.current);
+    }
+  }, []);
+
   const [input, setInput] = useState("");
   const [status, setStatus] = useState<AppStatus>("idle");
   const [todos, setTodos] = useState<TodoItem[]>([]);
@@ -1555,7 +1678,9 @@ export function App() {
         setShowConfigurator(true);
       }
       if (result.resetChat) {
-        setMessages([]);
+        // If visualMessages were provided (e.g., from /session load), use
+        // them instead of clearing. Otherwise, clear the chat.
+        setMessages(result.visualMessages ?? []);
       }
       // /compact agora é assíncrono (LLM-based). Mostra status "compacting"
       // enquanto a IA gera o resumo. O resultado aparece como system message

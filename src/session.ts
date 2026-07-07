@@ -112,6 +112,48 @@ export function appendMessage(msg: { role: string; content?: string; [key: strin
 }
 
 /**
+ * Append a compaction snapshot to the active session's JSONL file.
+ *
+ * A compaction snapshot captures the EXACT in-memory history at the moment
+ * compaction completed. This is used on session load to restore the IA's
+ * context precisely as it was (compacted summary + recent messages), rather
+ * than loading the full un-compacted history (which might exceed the context
+ * window).
+ *
+ * The snapshot contains:
+ *   - type: "compaction-snapshot" (marker for load logic)
+ *   - messages: the full in-memory history array AFTER compaction
+ *   - method: "llm" | "mechanical" (how compaction was done)
+ *   - ts: timestamp
+ *
+ * On load:
+ *   - Visual display: uses ALL messages from the file (full conversation)
+ *   - IA context: uses the LAST compaction snapshot (exact compacted state)
+ *
+ * This guarantees the IA gets exactly the context it had at shutdown —
+ * no more, no less — so it ALWAYS fits in the context window.
+ */
+export function appendCompactionSnapshot(
+  messages: unknown[],
+  method: "llm" | "mechanical",
+): void {
+  if (!activeSessionPath) return;
+
+  try {
+    const line = JSON.stringify({
+      type: "compaction-snapshot",
+      messages,
+      method,
+      ts: Date.now(),
+    }) + "\n";
+    fs.appendFileSync(activeSessionPath, line, "utf8");
+    log.debug(`[SESSION] Compaction snapshot saved (${messages.length} messages, method=${method})`);
+  } catch (err) {
+    log.debug(`[SESSION] Failed to save compaction snapshot: ${(err as Error).message}`);
+  }
+}
+
+/**
  * Get the last session for the current project directory.
  * Returns null if no sessions exist.
  */
@@ -134,14 +176,37 @@ export function getLastSession(cwd?: string): { id: string; path: string } | nul
 }
 
 /**
- * Load a session from disk. Returns array of messages (excluding header).
- * Does NOT modify history — caller is responsible for that.
+ * Result of loading a session: separates regular messages (for visual
+ * display — the full conversation history) from compaction snapshots
+ * (for IA context — the exact compacted state at the last compaction).
+ */
+export interface LoadedSession {
+  /** All regular messages (user/assistant/tool/system) — for VISUAL display. */
+  messages: unknown[];
+  /**
+   * The LAST compaction snapshot, or null if no compaction happened.
+   * Contains the exact in-memory history at the moment compaction completed.
+   * Used to restore the IA's context precisely as it was — guaranteed to
+   * fit in the context window because it was the context the IA had.
+   */
+  lastSnapshot: { messages: unknown[]; method: string; ts: number } | null;
+}
+
+/**
+ * Load a session from disk. Returns regular messages + last compaction snapshot.
+ *
+ * - `messages`: ALL messages from the file (full conversation history) —
+ *   used for VISUAL display so the user can see everything.
+ * - `lastSnapshot`: the last compaction snapshot (if any) — used for IA
+ *   context to restore exactly what the IA had at the last compaction,
+ *   NOT the full history (which might exceed the context window after
+ *   compaction removed messages from memory but not from the file).
  *
  * Supports partial ID match: if exact ID not found, looks for files
  * that START WITH the given prefix. This lets users type
  * /session load 2026-07 instead of the full timestamp ID.
  */
-export function loadSessionMessages(sessionId: string, cwd?: string): unknown[] | null {
+export function loadSessionMessages(sessionId: string, cwd?: string): LoadedSession | null {
   const dir = getProjectSessionDir(cwd);
   let filePath = path.join(dir, `${sessionId}.jsonl`);
 
@@ -157,7 +222,7 @@ export function loadSessionMessages(sessionId: string, cwd?: string): unknown[] 
       if (fs.existsSync(oldPath)) {
         try {
           const data = JSON.parse(fs.readFileSync(oldPath, "utf8"));
-          return data.messages ?? [];
+          return { messages: data.messages ?? [], lastSnapshot: null };
         } catch {
           return null;
         }
@@ -169,16 +234,30 @@ export function loadSessionMessages(sessionId: string, cwd?: string): unknown[] 
   try {
     const lines = fs.readFileSync(filePath, "utf8").split("\n").filter(Boolean);
     const messages: unknown[] = [];
+    let lastSnapshot: LoadedSession["lastSnapshot"] = null;
+
     for (const line of lines) {
       try {
         const parsed = JSON.parse(line);
         if (parsed.type === "session-header") continue; // skip header
+
+        // Compaction snapshots are stored separately — not in the regular
+        // messages array. We keep only the LAST one (most recent compaction).
+        if (parsed.type === "compaction-snapshot") {
+          lastSnapshot = {
+            messages: parsed.messages ?? [],
+            method: parsed.method ?? "unknown",
+            ts: parsed.ts ?? 0,
+          };
+          continue; // don't add to regular messages
+        }
+
         messages.push(parsed);
       } catch {
         // skip malformed lines
       }
     }
-    return messages;
+    return { messages, lastSnapshot };
   } catch {
     return null;
   }

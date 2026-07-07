@@ -113,9 +113,11 @@ describe("session — JSONL auto-persist (Claude Code style)", () => {
     appendMessage({ role: "user", content: "hello" });
     appendMessage({ role: "assistant", content: "hi" });
     const last = getLastSession();
-    const msgs = loadSessionMessages(last!.id);
-    expect(msgs).not.toBeNull();
-    expect(msgs!.length).toBe(2);
+    const loaded = loadSessionMessages(last!.id);
+    expect(loaded).not.toBeNull();
+    expect(loaded!.messages.length).toBe(2);
+    // No compaction happened, so lastSnapshot should be null
+    expect(loaded!.lastSnapshot).toBeNull();
   });
 
   it("loadSessionMessages retorna null para sessão inexistente", async () => {
@@ -261,9 +263,10 @@ describe("session — JSONL auto-persist (Claude Code style)", () => {
     const last = getLastSession();
     // Adiciona linha corrompida
     fs.appendFileSync(last!.path, "{invalid json\n", "utf8");
-    const msgs = loadSessionMessages(last!.id);
+    const loaded = loadSessionMessages(last!.id);
     // Deve pular linha corrompida e retornar mensagens válidas
-    expect(Array.isArray(msgs)).toBe(true);
+    expect(loaded).not.toBeNull();
+    expect(Array.isArray(loaded!.messages)).toBe(true);
   });
 
   it("múltiplas sessões no mesmo projeto", async () => {
@@ -272,5 +275,54 @@ describe("session — JSONL auto-persist (Claude Code style)", () => {
     startSession(undefined, "s2");
     startSession(undefined, "s3");
     expect(listSessions().length).toBe(3);
+  });
+
+  // ─── Compaction snapshot tests (limite-historico fix) ─────────────────────
+
+  it("appendCompactionSnapshot salva snapshot no JSONL", async () => {
+    const { startSession, appendCompactionSnapshot, getLastSession, loadSessionMessages } = await loadSessionModule();
+    startSession();
+    const snapshotMessages = [
+      { role: "system", content: "system prompt" },
+      { role: "system", content: "[CONVERSATION MEMORY - compacted]" },
+      { role: "user", content: "recent question" },
+      { role: "assistant", content: "recent answer" },
+    ];
+    appendCompactionSnapshot(snapshotMessages, "llm");
+    const last = getLastSession();
+    const loaded = loadSessionMessages(last!.id);
+    expect(loaded).not.toBeNull();
+    expect(loaded!.lastSnapshot).not.toBeNull();
+    expect(loaded!.lastSnapshot!.messages).toHaveLength(4);
+    expect(loaded!.lastSnapshot!.method).toBe("llm");
+  });
+
+  it("loadSessionMessages retorna lastSnapshot=null quando não há snapshot", async () => {
+    const { startSession, appendMessage, getLastSession, loadSessionMessages } = await loadSessionModule();
+    startSession();
+    appendMessage({ role: "user", content: "hello" });
+    const last = getLastSession();
+    const loaded = loadSessionMessages(last!.id);
+    expect(loaded).not.toBeNull();
+    expect(loaded!.lastSnapshot).toBeNull();
+    expect(loaded!.messages.length).toBe(1);
+  });
+
+  it("snapshot não aparece no array de mensagens regulares", async () => {
+    const { startSession, appendMessage, appendCompactionSnapshot, getLastSession, loadSessionMessages } = await loadSessionModule();
+    startSession();
+    appendMessage({ role: "user", content: "msg1" });
+    appendCompactionSnapshot([{ role: "system", content: "compacted" }], "mechanical");
+    appendMessage({ role: "user", content: "msg2" });
+    const last = getLastSession();
+    const loaded = loadSessionMessages(last!.id);
+    expect(loaded).not.toBeNull();
+    // Regular messages should NOT include the snapshot
+    expect(loaded!.messages.length).toBe(2);
+    expect(loaded!.messages[0]).toMatchObject({ role: "user", content: "msg1" });
+    expect(loaded!.messages[1]).toMatchObject({ role: "user", content: "msg2" });
+    // Snapshot should be separate
+    expect(loaded!.lastSnapshot).not.toBeNull();
+    expect(loaded!.lastSnapshot!.messages).toHaveLength(1);
   });
 });

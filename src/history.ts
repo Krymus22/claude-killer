@@ -443,6 +443,31 @@ export function addToolResult(toolCallId: string, content: string): void {
   tryAppendToSession({ role: "tool", tool_call_id: toolCallId, content });
 }
 
+/**
+ * Load history DIRECTLY from an array of messages — bypassing the normal
+ * add* functions. This is used on session load to restore the IA's context
+ * WITHOUT re-persisting to the session file (which would cause a double-write
+ * bug: every loaded message would be appended again, duplicating the file).
+ *
+ * Use this when restoring from a compaction snapshot (the exact compacted
+ * state the IA had) or from a regular session file when no snapshot exists.
+ *
+ * @param messages  The messages to set as the current history. Should include
+ *                  the system prompt at index 0.
+ */
+export function loadHistoryDirect(messages: Message[]): void {
+  // Replace history entirely — no ensureHistoryInitialized (messages already
+  // contain the system prompt if it was saved).
+  if (messages.length > 0 && messages[0]?.role === "system") {
+    history = [...messages];
+  } else {
+    // If no system prompt, prepend one (defensive — shouldn't happen normally)
+    history = [{ role: "system", content: getSystemPrompt() }, ...messages];
+  }
+  // NOTE: intentionally does NOT call tryAppendToSession — these messages
+  // are being LOADED from the session file, not newly created.
+}
+
 /** Append a system message to the history (for memory injection, etc). */
 /**
  * Add a system message, replacing any previous message with the same prefix.
@@ -698,6 +723,20 @@ export async function compactHistoryAsync(customInstruction?: string): Promise<C
   });
 
   const afterTokens = estimateTokens(history);
+
+  // ── Save compaction snapshot to session file ────────────────────────────
+  // This captures the EXACT in-memory history after compaction, so that on
+  // session load we can restore the IA's context precisely as it was
+  // (compacted summary + recent messages) instead of the full un-compacted
+  // history (which might exceed the context window).
+  // See appendCompactionSnapshot() in session.ts for details.
+  try {
+    const { appendCompactionSnapshot } = await import("./session.js");
+    appendCompactionSnapshot(history, method);
+  } catch (err) {
+    console.debug(`[COMPACT] Failed to save compaction snapshot: ${(err as Error).message}`);
+  }
+
   return { removed: dropped, beforeTokens, afterTokens, method };
 }
 

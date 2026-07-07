@@ -180,7 +180,8 @@ async function handleConfiguratorTool(
 ): Promise<string> {
   switch (toolName) {
     case "executar_comando_seguro": {
-      const cmd = String(args.comando ?? "");
+      // BUG FIX: typeof check — String() em objeto retorna '[object Object]'
+      const cmd = typeof args.comando === "string" ? args.comando : "";
       if (!isSafeCommand(cmd)) {
         return `[ERROR] Comando não permitido: "${cmd}". Só --help, --version, where, find, ls.`;
       }
@@ -198,7 +199,7 @@ async function handleConfiguratorTool(
     }
 
     case "buscar_arquivo": {
-      const fileName = String(args.nome ?? "");
+      const fileName = typeof args.nome === "string" ? args.nome : "";
       if (!fileName) return "[ERROR] nome é obrigatório";
       const results = searchInDefinedFolders(fileName, modeName);
       if (results.length === 0) {
@@ -208,7 +209,7 @@ async function handleConfiguratorTool(
     }
 
     case "criar_manifest": {
-      const toolName = String(args.toolName ?? "");
+      const toolName = typeof args.toolName === "string" ? args.toolName : "";
       const manifest = args.manifest;
       if (!toolName || !manifest) return "[ERROR] toolName e manifest são obrigatórios";
       if (!modeName) return "[ERROR] nenhum modo ativo";
@@ -225,7 +226,7 @@ async function handleConfiguratorTool(
     }
 
     case "copiar_para_tools": {
-      const sourcePath = String(args.sourcePath ?? "");
+      const sourcePath = typeof args.sourcePath === "string" ? args.sourcePath : "";
       if (!sourcePath) return "[ERROR] sourcePath is required";
       if (!modeName) return "[ERROR] no active mode";
       if (!fs.existsSync(sourcePath)) return `[ERROR] File not found: ${sourcePath}`;
@@ -238,7 +239,7 @@ async function handleConfiguratorTool(
 
     case "perguntar_usuario": {
       if (!onAskUser) return "[ERROR] perguntar_usuario not available in this context";
-      const pergunta = String(args.pergunta ?? "");
+      const pergunta = typeof args.pergunta === "string" ? args.pergunta : "";
       const alternativas = Array.isArray(args.alternativas) ? (args.alternativas as string[]) : [];
       if (!pergunta || alternativas.length < 2) return "[ERROR] pergunta and alternativas (min 2) are required";
       const response = await onAskUser({ pergunta, alternativas });

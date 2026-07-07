@@ -255,7 +255,9 @@ function formatUnknownAllowedMessage(toolName: string): string {
  * Tells the IA exactly which tool to use instead and why.
  */
 function formatWriteBlockMessage(toolName: string, args: Record<string, unknown>): string {
-  const scriptPath = args.path ?? args.scriptPath ?? args.caminho ?? "unknown";
+  // BUG FIX: usar typeof check em vez de ?? — se args.path for objeto, String() retorna '[object Object]'
+  const rawPath = args.path ?? args.scriptPath ?? args.caminho ?? "unknown";
+  const scriptPath = typeof rawPath === "string" ? rawPath : "unknown";
 
   if (toolName === "multi_edit") {
     return [

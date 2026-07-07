@@ -359,17 +359,20 @@ export async function executeFromManifest(
         // adicionar o valor direto. Antes, "lune run script /tmp/x.luau"
         // era gerado em vez de "lune run /tmp/x.luau".
         const isPositional = !flag.name.startsWith("-");
+        // BUG FIX: String() em objeto retorna '[object Object]'. Usar typeof.
+        const strValue = typeof value === "string" ? value : value != null ? JSON.stringify(value) : "";
         if (isPositional) {
-          cmdArgs.push(String(value));
+          cmdArgs.push(strValue);
         } else {
-          cmdArgs.push(flag.name, String(value));
+          cmdArgs.push(flag.name, strValue);
         }
       }
     }
   }
 
   // Add working directory
-  const cwd = args.dir ? String(args.dir) : process.cwd();
+  // BUG FIX: typeof check — String() em objeto retorna '[object Object]'
+  const cwd = typeof args.dir === "string" ? args.dir : process.cwd();
 
   // 4. Execute
   try {

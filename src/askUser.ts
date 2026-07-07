@@ -119,9 +119,10 @@ export async function handleAskUser(args: Record<string, unknown>): Promise<{ re
   if (!args || typeof args !== "object") {
     return { resultStr: "[ERROR] invalid args (expected object)", usedHeal: false };
   }
-  const pergunta = String(args.pergunta ?? "");
+  // BUG FIX: String() em objeto retorna '[object Object]'. Usar typeof check.
+  const pergunta = typeof args.pergunta === "string" ? args.pergunta : "";
   const alternativas = Array.isArray(args.alternativas) ? (args.alternativas as string[]) : [];
-  const contexto = args.contexto ? String(args.contexto) : undefined;
+  const contexto = typeof args.contexto === "string" ? args.contexto : undefined;
 
   // Validate
   if (!pergunta) {

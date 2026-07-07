@@ -1,0 +1,42 @@
+name: Mutation Testing (Caseiro)
+
+# Stryker caseiro — mutation testing simplificado que roda com vitest normal
+# (sem worker threads, sem sandboxes). Funciona com process.chdir() e
+# binários externos (selene/stylua) que o Stryker não suporta.
+#
+# Roda toda noite às 22:00 BRT (01:00 UTC) e pode ser disparado manualmente.
+
+on:
+  schedule:
+    - cron: '0 1 * * *'
+  workflow_dispatch:
+
+jobs:
+  mutation-test:
+    name: Mutation Testing (Caseiro)
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      NVIDIA_API_KEY: dummy
+      NODE_ENV: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+      - run: npm ci
+      - name: Run mutation tests
+        run: |
+          # Run the homemade mutation tester
+          # Exit code 0 = all mutations killed (perfect tests)
+          # Exit code 1 = some mutations survived (test gaps found)
+          # Either way, we continue to upload the report
+          python3 scripts/mutation-test.py --quick || true
+      - name: Upload mutation report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutation-report
+          path: reports/mutation/
+          retention-days: 30

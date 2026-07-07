@@ -54,6 +54,13 @@ function truncateMiddle(s: string, max: number): string {
  * in a compact single-line format.
  */
 function formatToolArgs(args: Record<string, unknown>): string {
+  // Tool "pensar" — não mostrar o pensamento no chat (é interno)
+  if (args.pensamento !== undefined || args.pensamento !== null) {
+    if (typeof args.pensamento === "string") {
+      const cat = args.categoria ?? args.category;
+      return cat ? `(${cat}, ${args.pensamento.length} chars)` : `(${args.pensamento.length} chars)`;
+    }
+  }
   const path = args.path ?? args.caminho ?? args.filePath;
   if (typeof path === "string") return truncateMiddle(path, 50);
   const cmd = args.comando ?? args.command;
@@ -88,6 +95,10 @@ export function ChatDisplay({ messages, maxVisible = 50 }: Readonly<ChatDisplayP
 
         // Tool messages: render with icon, indented, grey
         if (msg.role === "tool") {
+          // Tool "pensar" — esconder resultado (é interno, não deve aparecer no chat)
+          if (msg.toolName === "pensar" && msg.isResult) {
+            return null; // não renderizar resultado do pensar
+          }
           const label = msg.isResult
             ? (msg.ok ? `${icons.check} ${msg.toolName ?? "tool"}` : `${icons.cross} ${msg.toolName ?? "tool"}`)
             : `${icons.arrow} ${msg.toolName ?? "tool"}(${formatToolArgs(parseArgsSafe(msg.content))})`;

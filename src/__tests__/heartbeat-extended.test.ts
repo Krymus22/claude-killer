@@ -85,13 +85,13 @@ describe("startHeartbeat", () => {
     vi.resetModules();
   });
 
-  it("envia temperature=0 na requisição do heartbeat", async () => {
+  it("envia temperature=0.01 (avoid API bug) na requisição do heartbeat", async () => {
     const client = { chat: { completions: { create: mockCreate } } } as any;
     startHeartbeat(client);
     await new Promise((r) => setTimeout(r, 30));
 
     const call = mockCreate.mock.calls[0]?.[0];
-    expect(call.temperature).toBe(0);
+    expect(call.temperature).toBe(0.01);
   });
 });
 

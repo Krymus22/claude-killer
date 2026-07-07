@@ -1,6 +1,6 @@
 /**
  * StatusBar.tsx — Context window usage bar + session cost + effort level + tok/s.
- * Compact single-line format for inline display next to input.
+ * Compact single-line format, right-aligned inside its parent container.
  *
  * Layout: [tokens] [bar] [%] [tok/s] [effort] [$sessionCost] [turnCost] [MCPs:N] [Skills:N] [PLAN]
  *
@@ -9,10 +9,13 @@
  *   - turnCost (muted, in parens) — last-turn cost, useful to see per-request spend
  *
  * Token display:
- *   - The 15-char bar reflects CURRENT context window usage (last turn's total
- *     tokens / contextWindow). This is what determines when auto-compact triggers.
- *   - Cumulative session tokens are NOT shown in the bar (they'd always hit 100%
- *     after a few turns) but the turn count and totals are tracked in App.tsx.
+ *   - The 10-char bar reflects CURRENT context window usage (last turn's total
+ *     tokens / contextWindow) on a LINEAR scale: each dash = 10% of the context
+ *     window. So 14% shows 1 dash, 20% shows 2 dashes, 100% shows 10 dashes.
+ *   - The percentage label still shows the precise value (1% increments).
+ *   - Cumulative session tokens are NOT shown in the bar (they'd always hit
+ *     100% after a few turns) but the turn count and totals are tracked in
+ *     App.tsx.
  */
 
 import React from "react";
@@ -95,13 +98,13 @@ export function StatusBar({
   // Cumulative would always max out the bar after a few turns.
   const pct = contextWindow > 0 ? totalTokens / contextWindow : 0;
 
-  // Use LOGARITHMIC scale for the bar so it's useful even with 1M context.
-  // Linear scale with 1M: 50k tokens = 5% = 0.75 chars → rounds to 1 (barely visible).
-  // Log scale: maps 0-100% to 0-15 chars but amplifies small values.
-  // log2(1 + pct * 15) / log2(16) * 15 = visual amplification
-  const logPct = pct > 0 ? Math.log2(1 + pct * 15) / Math.log2(16) : 0;
-  const fillCount = Math.max(0, Math.min(15, Math.round(logPct * 15)));
-  const emptyCount = Math.max(0, 15 - fillCount);
+  // LINEAR scale, 10 segments — each dash represents 10% of the context window.
+  // At 14% → 1 dash, at 20% → 2 dashes, at 100% → 10 dashes.
+  // The percentage label (rendered separately) still shows the precise value.
+  // (Previously used a logarithmic scale which made the bar appear "cut": at
+  // 14% the log scale already filled ~half the bar, which was misleading.)
+  const fillCount = Math.max(0, Math.min(10, Math.floor(pct * 10)));
+  const emptyCount = Math.max(0, 10 - fillCount);
 
   let barColor: string = colors.success;
   if (pct >= compactThreshold) barColor = colors.error;
@@ -147,7 +150,7 @@ export function StatusBar({
     : "";
 
   return (
-    <Box flexDirection="row">
+    <Box flexDirection="row" justifyContent="flex-end" width="100%">
       <Text color={colors.muted}>
         {formatTok(totalTokens)}/{formatTok(contextWindow)}
       </Text>

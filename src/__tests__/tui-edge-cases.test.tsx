@@ -184,9 +184,11 @@ describe("ChatDisplay — edge cases", () => {
     const { lastFrame } = render(<ChatDisplay messages={messages} />);
     const out = stripAnsi(lastFrame() ?? "");
     expect(typeof out).toBe("string");
-    // Should show only the last 50 (maxVisible default)
+    // BUG FIX (limite-historico): ChatDisplay now renders ALL messages by
+    // default (maxVisible=Infinity), so both the first and last messages
+    // appear in the output. Previously only the last 50 were rendered.
     expect(out).toContain("Message 99");
-    expect(out).not.toContain("Message 0");
+    expect(out).toContain("Message 0");
   });
 
   it("handles very long single message (1000 chars)", () => {

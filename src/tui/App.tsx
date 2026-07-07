@@ -1192,6 +1192,27 @@ export function App() {
   } | null>(null);
   const [tokensPerSecond, setTokensPerSecond] = useState(0);
 
+  // ─── Streaming throttle (scroll-steal fix) ─────────────────────────────
+  // BUG FIX (scroll-roubo): Without throttling, setMessages was called on
+  // EVERY token from the API, causing Ink to re-render the entire chat
+  // display 30-100 times per second. Each re-render writes a full frame to
+  // stdout, and the terminal auto-scrolls to follow the cursor — making it
+  // impossible for the user to scroll UP to read previous content while the
+  // AI is streaming (the terminal kept yanking back to the bottom).
+  //
+  // Fix: throttle setMessages calls to at most once per STREAM_FLUSH_INTERVAL ms.
+  // streamContent is a ref (mutated on every token), so we never lose data —
+  // we just batch the React state updates. The final flush is guaranteed by
+  // the trailing setTimeout scheduled when a token arrives within the throttle
+  // window.
+  const STREAM_FLUSH_INTERVAL = 80; // ms — ~12 updates/sec, smooth enough
+  const lastStreamFlushRef = useRef(0);
+  const streamFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // streamContentRef mirrors the local streamContent variable but persists
+  // across the setTimeout closure. We need it because the trailing flush
+  // fires later, after the local streamContent may have been mutated again.
+  const streamContentRef = useRef("");
+
   // Cumulative session totals — track across ALL turns, not just the last one.
   // BUG FIX (audit issue #4): StatusBar was showing last-turn cost/tokens but
   // the docstring claimed "session cost". Users saw $0.001 after 50 turns.
@@ -1309,6 +1330,16 @@ export function App() {
         // same agent turn — the second stream's content includes the first
         // stream's content, making the message show duplicated/garbled text.
         streamContent = "";
+        // BUG FIX (scroll-roubo): reset throttle state for the new stream.
+        // Also cancel any trailing flush from the previous stream so it
+        // doesn't fire after we've already cleared streamContentRef and
+        // write stale content into the new streaming message.
+        streamContentRef.current = "";
+        lastStreamFlushRef.current = 0;
+        if (streamFlushTimerRef.current !== null) {
+          clearTimeout(streamFlushTimerRef.current);
+          streamFlushTimerRef.current = null;
+        }
         setStatus("streaming");
         // BUG FIX (log-desaparece): finalize any previous streaming message
         // before starting a new one. Without this, the first streaming message
@@ -1329,6 +1360,7 @@ export function App() {
       },
       (token: string) => {
         streamContent += token;
+        streamContentRef.current = streamContent;
         tokenCount++;
         // Update tok/s every 10 tokens — based on THIS stream's token count
         // and THIS stream's elapsed time only (both reset on onStreamStart).
@@ -1336,18 +1368,76 @@ export function App() {
           const elapsed = (Date.now() - streamStartTime) / 1000;
           if (elapsed > 0) setTokensPerSecond(Math.round(tokenCount / elapsed * 10) / 10);
         }
-        setMessages((prev) => {
-          const updated = [...prev];
-          for (let i = updated.length - 1; i >= 0; i--) {
-            if (updated[i].role === "assistant" && updated[i].isStreaming) {
-              updated[i] = { ...updated[i], content: streamContent };
-              break;
+        // ─── Throttled flush (scroll-steal fix) ───────────────────────────
+        // Instead of calling setMessages on every token (which caused Ink to
+        // re-render 30-100x/sec and steal the terminal scroll), we batch
+        // updates to at most one per STREAM_FLUSH_INTERVAL ms.
+        //
+        // - If enough time has passed since the last flush → flush now.
+        // - Otherwise, ensure a trailing flush is scheduled (so the latest
+        //   content is never lost — it'll appear after at most INTERVAL ms).
+        // - streamContentRef.current is read inside the flush (not the local
+        //   streamContent) because the trailing setTimeout fires later, by
+        //   which point streamContent may have grown further.
+        const now = Date.now();
+        const sinceLast = now - lastStreamFlushRef.current;
+        if (sinceLast >= STREAM_FLUSH_INTERVAL) {
+          lastStreamFlushRef.current = now;
+          const snapshot = streamContentRef.current;
+          setMessages((prev) => {
+            const updated = [...prev];
+            for (let i = updated.length - 1; i >= 0; i--) {
+              if (updated[i].role === "assistant" && updated[i].isStreaming) {
+                updated[i] = { ...updated[i], content: snapshot };
+                break;
+              }
             }
-          }
-          return [...updated];
-        });
+            return [...updated];
+          });
+        } else if (streamFlushTimerRef.current === null) {
+          // Schedule a trailing flush for the remaining time in the window.
+          const wait = STREAM_FLUSH_INTERVAL - sinceLast;
+          streamFlushTimerRef.current = setTimeout(() => {
+            streamFlushTimerRef.current = null;
+            lastStreamFlushRef.current = Date.now();
+            const snap = streamContentRef.current;
+            setMessages((prev) => {
+              const updated = [...prev];
+              for (let i = updated.length - 1; i >= 0; i--) {
+                if (updated[i].role === "assistant" && updated[i].isStreaming) {
+                  updated[i] = { ...updated[i], content: snap };
+                  break;
+                }
+              }
+              return [...updated];
+            });
+          }, wait);
+        }
       },
       () => {
+        // ─── Stream ended — flush any pending throttled content ───────────
+        // BUG FIX (scroll-roubo): the trailing setTimeout may still be
+        // pending when the stream ends. Cancel it and do one final
+        // synchronous flush so the user sees the complete message.
+        if (streamFlushTimerRef.current !== null) {
+          clearTimeout(streamFlushTimerRef.current);
+          streamFlushTimerRef.current = null;
+        }
+        const finalSnap = streamContentRef.current;
+        if (finalSnap.length > 0) {
+          setMessages((prev) => {
+            const updated = [...prev];
+            for (let i = updated.length - 1; i >= 0; i--) {
+              if (updated[i].role === "assistant" && updated[i].isStreaming) {
+                updated[i] = { ...updated[i], content: finalSnap };
+                break;
+              }
+            }
+            return [...updated];
+          });
+        }
+        // Reset throttle state for the next stream in this same agent turn.
+        lastStreamFlushRef.current = 0;
         setStatus("thinking");
       },
       (usage) => {
@@ -1412,6 +1502,14 @@ export function App() {
   }, []);
 
   const finalizeMessage = useCallback((response: string, streamStarted: boolean) => {
+    // BUG FIX (scroll-roubo): cancel any pending trailing flush from the
+    // throttle — finalizeMessage writes the complete response below, so a
+    // late flush would just overwrite with the same (or stale) content.
+    if (streamFlushTimerRef.current !== null) {
+      clearTimeout(streamFlushTimerRef.current);
+      streamFlushTimerRef.current = null;
+    }
+    lastStreamFlushRef.current = 0;
     setMessages((prev) => {
       const updated = [...prev];
       for (let i = updated.length - 1; i >= 0; i--) {
@@ -1808,9 +1906,12 @@ export function App() {
           </Box>
         </Box>
 
-        {/* Status bar row (below input, not beside it) */}
+        {/* Status bar row (below input, not beside it).
+            Right-aligned: the StatusBar itself uses justifyContent="flex-end"
+            with width="100%" so all its content (tokens, bar, %, effort, cost,
+            MCPs, Skills, PLAN tag) is pushed to the right edge of the screen. */}
         {lastUsage && (
-          <Box marginTop={0}>
+          <Box marginTop={0} width="100%">
             <StatusBar
               promptTokens={lastUsage.prompt_tokens}
               completionTokens={lastUsage.completion_tokens}

@@ -321,16 +321,17 @@ describe("StatusBar — render snapshots", () => {
       />
     );
     const out = stripAnsi(lastFrame() ?? "");
-    // Should NOT crash — should render clamped bar (15 # chars, 0 - chars)
+    // Should NOT crash — should render clamped bar (10 # chars, 0 - chars)
+    // Bar is now 10 segments on a LINEAR scale (was 15 with log scale).
     expect(out).toContain("2k");
-    expect(out).toContain("###############"); // 15 # (full bar, clamped)
+    expect(out).toContain("##########"); // 10 # (full bar, clamped)
     expect(out).toContain("200%");
   });
 
   it("renders context bar with # for fill and - for empty", () => {
     const { lastFrame } = render(<StatusBar {...baseProps} />);
     const out = stripAnsi(lastFrame() ?? "");
-    // 150/1000 = 15% → 0.15 * 15 = 2.25 → round = 2 fill chars
+    // 150/1000 = 15% → Math.floor(0.15 * 10) = 1 fill char + 9 dashes
     expect(out).toContain("#");
     expect(out).toContain("-");
   });

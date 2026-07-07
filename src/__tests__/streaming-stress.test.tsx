@@ -264,6 +264,72 @@ describe("Streaming interruptions", () => {
     expect(out).toMatch(/1k|tok/);
   });
 
+  it("REGRESSÃO scroll-roubo: throttle de setMessages não perde conteúdo final", async () => {
+    // BUG: antes do throttle, setMessages era chamado a cada token (1000x em
+    // 1 seg). Agora com throttle de 80ms, apenas ~12 updates acontecem por
+    // segundo. O trailing setTimeout garante que o último conteúdo seja
+    // sempre escrito — este teste verifica que mesmo com 500 tokens rápidos
+    // (todos chegando em <80ms, ou seja dentro de uma única janela de throttle),
+    // o conteúdo final aparece corretamente após o flush.
+    const finalText = "RespostaCompleta";
+    vi.mocked(runAgentLoop).mockImplementation(
+      async (_input, onStreamStart, onToken, onThinking, onUsage) => {
+        onStreamStart?.();
+        // Dispara 500 tokens MUITO rápido (todos dentro de 80ms) — todos
+        // caem na mesma janela de throttle, só o primeiro dispara flush
+        // imediato, os demais agendam o trailing.
+        for (let i = 0; i < finalText.length; i++) {
+          onToken?.(finalText[i]);
+        }
+        // Chama onThinking (stream end) — deve fazer o flush final
+        onThinking?.();
+        onUsage?.({ prompt_tokens: 10, completion_tokens: finalText.length, total_tokens: 10 + finalText.length });
+        return finalText;
+      }
+    );
+
+    const { stdin, lastFrame } = render(<App />);
+    stdin.write("test");
+    await delay(50);
+    stdin.write("\r");
+    await delay(400); // tempo para o trailing flush + finalize
+    const out = stripAnsi(lastFrame() ?? "");
+    // O conteúdo final deve estar completo (não truncado pelo throttle)
+    expect(out).toContain("RespostaCompleta");
+  });
+
+  it("REGRESSÃO scroll-roubo: múltiplos streams no mesmo turno resetam throttle", async () => {
+    // BUG: o throttle state (lastStreamFlushRef, streamFlushTimerRef) deve
+    // ser resetado a cada onStreamStart. Se não for, o segundo stream
+    // poderia herdar o timer pendente do primeiro e escrever conteúdo
+    // stale na mensagem errada.
+    vi.mocked(runAgentLoop).mockImplementation(
+      async (_input, onStreamStart, onToken, onThinking, onUsage) => {
+        // Stream 1
+        onStreamStart?.();
+        onToken?.("Primeiro");
+        onThinking?.();
+        // Stream 2 (após tool call, por exemplo)
+        onStreamStart?.();
+        onToken?.("Segundo");
+        onThinking?.();
+        onUsage?.({ prompt_tokens: 20, completion_tokens: 15, total_tokens: 35 });
+        return "Segundo";
+      }
+    );
+
+    const { stdin, lastFrame } = render(<App />);
+    stdin.write("multi");
+    await delay(50);
+    stdin.write("\r");
+    await delay(400);
+    const out = stripAnsi(lastFrame() ?? "");
+    // O conteúdo final do segundo stream deve aparecer (não o do primeiro)
+    expect(out).toContain("Segundo");
+    // App não crashou
+    expect(out).toContain("Claude-Killer");
+  });
+
   it("onStreamToken com chunks vazios (\"\") não quebra", async () => {
     // Chunks vazios ocorrem em alguns SSE streams (heartbeats/keepalives).
     vi.mocked(runAgentLoop).mockImplementation(

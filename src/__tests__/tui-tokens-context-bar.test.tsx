@@ -326,22 +326,24 @@ describe("StatusBar: percentage reflects actual token count", () => {
   });
 
   it("bar fill grows as percentage increases", () => {
-    // 1% → ~0 # chars (Math.round(0.01 * 15) = 0)
+    // Bar uses LINEAR scale with 10 segments — each dash = 10%.
+    // Math.floor(pct * 10) gives the dash count.
+    // 1% → Math.floor(0.01 * 10) = 0 # chars (10 dashes)
     const { lastFrame: f1 } = render(<StatusBar {...baseProps} totalTokens={2560} promptTokens={2000} completionTokens={560} />);
     const out1 = stripAnsi(f1() ?? "");
     expect(out1).toContain("1%");
 
-    // 50% → ~8 # chars
+    // 50% → Math.floor(0.5 * 10) = 5 # chars + 5 dashes
     const { lastFrame: f2 } = render(<StatusBar {...baseProps} totalTokens={128000} promptTokens={100000} completionTokens={28000} />);
     const out2 = stripAnsi(f2() ?? "");
     expect(out2).toContain("50%");
-    expect(out2).toMatch(/#{12}-{3}/);
+    expect(out2).toMatch(/#{5}-{5}/);
 
-    // 100% → 15 # chars
+    // 100% → Math.floor(1.0 * 10) = 10 # chars
     const { lastFrame: f3 } = render(<StatusBar {...baseProps} totalTokens={256000} promptTokens={200000} completionTokens={56000} />);
     const out3 = stripAnsi(f3() ?? "");
     expect(out3).toContain("100%");
-    expect(out3).toMatch(/#{15}/);
+    expect(out3).toMatch(/#{10}/);
   });
 
   it("works with 1M context window (minimax-m3)", () => {

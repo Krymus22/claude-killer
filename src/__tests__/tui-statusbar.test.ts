@@ -16,8 +16,10 @@ function calculateCost(promptTokens: number, completionTokens: number, costPerKP
   return (promptTokens / 1000) * costPerKPrompt + (completionTokens / 1000) * costPerKCompletion;
 }
 
-function calculateFillCount(pct: number, barWidth: number = 15): number {
-  return Math.round(pct * barWidth);
+function calculateFillCount(pct: number, barWidth: number = 10): number {
+  // LINEAR scale, 10 segments — each dash = 10% of the context window.
+  // Matches the StatusBar implementation (Math.floor, not Math.round).
+  return Math.max(0, Math.min(barWidth, Math.floor(pct * barWidth)));
 }
 
 describe("StatusBar component", () => {
@@ -87,20 +89,35 @@ describe("StatusBar component", () => {
   });
 
   describe("fill count calculation", () => {
+    // Bar is now 10 segments on a LINEAR scale (each dash = 10%).
+    // Math.floor is used so each segment fills after crossing its 10% mark.
     it("should return 0 for 0%", () => {
       expect(calculateFillCount(0)).toBe(0);
     });
 
-    it("should return 15 for 100%", () => {
-      expect(calculateFillCount(1)).toBe(15);
+    it("should return 10 for 100%", () => {
+      expect(calculateFillCount(1)).toBe(10);
     });
 
-    it("should return ~8 for ~50%", () => {
-      expect(calculateFillCount(0.5)).toBe(8);
+    it("should return 5 for exactly 50%", () => {
+      expect(calculateFillCount(0.5)).toBe(5);
     });
 
-    it("should return 7 for exactly half of 15", () => {
-      expect(calculateFillCount(0.4667)).toBe(7);
+    it("should return 1 for 14% (1 dash for crossing 10%)", () => {
+      expect(calculateFillCount(0.14)).toBe(1);
+    });
+
+    it("should return 2 for 20% (2 dashes for crossing 20%)", () => {
+      expect(calculateFillCount(0.20)).toBe(2);
+    });
+
+    it("should return 9 for 99% (just under full)", () => {
+      expect(calculateFillCount(0.99)).toBe(9);
+    });
+
+    it("should clamp overflow to 10 dashes", () => {
+      expect(calculateFillCount(1.5)).toBe(10);
+      expect(calculateFillCount(2.0)).toBe(10);
     });
   });
 

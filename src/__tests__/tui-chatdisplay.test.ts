@@ -2,8 +2,12 @@ import { describe, it, expect } from "vitest";
 import { ChatDisplay, ChatMessage } from "../tui/ChatDisplay.js";
 import { colors } from "../tui/theme.js";
 
-function filterVisibleMessages(messages: ChatMessage[], maxVisible: number = 50): ChatMessage[] {
-  return messages.slice(-maxVisible);
+function filterVisibleMessages(messages: ChatMessage[], maxVisible: number = Infinity): ChatMessage[] {
+  // NOTE: the ChatDisplay component now defaults maxVisible to Infinity
+  // (renders ALL messages). This helper is kept for backwards-compatible
+  // unit tests of the slicing logic itself, but its default was updated to
+  // match the component so tests don't rely on the old 50-message cap.
+  return maxVisible === Infinity ? messages : messages.slice(-maxVisible);
 }
 
 function filterSystemMessages(messages: ChatMessage[]): ChatMessage[] {
@@ -67,12 +71,16 @@ describe("ChatDisplay component", () => {
       expect(filterVisibleMessages([], 50)).toHaveLength(0);
     });
 
-    it("should default maxVisible to 50", () => {
+    it("should default maxVisible to Infinity (limite-historico fix)", () => {
+      // BUG FIX (limite-historico): ChatDisplay now defaults to Infinity,
+      // rendering ALL messages. Previously defaulted to 50, which hid older
+      // messages from the terminal scrollback.
       const msgs: ChatMessage[] = Array.from({ length: 60 }, (_, i) => ({
         role: "user" as const,
         content: `msg${i}`,
       }));
-      expect(filterVisibleMessages(msgs)).toHaveLength(50);
+      // With Infinity default, all 60 messages are returned (not sliced to 50)
+      expect(filterVisibleMessages(msgs)).toHaveLength(60);
     });
 
     it("should handle maxVisible larger than array", () => {

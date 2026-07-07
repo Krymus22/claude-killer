@@ -287,3 +287,80 @@ describe("ChatDisplay — testes estendidos", () => {
     expect(out).toContain("npm run build");
   });
 });
+
+// ─── Static + Live split (limite-historico fix) ──────────────────────────
+
+describe("ChatDisplay — Static/Live split (limite-historico fix)", () => {
+  it("mensagem em streaming fica na live view (não no static)", () => {
+    // Quando uma mensagem está sendo streamada, ela NÃO pode ir para <Static>
+    // (que escreve uma vez e nunca atualiza). Deve ficar na live view.
+    const messages: ChatMessage[] = [
+      { role: "user", content: "old1" },
+      { role: "assistant", content: "old2" },
+      { role: "user", content: "old3" },
+      { role: "assistant", content: "old4" },
+      { role: "user", content: "old5" },
+      { role: "assistant", content: "streaming...", isStreaming: true },
+    ];
+    const { lastFrame } = render(<ChatDisplay messages={messages} />);
+    const out = stripAnsi(lastFrame() ?? "");
+    // A mensagem em streaming deve aparecer (na live view)
+    expect(out).toContain("streaming...");
+    // Mensagens antigas também aparecem (no static ou live, dependendo do split)
+    expect(out).toContain("old1");
+    expect(out).toContain("old5");
+  });
+
+  it("conversa longa: todas as mensagens aparecem (static + live)", () => {
+    // 20 mensagens — as primeiras vão para <Static>, as últimas ficam live.
+    // Todas devem aparecer no output final.
+    const messages: ChatMessage[] = Array.from({ length: 20 }, (_, i) => ({
+      role: i % 2 === 0 ? "user" as const : "assistant" as const,
+      content: `Mensagem ${i}`,
+    }));
+    const { lastFrame } = render(<ChatDisplay messages={messages} />);
+    const out = stripAnsi(lastFrame() ?? "");
+    // Primeira e última devem aparecer
+    expect(out).toContain("Mensagem 0");
+    expect(out).toContain("Mensagem 19");
+    // Alguma do meio também
+    expect(out).toContain("Mensagem 10");
+  });
+
+  it("quando streaming termina, mensagem gradua para static sem desaparecer", () => {
+    // Simula: mensagem estava streaming (live), depois termina (isStreaming=false).
+    // Na próxima render, ela deve ir para <Static> e continuar visível.
+    const streamingMessages: ChatMessage[] = [
+      { role: "user", content: "pergunta" },
+      { role: "assistant", content: "resposta parcial", isStreaming: true },
+    ];
+    const { lastFrame: f1, rerender } = render(<ChatDisplay messages={streamingMessages} />);
+    const out1 = stripAnsi(f1() ?? "");
+    expect(out1).toContain("resposta parcial");
+
+    // Agora o streaming terminou — isStreaming=false
+    const finalMessages: ChatMessage[] = [
+      { role: "user", content: "pergunta" },
+      { role: "assistant", content: "resposta completa", isStreaming: false },
+      { role: "user", content: "nova pergunta" },
+    ];
+    rerender(<ChatDisplay messages={finalMessages} />);
+    const out2 = stripAnsi(f1() ?? "");
+    // A resposta (agora completa) deve continuar visível
+    expect(out2).toContain("resposta completa");
+    expect(out2).toContain("nova pergunta");
+  });
+
+  it("MIN_LIVE_MESSAGES: pelo menos 4 mensagens ficam na live view", () => {
+    // Com 6 mensagens (nenhuma streaming), as primeiras 2 vão para static
+    // e as últimas 4 ficam live. Mas todas aparecem no output.
+    const messages: ChatMessage[] = Array.from({ length: 6 }, (_, i) => ({
+      role: "user" as const,
+      content: `msg${i}`,
+    }));
+    const { lastFrame } = render(<ChatDisplay messages={messages} />);
+    const out = stripAnsi(lastFrame() ?? "");
+    expect(out).toContain("msg0");
+    expect(out).toContain("msg5");
+  });
+});

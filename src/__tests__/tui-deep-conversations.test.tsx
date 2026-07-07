@@ -93,16 +93,21 @@ describe("Long conversations — 50+ messages of mixed types", () => {
     expect(out).not.toContain("Msg 0");
   });
 
-  it("renders 200 messages (only last 50 by default)", () => {
+  it("renders 200 messages (all visible — limite-historico fix)", () => {
     const messages: ChatMessage[] = Array.from({ length: 200 }, (_, i) => ({
       role: "user" as const,
       content: `Message ${i}`,
     }));
     const { lastFrame } = render(<ChatDisplay messages={messages} />);
     const out = stripAnsi(lastFrame() ?? "");
+    // BUG FIX (limite-historico): ChatDisplay now renders ALL messages by
+    // default (maxVisible=Infinity). Previously only the last 50 were
+    // rendered, so Message 0-149 were invisible to the user (couldn't scroll
+    // up to see them because Ink never wrote them to stdout).
     expect(out).toContain("Message 199");
     expect(out).toContain("Message 150");
-    expect(out).not.toContain("Message 149");
+    expect(out).toContain("Message 149");
+    expect(out).toContain("Message 0");
   });
 
   it("renders conversation with system messages interspersed", () => {
@@ -438,9 +443,10 @@ describe("StatusBar — various token counts and context windows", () => {
       />
     );
     const out = stripAnsi(lastFrame() ?? "");
-    // Should NOT crash — should render clamped bar (15 # chars)
+    // Should NOT crash — should render clamped bar (10 # chars)
+    // Bar is now 10 segments on a LINEAR scale (was 15 with log scale).
     expect(out).toContain("300k/256k");
-    expect(out).toContain("###############"); // 15 # (clamped, no - chars)
+    expect(out).toContain("##########"); // 10 # (clamped, no - chars)
     expect(out).toContain("117%"); // 300/256 = 1.17 = 117%
   });
 
@@ -598,8 +604,8 @@ describe("StatusBar — context bar fill verification", () => {
       <StatusBar {...baseStatusBarProps} totalTokens={0} promptTokens={0} completionTokens={0} contextWindow={256000} />
     );
     const out = stripAnsi(lastFrame() ?? "");
-    // 15 dashes, no #
-    expect(out).toContain("---------------");
+    // 10 dashes, no # (bar is now 10 segments, was 15)
+    expect(out).toContain("----------");
     expect(out).not.toContain("#");
   });
 
@@ -608,10 +614,10 @@ describe("StatusBar — context bar fill verification", () => {
       <StatusBar {...baseStatusBarProps} totalTokens={256000} promptTokens={200000} completionTokens={56000} contextWindow={256000} />
     );
     const out = stripAnsi(lastFrame() ?? "");
-    expect(out).toContain("###############");
+    expect(out).toContain("##########");
     // Should not have any dashes in the bar (only the # are the bar)
-    // The bar is between two spaces, so check for " ############### "
-    expect(out).toMatch(/#{15}/);
+    // The bar is between two spaces, so check for " ########## "
+    expect(out).toMatch(/#{10}/);
   });
 
   it("renders ~50% fill (mix of # and -)", () => {
@@ -619,9 +625,8 @@ describe("StatusBar — context bar fill verification", () => {
       <StatusBar {...baseStatusBarProps} totalTokens={128000} promptTokens={100000} completionTokens={28000} contextWindow={256000} />
     );
     const out = stripAnsi(lastFrame() ?? "");
-    // 50% of 15 = 7.5, rounded to 8
-    // 12 # + 3 - (log scale)
-    expect(out).toMatch(/#{12}-{3}/);
+    // LINEAR scale, 10 segments: Math.floor(0.5 * 10) = 5 # chars + 5 dashes
+    expect(out).toMatch(/#{5}-{5}/);
   });
 
   it("renders ~25% fill", () => {
@@ -629,9 +634,8 @@ describe("StatusBar — context bar fill verification", () => {
       <StatusBar {...baseStatusBarProps} totalTokens={64000} promptTokens={50000} completionTokens={14000} contextWindow={256000} />
     );
     const out = stripAnsi(lastFrame() ?? "");
-    // 25% of 15 = 3.75, rounded to 4
-    // 8 # + 7 - (log scale)
-    expect(out).toMatch(/#{8}-{7}/);
+    // LINEAR scale, 10 segments: Math.floor(0.25 * 10) = 2 # chars + 8 dashes
+    expect(out).toMatch(/#{2}-{8}/);
   });
 
   it("renders ~75% fill", () => {
@@ -639,9 +643,8 @@ describe("StatusBar — context bar fill verification", () => {
       <StatusBar {...baseStatusBarProps} totalTokens={192000} promptTokens={150000} completionTokens={42000} contextWindow={256000} />
     );
     const out = stripAnsi(lastFrame() ?? "");
-    // 75% of 15 = 11.25, rounded to 11
-    // 14 # + 1 - (log scale)
-    expect(out).toMatch(/#{14}-{1}/);
+    // LINEAR scale, 10 segments: Math.floor(0.75 * 10) = 7 # chars + 3 dashes
+    expect(out).toMatch(/#{7}-{3}/);
   });
 });
 

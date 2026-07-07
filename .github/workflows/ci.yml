@@ -16,7 +16,7 @@ jobs:
         with:
           node-version: "20"
           cache: "npm"
-      - run: npm ci
+      - run: npm install --legacy-peer-deps
       - run: npx eslint src/ --no-warn-ignored --max-warnings 9999
         continue-on-error: true
 
@@ -29,7 +29,7 @@ jobs:
         with:
           node-version: "20"
           cache: "npm"
-      - run: npm ci
+      - run: npm install --legacy-peer-deps
       - run: npx tsc --noEmit
 
   test:
@@ -43,7 +43,7 @@ jobs:
         with:
           node-version: "20"
           cache: "npm"
-      - run: npm ci
+      - run: npm install --legacy-peer-deps
       - name: Run tests
         run: npx vitest run --coverage --coverage.reporter=lcov --coverage.reporter=text-summary --exclude src/__tests__/memory-full.test.ts
       - name: Upload coverage

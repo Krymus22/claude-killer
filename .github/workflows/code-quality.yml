@@ -18,7 +18,7 @@ jobs:
         with:
           node-version: "20"
           cache: "npm"
-      - run: npm ci
+      - run: npm install --legacy-peer-deps
       - name: Run Knip (report only, non-blocking)
         run: npx knip --reporter standard || true
         continue-on-error: true
@@ -41,7 +41,7 @@ jobs:
         with:
           node-version: "20"
           cache: "npm"
-      - run: npm ci
+      - run: npm install --legacy-peer-deps
       - name: Check formatting (report only, non-blocking)
         run: npx prettier --check "src/**/*.{ts,tsx}" --ignore-path .prettierignore
         continue-on-error: true

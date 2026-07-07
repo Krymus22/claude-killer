@@ -24,7 +24,7 @@ jobs:
         with:
           node-version: "20"
           cache: "npm"
-      - run: npm ci
+      - run: npm install --legacy-peer-deps
       - run: npx tsc --noEmit
       - name: Run tests with coverage
         run: npx vitest run --coverage

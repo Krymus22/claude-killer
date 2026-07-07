@@ -15,7 +15,9 @@ jobs:
   mutation-test:
     name: Mutation Testing (Caseiro)
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    # 10 horas = 600 min. Modo completo leva ~5h (3150 mutações × 6s cada).
+    # Janela: 22:00 BRT até 08:00 BRT (10h).
+    timeout-minutes: 600
     env:
       NVIDIA_API_KEY: dummy
       NODE_ENV: test
@@ -26,13 +28,12 @@ jobs:
           node-version: "20"
           cache: "npm"
       - run: npm ci
-      - name: Run mutation tests
+      - name: Run mutation tests (full mode)
         run: |
-          # Run the homemade mutation tester
-          # Exit code 0 = all mutations killed (perfect tests)
-          # Exit code 1 = some mutations survived (test gaps found)
-          # Either way, we continue to upload the report
-          python3 scripts/mutation-test.py --quick || true
+          # Full mode: all mutations per file (not just 5)
+          # Estimated: ~3150 mutations × ~6s = ~5h15m
+          # Timeout: 10h (ample margin)
+          python3 scripts/mutation-test.py || true
       - name: Upload mutation report
         if: always()
         uses: actions/upload-artifact@v4

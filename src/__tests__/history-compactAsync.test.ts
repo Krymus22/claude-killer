@@ -24,6 +24,11 @@ vi.mock("../extensions.js", () => ({
 
 vi.mock("../effortLevels.js", () => ({
   getEffortPromptSnippet: vi.fn(() => ""),
+  // Bug Hunter #2a (part 3): compactHistoryAsync now gates LLM compaction on
+  // shouldUseIntelligentCompaction() (§6.6: effortLevel=low disables LLM).
+  // Default mock returns true (medium/high/max) so existing LLM-path tests
+  // still exercise the LLM branch.
+  shouldUseIntelligentCompaction: vi.fn(() => true),
 }));
 
 vi.mock("../logger.js", () => ({

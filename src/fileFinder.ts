@@ -37,6 +37,41 @@ export interface SearchProgress {
 // --- Defined Folders Search (fast) -------------------------------------------
 
 /**
+ * Reject file names that contain path separators or traversal characters.
+ * Used to harden shell commands (`which ${fileName}`) and path.join() against
+ * command injection and path traversal.
+ *
+ * Bug Hunter #9: previously, a fileName like `foo; rm -rf /` would be
+ * interpolated directly into the `which` shell command, allowing arbitrary
+ * command execution. A fileName like `../../etc/passwd` would let
+ * path.join() escape the target directory. Now we reject these.
+ */
+function isSafeFileName(name: string): boolean {
+  if (typeof name !== "string" || name.length === 0) return false;
+  // Reject path separators, NUL, and any control chars.
+  if (/[\/\\\u0000-\u001f]/.test(name)) return false;
+  // Reject path traversal.
+  if (name === ".." || name === "." || name.includes("..")) return false;
+  // Reject shell metacharacters that could allow command injection when
+  // interpolated into `which ${fileName}` (we use shell: true there).
+  if (/[;&|`$()<>!\n\r]/.test(name)) return false;
+  return true;
+}
+
+/**
+ * Reject mode names that contain path separators or traversal characters.
+ * Bug Hunter #9: previously, a modeName like `../../etc` would let
+ * path.join(home, ".claude-killer", "modes", modeName, "tools") escape the
+ * intended tools/ directory (resolving to home/.claude-killer/etc/tools).
+ */
+function isSafeModeName(name: string): boolean {
+  if (typeof name !== "string" || name.length === 0) return false;
+  if (/[\/\\\u0000-\u001f]/.test(name)) return false;
+  if (name === ".." || name === "." || name.includes("..")) return false;
+  return true;
+}
+
+/**
  * Search for a file in known/predefined folders.
  * This is fast (~1s) and doesn't need user permission.
  *
@@ -54,6 +89,19 @@ export function searchInDefinedFolders(
   fileName: string,
   modeName: string | null,
 ): SearchResult[] {
+  // Validate fileName — empty/unsafe fileName would either return the
+  // directory itself as a result (empty path.join) or allow command
+  // injection via `which ${fileName}`. Bug Hunter #9.
+  if (!isSafeFileName(fileName)) {
+    log.debug(`[FILE_FINDER] searchInDefinedFolders: rejected unsafe fileName "${fileName}"`);
+    return [];
+  }
+  // Validate modeName (only if provided)
+  if (modeName != null && !isSafeModeName(modeName)) {
+    log.debug(`[FILE_FINDER] searchInDefinedFolders: rejected unsafe modeName "${modeName}"`);
+    return [];
+  }
+
   const home = process.env.HOME ?? process.env.USERPROFILE ?? os.homedir();
   const platform = process.platform;
   const exeName = platform === "win32" ? `${fileName}.exe` : fileName;
@@ -89,10 +137,16 @@ export function searchInDefinedFolders(
     }
   }
 
-  // Search PATH (which/where)
+  // Search PATH (which/where). Use execSync with shell:false and pass the
+  // fileName as a separate argv element to avoid command injection when
+  // fileName contains shell metacharacters. Bug Hunter #9.
   try {
     const cmd = platform === "win32" ? "where" : "which";
-    const result = execSync(`${cmd} ${fileName}`, {
+    // Even though isSafeFileName already rejected dangerous chars, we
+    // additionally quote the fileName so any future relaxations of the
+    // allowlist can't introduce an injection.
+    const quoted = `"${fileName.replace(/"/g, '\\"')}"`;
+    const result = execSync(`${cmd} ${quoted}`, {
       encoding: "utf8",
       timeout: 5000,
       stdio: ["pipe", "pipe", "ignore"],
@@ -130,6 +184,14 @@ export async function searchEntireMachine(
   onProgress?: (progress: SearchProgress) => void,
   abortSignal?: { aborted: boolean },
 ): Promise<SearchResult[]> {
+  // Validate fileName — same rationale as searchInDefinedFolders: prevents
+  // command injection into `find / -name "${exeName}"` and `where /R`.
+  // Bug Hunter #9.
+  if (!isSafeFileName(fileName)) {
+    log.debug(`[FILE_FINDER] searchEntireMachine: rejected unsafe fileName "${fileName}"`);
+    return [];
+  }
+
   const platform = process.platform;
   const exeName = platform === "win32" ? `${fileName}.exe` : fileName;
   const results: SearchResult[] = [];
@@ -144,7 +206,13 @@ export async function searchEntireMachine(
       log.debug(`[FILE_FINDER] Scanning ${drive}...`);
 
       try {
-        const result = execSync(`where /R "${drive}" "${exeName}"`, {
+        // Both `drive` and `exeName` are validated/sanitized:
+        //   - drive comes from fsutil (or static fallback) — no shell metas
+        //   - exeName comes from isSafeFileName-checked fileName
+        // We still quote them to be defense-in-depth.
+        const safeDrive = drive.replace(/"/g, "");
+        const safeExe = exeName.replace(/"/g, "");
+        const result = execSync(`where /R "${safeDrive}" "${safeExe}"`, {
           encoding: "utf8",
           timeout: 120000, // 2 min per drive
           stdio: ["pipe", "pipe", "ignore"],
@@ -166,8 +234,11 @@ export async function searchEntireMachine(
     log.debug(`[FILE_FINDER] Scanning / with find...`);
 
     try {
+      // exeName already validated by isSafeFileName (no quotes, no $, etc.)
+      // so double-quoting is safe and prevents wildcard expansion.
+      const safeExe = exeName.replace(/"/g, "");
       const result = execSync(
-        `find / -name "${exeName}" -type f \\( -perm -u+x -o -name "*.exe" \\) 2>/dev/null | head -20`,
+        `find / -name "${safeExe}" -type f \\( -perm -u+x -o -name "*.exe" \\) 2>/dev/null | head -20`,
         {
           encoding: "utf8",
           timeout: 120000,
@@ -232,12 +303,17 @@ export async function searchFile(
   askPermission?: () => Promise<boolean>,
   onProgress?: (progress: SearchProgress) => void,
 ): Promise<{ results: SearchResult[]; searchedEntireMachine: boolean }> {
-  // Step 1: Defined folders (fast)
+  // Step 1: Defined folders (fast) — also validates fileName/modeName.
   log.info(`[FILE_FINDER] Step 1: searching defined folders for "${fileName}"...`);
   const definedResults = searchInDefinedFolders(fileName, modeName);
 
   if (definedResults.length > 0) {
     return { results: definedResults, searchedEntireMachine: false };
+  }
+
+  // If fileName was rejected as unsafe, don't proceed to slow machine search.
+  if (!isSafeFileName(fileName)) {
+    return { results: [], searchedEntireMachine: false };
   }
 
   // Step 2: Ask permission for full machine search
@@ -267,8 +343,29 @@ export async function searchFile(
  * @returns Path where the file was copied, or null on error
  */
 export function copyToModeTools(sourcePath: string, modeName: string): string | null {
+  // Validate modeName against path traversal. Bug Hunter #9: previously,
+  // modeName = "../../etc" would make path.join() escape the intended
+  // tools/ directory. Now we reject unsafe mode names.
+  if (!isSafeModeName(modeName)) {
+    log.error(`[FILE_FINDER] copyToModeTools: rejected unsafe modeName "${modeName}"`);
+    return null;
+  }
+  if (typeof sourcePath !== "string" || sourcePath.length === 0) {
+    log.error(`[FILE_FINDER] copyToModeTools: sourcePath must be a non-empty string`);
+    return null;
+  }
+
   const home = process.env.HOME ?? process.env.USERPROFILE ?? os.homedir();
   const toolsDir = path.join(home, ".claude-killer", "modes", modeName, "tools");
+
+  // Defense-in-depth: verify the resolved toolsDir didn't escape the
+  // modes/ root (e.g. via a future bypass of isSafeModeName).
+  const modesRoot = path.join(home, ".claude-killer", "modes");
+  const resolvedTools = path.resolve(toolsDir);
+  if (!resolvedTools.startsWith(modesRoot + path.sep) && resolvedTools !== modesRoot) {
+    log.error(`[FILE_FINDER] copyToModeTools: resolved toolsDir "${resolvedTools}" escapes modes root`);
+    return null;
+  }
 
   // Create tools dir if it doesn't exist
   if (!fs.existsSync(toolsDir)) {

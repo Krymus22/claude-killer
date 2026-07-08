@@ -19,7 +19,7 @@ export type { Message };
 import type OpenAI from "openai";
 
 import { getActiveSkills } from "./extensions.js";
-import { getEffortPromptSnippet } from "./effortLevels.js";
+import { getEffortPromptSnippet, shouldUseIntelligentCompaction } from "./effortLevels.js";
 import { config } from "./config.js";
 import { getPatternsCached } from "./patternExtractor.js";
 
@@ -361,7 +361,7 @@ const TOOL_ROUTING_RULES = `## Tool Routing — CRITICAL
 
 NEVER use \`executar_comando\` for file operations when a dedicated tool exists:
 
-- To READ a file → use \`ler_arquivo({ caminho })\`. NEVER \`executar_comando("cat file")\`.
+- To READ a file → use \`ler_arquivo({ path })\`. NEVER \`executar_comando("cat file")\`.
 - To SEARCH file content → use \`buscar_texto({ pattern })\`. NEVER \`executar_comando("grep ...")\`.
 - To FIND files → use \`buscar_arquivos({ pattern })\`. NEVER \`executar_comando("find ...")\` or \`executar_comando("ls ...")\`.
 - To EDIT a file → use \`editar_arquivo\` or \`editar_multi_arquivos\`. NEVER \`executar_comando("sed ...")\` or \`executar_comando("echo > file")\`.
@@ -424,7 +424,7 @@ export function getSystemPrompt(): string {
     basePrompt = `[SYSTEM NOTE: CAVEMAN MODE IS ACTIVE (Level: ${currentCavemanLevel}). You MUST strictly adhere to the caveman rules below for ALL replies. Speaking in standard conversational prose is strictly forbidden. Keep all technical terms, code blocks, and exact strings intact.]\n\n${basePrompt}`;
   }
 
-    const memoryFiles = loadProjectMemoryFilesCached();
+  const memoryFiles = loadProjectMemoryFilesCached();
   if (memoryFiles.length > 0) {
     const fileList = memoryFiles
       .map((f) => `- ${f.relativePath} (${formatFileSize(f.sizeBytes)})`)
@@ -601,9 +601,17 @@ export function loadHistoryDirect(messages: Message[]): void {
   // Collect all tool_call_ids from assistant messages, and all tool_call_ids
   // that have matching tool results. Any assistant tool_call_id WITHOUT a
   // matching tool result is an "orphan" — inject a synthetic error result.
+  //
+  // BUG FIX (Bug Hunter #2a — part 2): the loop previously accessed `m.role`
+  // directly. If the caller passed an array containing null/undefined entries
+  // (e.g. `loadHistoryDirect([null])`), `m.role` threw TypeError, crashing
+  // session load. Now we guard with `if (!m) continue;` so malformed input
+  // is tolerated instead of crashing — defense in depth on top of the
+  // optional-chaining check on `messages[0]` above.
   const toolCallIds = new Set<string>();
   const toolResultIds = new Set<string>();
   for (const m of history) {
+    if (!m) continue;
     if (m.role === "assistant" && Array.isArray((m as any).tool_calls)) {
       for (const tc of (m as any).tool_calls) {
         if (tc?.id) toolCallIds.add(tc.id);
@@ -638,7 +646,7 @@ export function loadHistoryDirect(messages: Message[]): void {
     for (const orphanId of orphans) {
       // Find the assistant message that has this tool_call_id
       const assistantIdx = history.findIndex(
-        (m) => m.role === "assistant" && Array.isArray((m as any).tool_calls) &&
+        (m) => !!m && m.role === "assistant" && Array.isArray((m as any).tool_calls) &&
           (m as any).tool_calls.some((tc: any) => tc?.id === orphanId)
       );
       if (assistantIdx >= 0) {
@@ -647,7 +655,7 @@ export function loadHistoryDirect(messages: Message[]): void {
         // at the END of this block so that the tool messages remain in the
         // same order as the tool_calls array on the assistant message.
         let insertIdx = assistantIdx + 1;
-        while (insertIdx < history.length && history[insertIdx]!.role === "tool") {
+        while (insertIdx < history.length && history[insertIdx]?.role === "tool") {
           insertIdx++;
         }
         history.splice(insertIdx, 0, {
@@ -658,6 +666,42 @@ export function loadHistoryDirect(messages: Message[]): void {
       }
     }
     console.warn(`[SESSION] Repaired ${orphans.length} orphan tool_call(s) with synthetic error results (BS-4 fix)`);
+  }
+
+  // ── Remove dangling tool messages (Bug Hunter #2a — part 2) ─────────────
+  // A "dangling tool message" is a tool role message whose `tool_call_id`
+  // does NOT match any assistant `tool_calls[].id` in history. The OpenAI
+  // API rejects these with 400 ("Could not find tool call with id '...'"),
+  // permanently breaking the session. This can happen when:
+  //   - The session file is corrupted (manual edit, partial write).
+  //   - An older version of the code dropped an assistant message but kept
+  //     its tool results.
+  //   - A future bug in compaction removes an assistant without cleaning up
+  //     its tool results.
+  //
+  // compactHistoryAsync() already does this cleanup (see "Remove dangling
+  // tool messages" block further down). loadHistoryDirect() is the entry
+  // point for session LOAD, so it must also do this cleanup — otherwise a
+  // session file with dangling tool messages would crash on load AND every
+  // subsequent turn. This is the inverse of the BS-4 orphan repair above
+  // (orphans = missing tool results; dangling = extra tool results). Both
+  // must be handled for the history to be API-valid. Consistent with §6.6
+  // ("Dangling tool messages are removed pós-compaction") and §7.4 (orphan
+  // tool_calls repair) — these are complementary defenses, not a violation.
+  if (toolCallIds.size > 0 || toolResultIds.size > 0) {
+    const beforeLen = history.length;
+    history = history.filter((m) => {
+      if (!m) return false; // also drop null/undefined entries here
+      if (m.role === "tool") {
+        const id = (m as any).tool_call_id;
+        if (typeof id === "string" && !toolCallIds.has(id)) return false;
+      }
+      return true;
+    });
+    const removedCount = beforeLen - history.length;
+    if (removedCount > 0) {
+      console.warn(`[SESSION] Removed ${removedCount} dangling tool message(s) without matching assistant tool_call (Bug Hunter #2a part 2)`);
+    }
   }
 
   // NOTE: intentionally does NOT call tryAppendToSession — these messages
@@ -795,9 +839,23 @@ export function resetHistory(): void {
  * array order). This is defense-in-depth: ideally the compaction strategies
  * themselves wouldn't create orphans, but replaceHistory is the last line
  * of defense before the API call.
+ *
+ * Bug fix (Bug Hunter #2a — part 2): three additional defenses:
+ *   1. `messages[0].role !== "system"` crashed with TypeError when
+ *      `messages[0]` was null/undefined (e.g. `replaceHistory([null])`).
+ *      Now uses optional chaining to match loadHistoryDirect's pattern.
+ *   2. The orphan repair loop accessed `m.role` directly, crashing on
+ *      null/undefined entries. Now guarded with `if (!m) continue;`.
+ *   3. Dangling tool messages (tool result with no matching assistant
+ *      tool_call) are now removed, mirroring compactHistoryAsync's cleanup.
+ *      The API rejects these with 400 ("Could not find tool call with id").
  */
 export function replaceHistory(messages: Message[]): void {
-  if (messages.length === 0 || messages[0].role !== "system") {
+  // BUG FIX (Bug Hunter #2a — part 2): use optional chaining to match
+  // loadHistoryDirect's pattern. Previously, `messages[0].role` threw
+  // TypeError when `messages[0]` was null/undefined (e.g. corrupted
+  // compaction output, or a caller passing `[null]`).
+  if (messages.length === 0 || messages[0]?.role !== "system") {
     history = [{ role: "system", content: getSystemPrompt() }, ...messages];
   } else {
     history = [...messages];
@@ -809,9 +867,13 @@ export function replaceHistory(messages: Message[]): void {
   // forward over the contiguous tool block following the assistant and insert
   // at the END, so multiple orphans on the same assistant stay in tool_calls
   // array order (API requirement).
+  //
+  // BUG FIX (Bug Hunter #2a — part 2): guard against null/undefined entries
+  // (defense in depth — see loadHistoryDirect's similar guard).
   const toolCallIds = new Set<string>();
   const toolResultIds = new Set<string>();
   for (const m of history) {
+    if (!m) continue;
     if (m.role === "assistant" && Array.isArray((m as any).tool_calls)) {
       for (const tc of (m as any).tool_calls) {
         if (tc?.id) toolCallIds.add(tc.id);
@@ -826,7 +888,7 @@ export function replaceHistory(messages: Message[]): void {
   if (orphans.length > 0) {
     for (const orphanId of orphans) {
       const assistantIdx = history.findIndex(
-        (m) => m.role === "assistant" && Array.isArray((m as any).tool_calls) &&
+        (m) => !!m && m.role === "assistant" && Array.isArray((m as any).tool_calls) &&
           (m as any).tool_calls.some((tc: any) => tc?.id === orphanId)
       );
       if (assistantIdx >= 0) {
@@ -834,7 +896,7 @@ export function replaceHistory(messages: Message[]): void {
         // immediately follow the assistant. Insert at the END so tool messages
         // remain in the same order as the tool_calls array (Bug Hunter #2a).
         let insertIdx = assistantIdx + 1;
-        while (insertIdx < history.length && history[insertIdx]!.role === "tool") {
+        while (insertIdx < history.length && history[insertIdx]?.role === "tool") {
           insertIdx++;
         }
         history.splice(insertIdx, 0, {
@@ -845,6 +907,29 @@ export function replaceHistory(messages: Message[]): void {
       }
     }
     console.warn(`[HISTORY] Repaired ${orphans.length} orphan tool_call(s) after replaceHistory (compaction side-effect)`);
+  }
+
+  // ── Remove dangling tool messages (Bug Hunter #2a — part 2) ─────────────
+  // Mirrors the same cleanup in loadHistoryDirect() (see comment there) and
+  // compactHistoryAsync(). Dangling tool messages (tool result with no
+  // matching assistant tool_call) cause API 400 errors. Consistent with
+  // §6.6 ("Dangling tool messages are removed pós-compaction") — this is
+  // the inverse of the orphan repair above and complementary, not a §17
+  // violation.
+  if (toolCallIds.size > 0 || toolResultIds.size > 0) {
+    const beforeLen = history.length;
+    history = history.filter((m) => {
+      if (!m) return false; // also drop null/undefined entries here
+      if (m.role === "tool") {
+        const id = (m as any).tool_call_id;
+        if (typeof id === "string" && !toolCallIds.has(id)) return false;
+      }
+      return true;
+    });
+    const removedCount = beforeLen - history.length;
+    if (removedCount > 0) {
+      console.warn(`[HISTORY] Removed ${removedCount} dangling tool message(s) after replaceHistory (Bug Hunter #2a part 2)`);
+    }
   }
 }
 
@@ -908,15 +993,39 @@ export async function compactHistoryAsync(customInstruction?: string): Promise<C
     "## Invoked Skills",  // Gap 9: preserve re-injected skills
   ];
 
+  // ── Bug Hunter #2a (part 3): dedup by PREFIX, keep LATEST ──────────────
+  // Previously this loop deduped by EXACT content match. That correctly
+  // prevented identical messages (e.g. [SESSION CONTINUATION], which is a
+  // static string) from accumulating, but it did NOT prevent regenerated
+  // messages whose content CHANGES every compaction from piling up:
+  //
+  //   - [CONVERSATION MEMORY]  → buildCompactionSummary produces a new one
+  //                              with a different N + different details
+  //   - ## Recently Modified Files → re-hydration reads CURRENT file content
+  //   - ## Invoked Skills          → re-injection reads CURRENT skill content
+  //
+  // After N compactions there were N stale [CONVERSATION MEMORY] summaries,
+  // N stale re-hydration snapshots, and N stale skill snapshots permanently
+  // in context — pure bloat (~3-10 KB each), and the IA also saw multiple
+  // conflicting versions of "what happened" / "what files look like".
+  //
+  // Fix: iterate END→START and keep only the LATEST message for each prefix.
+  // §6.4/§6.6 require the PREFIX to survive compaction — keeping the most
+  // recent instance satisfies that without unbounded growth. For prefixes
+  // that are never regenerated (## TASK_STATE, ## Persistent Memory, [PLAN,
+  // [SESSION CONTINUATION) there is only one instance anyway (addSystemMessage
+  // already dedupes them via REPLACABLE_PREFIXES), so this is a no-op for
+  // those. prepend (unshift) to preserve chronological order in the output.
   const preservedSystem: Message[] = [];
-  for (let i = 1; i < history.length - COMPACT_KEEP_RECENT; i++) {
+  const seenPrefixes = new Set<string>();
+  for (let i = history.length - COMPACT_KEEP_RECENT - 1; i >= 1; i--) {
     const m = history[i];
     if (m.role !== "system") continue;
     const content = typeof m.content === "string" ? m.content : "";
-    if (PRESERVE_PREFIXES.some(p => content.startsWith(p))) {
-      if (!preservedSystem.some(p => (typeof p.content === "string" ? p.content : "") === content)) {
-        preservedSystem.push(m);
-      }
+    const matchedPrefix = PRESERVE_PREFIXES.find((p) => content.startsWith(p));
+    if (matchedPrefix && !seenPrefixes.has(matchedPrefix)) {
+      seenPrefixes.add(matchedPrefix);
+      preservedSystem.unshift(m); // prepend → chronological order
     }
   }
 
@@ -936,7 +1045,16 @@ export async function compactHistoryAsync(customInstruction?: string): Promise<C
 
   try {
     const { llmCompact, isLlmCompactionAvailable } = await import("./llmCompactor.js");
-    const llmAvailable = await isLlmCompactionAvailable();
+    // Bug Hunter #2a (part 3): §6.6 — "effortLevel = "low" desabilita LLM
+    // compaction — usa só mechanical." The auto path (contextCompaction.ts →
+    // smartCompact) already gates on shouldUseIntelligentCompaction() before
+    // calling modelBasedCompactionAsync(), but this manual /compact path
+    // (compactHistoryAsync) did NOT — so running /compact with effort=low
+    // would still fire an LLM summarization call, violating §6.6 and wasting
+    // a round-trip the user explicitly opted out of. Gate here too.
+    // shouldUseIntelligentCompaction() returns `currentLevel !== "low"`.
+    const lowEffort = !shouldUseIntelligentCompaction();
+    const llmAvailable = !lowEffort && await isLlmCompactionAvailable();
     if (llmAvailable) {
       console.log("[COMPACT] Generating LLM-based summary...");
       const llmSummary = await llmCompact(compactedMessages, customInstruction);
@@ -950,7 +1068,9 @@ export async function compactHistoryAsync(customInstruction?: string): Promise<C
         method = "mechanical";
       }
     } else {
-      console.log("[COMPACT] LLM not available, using mechanical compaction.");
+      console.log(lowEffort
+        ? "[COMPACT] effortLevel=low — LLM compaction disabled (§6.6), using mechanical."
+        : "[COMPACT] LLM not available, using mechanical compaction.");
       compactedSummary = buildCompactionSummary(compactedMessages);
       method = "mechanical";
     }
@@ -1012,10 +1132,17 @@ export async function compactHistoryAsync(customInstruction?: string): Promise<C
   }
 
   // Remove dangling tool messages that no longer match a tool_call in history
+  // Bug Hunter #2a (part 3): guard tc?.id — a corrupted/partial session file
+  // could yield null/undefined entries in tool_calls. Without the guard,
+  // `tc.id` throws TypeError and crashes compaction (the try/catch above only
+  // wraps the LLM call, not this cleanup). Mirrors the `if (tc?.id)` guard
+  // already present in loadHistoryDirect() and replaceHistory().
   const validToolIds = new Set<string>();
   for (const m of history) {
     if (m.role === "assistant" && Array.isArray((m as any).tool_calls)) {
-      for (const tc of (m as any).tool_calls) validToolIds.add(tc.id);
+      for (const tc of (m as any).tool_calls) {
+        if (tc?.id) validToolIds.add(tc.id);
+      }
     }
   }
   history = history.filter((m) => {
@@ -1064,15 +1191,19 @@ export function compactHistory(): CompactResult | null {
     "## Invoked Skills",  // Gap 9: preserve re-injected skills (Bug Hunter #2: was missing in sync version)
   ];
 
+  // Bug Hunter #2a (part 3): dedup by PREFIX, keep LATEST (see compactHistoryAsync
+  // for full rationale). Prevents [CONVERSATION MEMORY], ## Recently Modified
+  // Files, and ## Invoked Skills from accumulating across multiple compactions.
   const preservedSystem: Message[] = [];
-  for (let i = 1; i < history.length - COMPACT_KEEP_RECENT; i++) {
+  const seenPrefixes = new Set<string>();
+  for (let i = history.length - COMPACT_KEEP_RECENT - 1; i >= 1; i--) {
     const m = history[i];
     if (m.role !== "system") continue;
     const content = typeof m.content === "string" ? m.content : "";
-    if (PRESERVE_PREFIXES.some(p => content.startsWith(p))) {
-      if (!preservedSystem.some(p => (typeof p.content === "string" ? p.content : "") === content)) {
-        preservedSystem.push(m);
-      }
+    const matchedPrefix = PRESERVE_PREFIXES.find((p) => content.startsWith(p));
+    if (matchedPrefix && !seenPrefixes.has(matchedPrefix)) {
+      seenPrefixes.add(matchedPrefix);
+      preservedSystem.unshift(m); // prepend → chronological order
     }
   }
 
@@ -1090,10 +1221,17 @@ export function compactHistory(): CompactResult | null {
 
   history = [system, ...preservedSystem, summary, ...recent];
 
+  // Bug Hunter #2a (part 3): guard tc?.id — a corrupted/partial session file
+  // could yield null/undefined entries in tool_calls. Without the guard,
+  // `tc.id` throws TypeError and crashes compaction (the try/catch above only
+  // wraps the LLM call, not this cleanup). Mirrors the `if (tc?.id)` guard
+  // already present in loadHistoryDirect() and replaceHistory().
   const validToolIds = new Set<string>();
   for (const m of history) {
     if (m.role === "assistant" && Array.isArray((m as any).tool_calls)) {
-      for (const tc of (m as any).tool_calls) validToolIds.add(tc.id);
+      for (const tc of (m as any).tool_calls) {
+        if (tc?.id) validToolIds.add(tc.id);
+      }
     }
   }
   history = history.filter((m) => {
@@ -1146,6 +1284,14 @@ function buildCompactionSummary(messages: Message[]): string {
       // Collect tool names and details
       if (Array.isArray((m as any).tool_calls)) {
         for (const tc of (m as any).tool_calls) {
+          // Bug Hunter #2a (part 4): capture name safely with optional chaining.
+          // Previously, the `name` was captured safely here, but the if-blocks
+          // below used `tc.function.name` directly (without optional chaining).
+          // If `tc` or `tc.function` was undefined/null (malformed tool_call
+          // from a buggy API response or corrupted session file), `tc.function.name`
+          // threw TypeError. The try/catch swallowed it, silently dropping
+          // file/command tracking for that tool_call. Now we reuse the captured
+          // `name` (already null-safe) everywhere — no throw, no silent drop.
           const name = tc?.function?.name;
           if (name && !toolsUsed.includes(name)) toolsUsed.push(name);
           try {
@@ -1153,15 +1299,15 @@ function buildCompactionSummary(messages: Message[]): string {
             const filePath = args.path ?? args.caminho ?? args.filePath;
             // Track file modifications
             if (typeof filePath === "string" &&
-                (tc.function.name === "editar_arquivo" || tc.function.name === "editar_multi_arquivos")) {
+                (name === "editar_arquivo" || name === "editar_multi_arquivos")) {
               filesModified.add(filePath);
             }
             // Track files read
-            if (typeof filePath === "string" && tc.function.name === "ler_arquivo") {
+            if (typeof filePath === "string" && name === "ler_arquivo") {
               filesRead.add(filePath);
             }
             // Track commands run
-            if (tc.function.name === "executar_comando" && typeof args.comando === "string") {
+            if (name === "executar_comando" && typeof args.comando === "string") {
               commandsRun.push(args.comando.slice(0, 100));
             }
           } catch { /* ignore */ }
@@ -1258,6 +1404,13 @@ function buildCompactionSummary(messages: Message[]): string {
 
 /** Return a human-readable summary of the current history stats. */
 export function historySummary(): string {
+  // Bug Hunter #2a (part 4): call ensureHistoryInitialized() for consistency
+  // with getHistory() and historyLength(). Previously, if historySummary()
+  // was the first history function called (history === []), it returned ""
+  // instead of "system:1". Callers that compared historySummary() output
+  // before/after an action would see "" → "system:1, user:1" and misattribute
+  // the system prompt to the action. Now consistent: always initialized.
+  ensureHistoryInitialized();
   const roles = history.reduce<Record<string, number>>((acc, m) => {
     const r = (m as { role: string }).role;
     acc[r] = (acc[r] ?? 0) + 1;
@@ -1273,8 +1426,21 @@ function getToolName(toolCallId: string, currentIndex: number): string {
   for (let j = currentIndex - 1; j >= 0; j--) {
     const msg = history[j];
     if (msg.role === "assistant" && Array.isArray((msg as any).tool_calls)) {
-      const call = (msg as any).tool_calls.find((c: any) => c.id === toolCallId);
-      if (call) return call.function.name;
+      // Bug Hunter #2a (part 4): use optional chaining in the find callback
+      // too. If a tool_calls array contains a null entry (corrupted session
+      // file), `c.id` throws TypeError. The sibling functions
+      // (loadHistoryDirect, replaceHistory) already use `tc?.id` — getToolName
+      // was the lone holdout. Now consistent.
+      const call = (msg as any).tool_calls.find((c: any) => c?.id === toolCallId);
+      // Bug Hunter #2a (part 4): use optional chaining. Previously,
+      // `call.function.name` threw TypeError if `call.function` was undefined
+      // (malformed tool_call from a corrupted session file or buggy API
+      // response). This is NOT wrapped in try/catch anywhere up the call
+      // chain — optimizeToolMessage() and hasErrorBeenOvercomeAfterIndex()
+      // both call getToolName() directly. A throw here propagates all the way
+      // up to optimizeContext() → agent loop, crashing the agent. Now returns
+      // "" for malformed tool_calls (consistent with the "not found" path).
+      if (call) return call?.function?.name ?? "";
     }
   }
   return "";
@@ -1367,7 +1533,15 @@ function optimizeToolMessage(i: number): boolean {
   // não removendo conteúdo que a IA explicitamente solicitou.
 
   // ─── Error messages that have been overcome ────────────────────────────
-  if (isErrorMessage(content) && !content.startsWith("[ERRO ANTERIOR")) {
+  // Bug Hunter #2a (part 4): the prefix guard must match the replacement
+  // string used below ("[PREVIOUS ERROR OVERCOME..."). Previously the guard
+  // checked "[ERRO ANTERIOR" — a Portuguese prefix that doesn't match the
+  // English replacement. The bug was masked because isErrorMessage() returns
+  // false on the replacement content (no "[ERROR]" / "Error:" match), so the
+  // guard was dead code. But it's incorrect and misleading: if someone later
+  // widens isErrorMessage() to match "ERROR" (no brackets), the guard would
+  // fail to skip already-optimized messages, causing redundant reprocessing.
+  if (isErrorMessage(content) && !content.startsWith("[PREVIOUS ERROR OVERCOME")) {
     if (hasErrorBeenOvercomeAfterIndex(i, toolName)) {
       (history[i] as any).content = `[PREVIOUS ERROR OVERCOME AND OMITTED FOR OPTIMIZATION]`;
       return true;

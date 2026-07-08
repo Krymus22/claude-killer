@@ -30,8 +30,13 @@ export function applyEdits(content: string, edits: EditOperation[]): EditResult 
 
   for (const edit of edits) {
     if (!edit.search) {
-      // Empty search: if content is empty, set to replacement
-      if (currentContent === "") {
+      // Empty search: if content is empty OR whitespace-only, set to replacement.
+      // Bug Hunter #9: previously checked `currentContent === ""` exactly,
+      // which meant a file containing only whitespace (e.g. "  \n  \n") would
+      // be APPENDED to instead of replaced. This was inconsistent with
+      // `applyDiffs` in tools.ts which uses `.trim() === ""`. Now both code
+      // paths treat whitespace-only content as "effectively empty".
+      if (currentContent.trim() === "") {
         currentContent = edit.replace;
         totalReplacements += 1;
       } else {
@@ -123,6 +128,17 @@ export async function editFile(
   edits: EditOperation[],
   options?: { createIfMissing?: boolean; backup?: boolean }
 ): Promise<string> {
+  // Validate filePath / edits BEFORE path.resolve / .length — both crash on
+  // null/undefined. Bug Hunter #9: IA sometimes sends null args.
+  if (typeof filePath !== "string" || filePath === "") {
+    log.toolResult("editar_arquivo", false, "invalid filePath");
+    return `[ERROR] editar_arquivo: 'filePath' argument must be a non-empty string (received ${filePath === undefined ? "undefined" : JSON.stringify(filePath)}).`;
+  }
+  if (!Array.isArray(edits)) {
+    log.toolResult("editar_arquivo", false, "invalid edits");
+    return `[ERROR] editar_arquivo: 'edits' argument must be an array (received ${edits === undefined ? "undefined" : JSON.stringify(edits)}).`;
+  }
+
   const resolved = path.resolve(filePath);
   log.toolCall("editar_arquivo", { caminho: resolved, numEdits: edits.length });
 

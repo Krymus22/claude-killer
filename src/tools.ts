@@ -27,8 +27,25 @@ export interface LerArquivoArgs {
 /**
  * Read a file from the local filesystem and return its content as a string.
  * Returns a structured error message if the file cannot be read.
+ *
+ * Edge case handling (Bug Hunter #9):
+ *   - null/undefined/non-string `args.caminho` → returns error (no crash)
+ *   - empty string `args.caminho` → returns error (resolves to cwd which is
+ *     a directory but reading the cwd as a "file" is misleading)
+ *   - broken symlinks inside a directory listing → skip the entry instead
+ *     of throwing (previously `fs.statSync(full)` on a broken symlink would
+ *     throw and abort the whole listing, hiding all sibling entries)
  */
 export async function lerArquivo(args: LerArquivoArgs): Promise<string> {
+  // Validate args.caminho BEFORE path.resolve — path.resolve(undefined)
+  // throws TypeError synchronously, which would crash the caller instead
+  // of returning a graceful error message to the IA.
+  if (args == null || typeof args.caminho !== "string" || args.caminho === "") {
+    const msg = `[ERROR] ler_arquivo: 'caminho' argument is required (received ${args?.caminho === undefined ? "undefined" : JSON.stringify(args?.caminho)}).`;
+    log.toolResult("ler_arquivo", false, "invalid args");
+    return msg;
+  }
+
   const resolved = path.resolve(args.caminho);
   log.toolCall("ler_arquivo", { caminho: resolved });
 
@@ -41,10 +58,21 @@ export async function lerArquivo(args: LerArquivoArgs): Promise<string> {
 
     const stats = fs.statSync(resolved);
     if (stats.isDirectory()) {
-      // If path is a directory, list its contents instead
+      // If path is a directory, list its contents instead.
+      // Use lstatSync per entry so broken symlinks don't abort the whole
+      // listing — they're shown as `[link]` entries instead of crashing.
       const entries = fs.readdirSync(resolved).map((e) => {
         const full = path.join(resolved, e);
-        return fs.statSync(full).isDirectory() ? `[dir]  ${e}/` : `[file] ${e}`;
+        try {
+          const st = fs.lstatSync(full);
+          if (st.isSymbolicLink()) return `[link] ${e} ->`;
+          if (st.isDirectory()) return `[dir]  ${e}/`;
+          return `[file] ${e}`;
+        } catch {
+          // stat failed (permission denied, broken symlink, etc.) — still
+          // show the entry name so the IA knows it exists.
+          return `[?]    ${e}`;
+        }
       });
       const listing = entries.join("\n");
       log.toolResult("ler_arquivo", true, `directory listing (${entries.length} itens)`);
@@ -208,6 +236,20 @@ export function applyDiffs(original: string, blocks: DiffBlock[]): { success: bo
 export async function aplicarDiff(
   args: AplicarDiffArgs
 ): Promise<WriteResult> {
+  // Validate args BEFORE path.resolve / .length — both crash on null/undefined.
+  // Bug Hunter #9: IA sometimes sends empty args object {} when the schema
+  // isn't enforced; previously this threw TypeError synchronously.
+  if (args == null || typeof args.caminho !== "string" || args.caminho === "") {
+    const msg = `[ERROR] aplicar_diff: 'caminho' argument is required (received ${args?.caminho === undefined ? "undefined" : JSON.stringify(args?.caminho)}).`;
+    log.toolResult("aplicar_diff", false, "invalid args (caminho)");
+    return { written: false, toolMessage: msg };
+  }
+  if (typeof args.bloco_diff !== "string") {
+    const msg = `[ERROR] aplicar_diff: 'bloco_diff' argument must be a string (received ${args.bloco_diff === undefined ? "undefined" : JSON.stringify(args.bloco_diff)}).`;
+    log.toolResult("aplicar_diff", false, "invalid args (bloco_diff)");
+    return { written: false, toolMessage: msg };
+  }
+
   const resolved = path.resolve(args.caminho);
   log.toolCall("aplicar_diff", { caminho: resolved, diffLength: args.bloco_diff.length });
 
@@ -320,6 +362,11 @@ export interface DesfazerEdicaoArgs {
  * Returns a status message suitable for the model.
  */
 export function desfazerEdicao(args: DesfazerEdicaoArgs): string {
+  // Validate args before path.resolve (would throw TypeError on null/undefined).
+  if (args == null || typeof args.caminho !== "string" || args.caminho === "") {
+    log.toolResult("desfazer_edicao", false, "invalid args");
+    return t("tool.no_backup_available", args?.caminho ?? "");
+  }
   const resolved = path.resolve(args.caminho);
   log.toolCall("desfazer_edicao", { caminho: resolved });
 
@@ -388,8 +435,22 @@ export interface ExecutarComandoArgs {
 export async function executarComando(
   args: ExecutarComandoArgs
 ): Promise<string> {
+  // Validate args BEFORE spawn — spawn(undefined) throws TypeError
+  // synchronously, crashing the caller. Empty command on bash just exits 0
+  // (no-op), but PowerShell throws, so reject empty too for consistency.
+  if (args == null || typeof args.comando !== "string" || args.comando.trim() === "") {
+    const msg = t("tool.command_start_failed", "comando is required (empty or non-string)");
+    log.toolResult("executar_comando", false, "invalid args");
+    return msg;
+  }
+
+  // Clamp timeout: negative or zero would fire setTimeout immediately and
+  // SIGKILL the child before it even starts. Treat as "use default".
   const cwd = args.cwd ?? process.cwd();
-  const timeoutMs = args.timeoutMs ?? 60_000;
+  let timeoutMs = args.timeoutMs ?? 60_000;
+  if (typeof timeoutMs !== "number" || !isFinite(timeoutMs) || timeoutMs <= 0) {
+    timeoutMs = 60_000;
+  }
   const MAX_OUTPUT_BYTES = 512 * 1024; // 512 KB cap
   log.toolCall("executar_comando", { comando: args.comando, cwd });
 

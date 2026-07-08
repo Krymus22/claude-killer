@@ -15,10 +15,22 @@ export interface GlobOptions {
  * Simple glob implementation supporting **, *, and ? patterns.
  */
 export function globSearch(opts: GlobOptions): string[] {
+  // Validate pattern — `pattern.replaceAll` crashes on null/undefined.
+  // Bug Hunter #9: IA sometimes sends empty args; previously crashed.
+  if (opts == null || typeof opts.pattern !== "string" || opts.pattern === "") {
+    log.toolResult("buscar_arquivos", false, "invalid pattern");
+    return [];
+  }
+
   const cwd = opts.cwd ?? process.cwd();
   const pattern = opts.pattern;
   const ignore = opts.ignore ?? ["node_modules", ".git", "dist", ".next"];
-  const maxDepth = opts.maxDepth ?? 20;
+  // Clamp maxDepth: negative or non-finite values would skip the search
+  // entirely (depth 0 > -1 is true). Treat invalid as default.
+  let maxDepth = opts.maxDepth ?? 20;
+  if (typeof maxDepth !== "number" || !isFinite(maxDepth) || maxDepth < 0) {
+    maxDepth = 20;
+  }
 
   log.toolCall("buscar_arquivos", { pattern, cwd });
 
@@ -68,6 +80,12 @@ function searchDir(
  * Supports: **, *, ?, {a,b}
  */
 export function matchesGlob(filePath: string, pattern: string): boolean {
+  // Defensive: null/undefined/non-string inputs would crash on replaceAll.
+  // Bug Hunter #9: when called externally with bad args, return false
+  // instead of throwing TypeError.
+  if (typeof filePath !== "string" || typeof pattern !== "string") {
+    return false;
+  }
   // Normalize separators
   const normalizedPath = filePath.replaceAll("\\", "/");
   const normalizedPattern = pattern.replaceAll("\\", "/");

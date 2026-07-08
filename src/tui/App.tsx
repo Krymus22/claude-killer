@@ -21,6 +21,15 @@ import * as todo from "../todo.js";
 import { clearReadPaths } from "../readBeforeWrite.js";
 import { clearSessionFiles } from "../fileRehydration.js";
 import { clearInvokedSkills } from "../skillTracker.js";
+// State-leak cleanup: clearAllModuleState clears every module that keeps
+// per-turn / per-session state at the module level. Called on /reset,
+// /session new, /session load, auto-load, and the mode "new" context
+// action — same reset points as clearReadPaths (§17.3.11). The individual
+// clear* functions are still imported above because the existing reset
+// points call them inline (legacy). The helper adds the additional clears
+// (honesty, bugHunter, dataGuard, failureMemory, checkpoints,
+// patternExtractor, activity) on top.
+import { clearAllModuleState } from "../stateCleanup.js";
 
 import { config } from "../config.js";
 import { shutdownMCPServers, getActiveSkills, getActiveMCPServers } from "../extensions.js";
@@ -101,6 +110,15 @@ function handleResetCommand(): CommandResult {
   clearReadPaths();
   clearSessionFiles();
   clearInvokedSkills();
+  // State-leak cleanup: clear every module that keeps per-turn / per-session
+  // state at the module level (bugHunter, honesty, dataGuard, failureMemory,
+  // checkpoints, patternExtractor, activity). Fire-and-forget — the
+  // synchronous resets above already completed; the async ones (bugHunter,
+  // dataGuard, checkpoints) complete in the background before the next user
+  // message. runAgentLoop ALSO resets per-turn state at the start of the next
+  // turn, so any race here is bounded (defense-in-depth, not correctness).
+  // See src/stateCleanup.ts for the full rationale.
+  void clearAllModuleState();
   return { handled: true, message: "History reset." };
 }
 
@@ -171,8 +189,12 @@ function handleSessionCommand(arg: string | null): CommandResult {
     // BUG FIX (BS-18): clear readBeforeWrite state — new session means
     // the IA hasn't read any files yet in this context.
     clearReadPaths();
-  clearSessionFiles();
-  clearInvokedSkills();
+    clearSessionFiles();
+    clearInvokedSkills();
+    // State-leak cleanup: clear all module-level state (bugHunter, honesty,
+    // dataGuard, failureMemory, checkpoints, patternExtractor, activity).
+    // See clearAllModuleState docstring in src/stateCleanup.ts for rationale.
+    void clearAllModuleState();
     startSession();
     return { handled: true, resetChat: true, message: "[OK] New session started. Previous session is saved on disk." };
   }
@@ -194,8 +216,13 @@ function handleSessionCommand(arg: string | null): CommandResult {
     // files may differ from the current read-paths set. The IA must re-read
     // files before editing in the loaded context.
     clearReadPaths();
-  clearSessionFiles();
-  clearInvokedSkills();
+    clearSessionFiles();
+    clearInvokedSkills();
+    // State-leak cleanup: clear all module-level state from the previous
+    // session before loading the new one. The loaded session's bug-hunter
+    // findings, claim store, failure memory, checkpoints, etc. must NOT
+    // bleed into the loaded conversation's first turn.
+    void clearAllModuleState();
     if (loaded.lastSnapshot && loaded.lastSnapshot.messages.length > 0) {
       // BUG FIX (BS-3): merge snapshot + postSnapshotMessages.
       // Previously: only loaded the snapshot, losing messages that arrived
@@ -1016,8 +1043,10 @@ function handleModeCommand(arg: string | null): CommandResult {
     history.resetHistory();
     // BUG FIX (BS-18): clear readBeforeWrite state on context reset too.
     clearReadPaths();
-  clearSessionFiles();
-  clearInvokedSkills();
+    clearSessionFiles();
+    clearInvokedSkills();
+    // State-leak cleanup: clear all module-level state, same as /reset.
+    void clearAllModuleState();
     return {
       handled: true,
       resetChat: true,
@@ -1361,8 +1390,13 @@ export function App() {
           setActiveSession(last.id);
           // BUG FIX (BS-18): clear readBeforeWrite state on auto-load too.
           clearReadPaths();
-  clearSessionFiles();
-  clearInvokedSkills();
+          clearSessionFiles();
+          clearInvokedSkills();
+          // State-leak cleanup: clear all module-level state on auto-load too.
+          // The last session's bug-hunter findings, claim store, failure
+          // memory, etc. must NOT bleed into the auto-loaded conversation's
+          // first turn. Fire-and-forget — see clearAllModuleState docstring.
+          void clearAllModuleState();
 
           // ── IA context: use snapshot if available, else full messages ──
           if (loaded.lastSnapshot && loaded.lastSnapshot.messages.length > 0) {

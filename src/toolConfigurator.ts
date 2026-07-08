@@ -361,7 +361,22 @@ Comece agora.`;
       if (choice.finish_reason === "tool_calls" && choice.message.tool_calls?.length) {
         for (const toolCall of choice.message.tool_calls) {
           const name = toolCall.function.name;
-          const args = JSON.parse(toolCall.function.arguments);
+          // BUG FIX: JSON.parse on toolCall.function.arguments used to be
+          // unguarded — if the model emitted malformed JSON (truncated
+          // streaming, model errors, etc.), the parse threw synchronously,
+          // propagated to the outer try/catch, and aborted the ENTIRE
+          // configuration session. One bad tool call killed the whole loop.
+          // Now we parse locally: a malformed-args tool call becomes an error
+          // string fed back to the model so it can retry, instead of killing
+          // the session.
+          let args: Record<string, unknown>;
+          try {
+            args = JSON.parse(toolCall.function.arguments);
+          } catch (parseErr) {
+            const errMsg = `[ERROR] Invalid JSON arguments for ${name}: ${(parseErr as Error).message}. Raw: ${String(toolCall.function.arguments).slice(0, 200)}`;
+            messages.push({ role: "tool", content: errMsg, tool_call_id: toolCall.id });
+            continue;
+          }
 
           onMessage?.(`[Tool: ${name}]`);
 

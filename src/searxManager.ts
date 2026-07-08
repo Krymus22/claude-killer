@@ -26,8 +26,7 @@
  */
 
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
-import { existsSync as fsExistsSync } from "node:fs";
+import { existsSync, openSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { platform } from "node:os";
@@ -91,7 +90,9 @@ function isDockerRunning(): boolean {
  * Returns true if the executable was found and launched.
  */
 function launchDockerDesktopWindows(): boolean {
-  const { existsSync } = require("node:fs") as typeof import("node:fs");
+  // BUG FIX (ESM): previously used `require("node:fs")` here. `existsSync` is
+  // already imported at the top of this module — `require()` is undefined
+  // in ESM (package.json has "type":"module") and would throw at runtime.
   const candidates = [
     "C:\\Program Files\\Docker\\Docker\\Docker Desktop.exe",
     "C:\\Program Files (x86)\\Docker\\Docker\\Docker Desktop.exe",
@@ -344,10 +345,10 @@ function getDockerSetupScriptPath(): string | null {
   const projectRoot = process.cwd();
   if (platform() === "win32") {
     const ps1 = path.join(projectRoot, "scripts", "setup-searx-docker.ps1");
-    return fsExistsSync(ps1) ? ps1 : null;
+    return existsSync(ps1) ? ps1 : null;
   } else {
     const sh = path.join(projectRoot, "scripts", "setup-searx-docker.sh");
-    return fsExistsSync(sh) ? sh : null;
+    return existsSync(sh) ? sh : null;
   }
 }
 
@@ -455,7 +456,6 @@ export async function autoStartSearx(): Promise<boolean> {
 
   // Start Searx via Python
   try {
-    const { openSync } = await import("node:fs");
     const logPath = path.join(SEARX_DIR, "searx.log");
     const logFd = openSync(logPath, "w");
     const proc = spawn(SEARX_VENV_PYTHON, ["-m", "searx.webapp"], {

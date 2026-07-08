@@ -22,7 +22,11 @@ vi.mock("./../logger.js", () => ({
   info: vi.fn(),
 }));
 vi.mock("./../apiClient.js", () => ({ chat: vi.fn() }));
-vi.mock("./../history.js", () => ({ getHistory: vi.fn(() => []) }));
+vi.mock("./../history.js", () => ({
+  getHistory: vi.fn(() => []),
+  // Bug Hunter #2: writeCheckpoint now calls estimateTokens() for contextPercent.
+  estimateTokens: vi.fn(() => 0),
+}));
 
 describe("checkpointWriter — cobertura estendida", () => {
   beforeEach(async () => {
@@ -384,5 +388,111 @@ describe("checkpointWriter — cobertura estendida", () => {
     // Após reset, deve permitir fazer checkpoint 1 novamente
     await writeCheckpoint(1);
     expect(getLastCheckpointNumber()).toBe(1);
+  });
+});
+
+// ─── Bug Hunter #2 — Bug F: writeCheckpoint contextPercent uses tokens ──────
+//
+// Bug F: writeCheckpoint() computed contextPercent from history_msgs.length
+// (MESSAGE COUNT) / MAX_CONTEXT_TOKENS, which is meaningless — 50 messages
+// / 128000 tokens = ~0.04%, so contextPercent was always ~0. The fix uses
+// history.estimateTokens() (matching what agent.ts passes to shouldCheckpoint).
+//
+// These tests must live here (not in the regression-bug-hunter-2 file) because
+// this file already mocks history.js with controllable estimateTokens/getHistory
+// — required because ESM module exports cannot be mutated at runtime.
+
+describe("Bug Hunter #2 — Bug F: writeCheckpoint contextPercent uses tokens", () => {
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    const { resetCheckpoints } = await import("./../checkpointWriter.js");
+    resetCheckpoints();
+  });
+
+  /** Local copy of makeStateJson (the one in the first describe block is scoped). */
+  function makeStateJsonLocal(overrides: Record<string, unknown> = {}): string {
+    const base = {
+      intention: "Implementar feature X",
+      nextAction: "Escrever testes",
+      constraints: ["Não quebrar API"],
+      taskTree: ["Task 1"],
+      currentWork: "Refatorando",
+      filesInvolved: [{ path: "src/y.ts", change: "added foo()" }],
+      crossTaskDiscoveries: [],
+      errorsAndCorrections: [],
+      runtimeState: "tests passing",
+      designDecisions: [],
+      miscNotes: "",
+      ...overrides,
+    };
+    return JSON.stringify(base);
+  }
+
+  it("contextPercent is 20 when estimateTokens returns 25600 (25600/128000)", async () => {
+    const { writeCheckpoint } = await import("./../checkpointWriter.js");
+    const { chat } = await import("./../apiClient.js");
+    const historyMock = await import("./../history.js");
+
+    (chat as any).mockResolvedValue({
+      choices: [{ message: { content: makeStateJsonLocal() } }],
+    });
+    // 25600 tokens = 20% of 128000.
+    vi.mocked(historyMock.estimateTokens).mockReturnValue(25600);
+
+    const result = await writeCheckpoint(1);
+    // OLD BUG: would have been 0 (0 messages / 128000 = 0%).
+    expect(result.contextPercent).toBe(20);
+    // Verify estimateTokens was called (proving we use tokens, not message count).
+    expect(historyMock.estimateTokens).toHaveBeenCalled();
+  });
+
+  it("contextPercent is 0 when estimateTokens returns 0 (empty history)", async () => {
+    const { writeCheckpoint } = await import("./../checkpointWriter.js");
+    const { chat } = await import("./../apiClient.js");
+    const historyMock = await import("./../history.js");
+
+    (chat as any).mockResolvedValue({
+      choices: [{ message: { content: makeStateJsonLocal() } }],
+    });
+    vi.mocked(historyMock.estimateTokens).mockReturnValue(0);
+
+    const result = await writeCheckpoint(1);
+    expect(result.contextPercent).toBe(0);
+  });
+
+  it("contextPercent scales with token count (not message count) — KEY regression", async () => {
+    // This is the KEY regression: with 1 message but many tokens, contextPercent
+    // should reflect tokens. OLD BUG: would be ~0% (1 / 128000).
+    const { writeCheckpoint } = await import("./../checkpointWriter.js");
+    const { chat } = await import("./../apiClient.js");
+    const historyMock = await import("./../history.js");
+
+    (chat as any).mockResolvedValue({
+      choices: [{ message: { content: makeStateJsonLocal() } }],
+    });
+    // 89600 tokens = 70% of 128000.
+    vi.mocked(historyMock.estimateTokens).mockReturnValue(89600);
+    // 1 message in history (would have given ~0% with old bug).
+    vi.mocked(historyMock.getHistory).mockReturnValue([
+      { role: "user", content: "x".repeat(358400) } as any,
+    ]);
+
+    const result = await writeCheckpoint(3);
+    // Should be 70%, NOT ~0%.
+    expect(result.contextPercent).toBe(70);
+  });
+
+  it("contextPercent is 45 when estimateTokens returns 57600 (57600/128000)", async () => {
+    const { writeCheckpoint } = await import("./../checkpointWriter.js");
+    const { chat } = await import("./../apiClient.js");
+    const historyMock = await import("./../history.js");
+
+    (chat as any).mockResolvedValue({
+      choices: [{ message: { content: makeStateJsonLocal() } }],
+    });
+    vi.mocked(historyMock.estimateTokens).mockReturnValue(57600);
+
+    const result = await writeCheckpoint(2);
+    expect(result.contextPercent).toBe(45);
   });
 });

@@ -70,9 +70,22 @@ export function tryAcquireLock(
     } else {
       // Lock is active - check if same holder (re-entrant)
       if (existing.holderId === holderId) {
-        // Same holder re-acquiring - extend TTL and return no-op release
-        existing.acquiredAt = now();
-        existing.ttlMs = ttlMs;
+        // Same holder re-acquiring - extend TTL (never shorten) and return
+        // no-op release.
+        //
+        // BUG FIX (Bug Hunter #7): previously this did `existing.ttlMs = ttlMs`
+        // unconditionally, which meant a re-entrant call with a SHORTER TTL
+        // would silently shorten the outer lock's TTL. If the outer call
+        // expected 30s and the inner call used the default 30s but happened
+        // 25s in, the lock would expire 5s after the inner call instead of
+        // 30s after the inner call — potentially allowing another agent to
+        // steal the lock while the outer edit was still in progress.
+        //
+        // Fix: extend the TTL to max(remaining, newTtl) measured from now.
+        const nowMs = now();
+        const remainingMs = (existing.acquiredAt + existing.ttlMs) - nowMs;
+        existing.acquiredAt = nowMs;
+        existing.ttlMs = Math.max(remainingMs, ttlMs);
         return () => { /* no-op: lock will be released by outer call */ };
       }
       // Different holder - reject

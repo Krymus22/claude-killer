@@ -193,7 +193,16 @@ function buildReadOnlyTools(): any[] {
             limit: { type: "number", description: "Max lines." },
           },
         },
-        required: ["pattern"],
+        // BUG FIX: `required: ["pattern"]` was a copy-paste from the
+        // buscar_texto tool below. The ler_arquivo tool has no `pattern`
+        // property — its parameter is `path`/`caminho`. With the wrong
+        // `required` field, OpenAI-compatible providers that strictly enforce
+        // schema would REJECT every call to ler_arquivo (the model can't
+        // satisfy a required field that doesn't exist in the schema), leaving
+        // DataGuard unable to read any file. Removing the bogus constraint
+        // lets the model call ler_arquivo with just `path` (as expected).
+        // None of the properties are strictly required — the handler returns
+        // "No path provided" if `path`/`caminho` is missing.
       },
     },
     {
@@ -409,14 +418,35 @@ export async function runDataGuard(
               toolResult = "No path provided";
             }
           } else if (toolName === "buscar_texto") {
-            // Simple grep simulation
-            const pattern = toolArgs.pattern || "";
-            const searchPath = toolArgs.path || ".";
+            // Simple grep simulation.
+            //
+            // BUG FIX (security): previously the pattern and search path were
+            // interpolated directly into a shell string:
+            //     `grep -rn "${pattern}" "${searchPath}" ...`
+            // A malicious or hallucinated pattern like `"; rm -rf ~ #` would
+            // break out of the quotes and execute arbitrary shell. The
+            // DataGuard sub-agent's `pattern` argument is LLM-generated (not
+            // user-trusted), and per BUSINESS_RULES §12.3 the MCP policy is
+            // default-allow — so we must assume untrusted input. Use
+            // `spawnSync` with an argv (no shell) so the pattern is passed
+            // as a single argument and never interpreted by a shell.
+            // Fallback to "(no matches)" if grep is unavailable.
+            const pattern = typeof toolArgs.pattern === "string" ? toolArgs.pattern : "";
+            const searchPath = typeof toolArgs.path === "string" ? toolArgs.path : ".";
             try {
-              const { execSync } = await import("node:child_process");
-              toolResult = execSync(`grep -rn "${pattern}" "${searchPath}" 2>/dev/null || echo "(no matches)"`, {
-                encoding: "utf8", timeout: 5000, maxBuffer: 10240
-              }).slice(0, 2000);
+              const { spawnSync } = await import("node:child_process");
+              const grepResult = spawnSync(
+                "grep",
+                ["-rn", "--", pattern, searchPath],
+                { encoding: "utf8", timeout: 5000, maxBuffer: 10240 },
+              );
+              // grep exit code 1 = no matches (not an error); other non-zero
+              // codes (2 = error) should still surface something useful.
+              if (grepResult.status === 0 || grepResult.status === 1) {
+                toolResult = (grepResult.stdout || "(no matches)").slice(0, 2000);
+              } else {
+                toolResult = `(search failed: ${grepResult.stderr?.trim() || "grep error"})`;
+              }
             } catch {
               toolResult = "(search failed or no matches)";
             }
@@ -445,28 +475,44 @@ export async function runDataGuard(
 
     const findings = parseFindings(finalContent);
     const criticalAndHigh = findings.filter(f => f.severity === "critical" || f.severity === "high");
-    const shouldBlock = findings.length > 0;
+    // BUG FIX: DataGuard must only block on CRITICAL/HIGH findings, matching
+    // the system prompt's VERDICT contract: "VERDICT: BLOCK (if any
+    // CRITICAL/HIGH found) or VERDICT: PASS (if none)" (see
+    // buildDataGuardSystemPrompt). The old `shouldBlock = findings.length > 0`
+    // returned true for MEDIUM/LOW-only findings — contradicting the prompt
+    // and producing a "you MUST address these before finishing" message even
+    // when the agent.ts handler (lines 1957-1967) only treats medium/low as
+    // advisory. Now `shouldBlock` mirrors the design and the message stays
+    // consistent: BLOCK message for critical/high, advisory message for
+    // medium/low-only, clean message when no findings.
+    const shouldBlock = criticalAndHigh.length > 0;
+    const hasOnlyMediumLow = findings.length > 0 && criticalAndHigh.length === 0;
 
-    console.log(`[DATAGUARD] Parsed ${findings.length} findings from ${finalContent.length} chars verdict`);
-    console.log(`[DATAGUARD] critical/high: ${criticalAndHigh.length}, medium/low: ${findings.length - criticalAndHigh.length}, shouldBlock: ${shouldBlock}`);
+    log.info(`[DATAGUARD] Parsed ${findings.length} findings from ${finalContent.length} chars verdict`);
+    log.info(`[DATAGUARD] critical/high: ${criticalAndHigh.length}, medium/low: ${findings.length - criticalAndHigh.length}, shouldBlock: ${shouldBlock}`);
 
     if (shouldBlock) {
-      console.log(`[DATAGUARD] Found ${criticalAndHigh.length} critical/high data risk(s) — BLOCKING finish`);
+      log.warn(`[DATAGUARD] Found ${criticalAndHigh.length} critical/high data risk(s) — BLOCKING finish`);
       for (const f of findings) {
         const icon = f.severity === "critical" ? "🔴" : f.severity === "high" ? "🟠" : f.severity === "medium" ? "🟡" : "🔵";
-        console.log(`[DATAGUARD] ${icon} [${f.severity.toUpperCase()}] ${f.file}${f.line ? ":" + f.line : ""} — ${f.description}`);
-        console.log(`[DATAGUARD]   Fix: ${f.suggestion}`);
+        log.warn(`[DATAGUARD] ${icon} [${f.severity.toUpperCase()}] ${f.file}${f.line ? ":" + f.line : ""} — ${f.description}`);
+        log.warn(`[DATAGUARD]   Fix: ${f.suggestion}`);
       }
-    } else if (findings.length === 0) {
-      console.log(`[DATAGUARD] ✓ NO DATA RISKS FOUND — data protection review passed`);
+    } else if (hasOnlyMediumLow) {
+      log.info(`[DATAGUARD] ${findings.length} medium/low data risk(s) — advisory only (not blocking)`);
+    } else {
+      log.info(`[DATAGUARD] ✓ NO DATA RISKS FOUND — data protection review passed`);
     }
 
     previousFindings = [...findings];
 
-    // Build message using the same format as Bug Hunter
+    // Build message: blocking format for critical/high, advisory format for
+    // medium/low-only, clean message when there are no findings at all.
     const message = shouldBlock
-      ? formatDataGuardMessage(findings)
-      : "[DATAGUARD] ✓ No data protection issues found. Data is safe.";
+      ? formatDataGuardMessage(findings, true)
+      : hasOnlyMediumLow
+        ? formatDataGuardMessage(findings, false)
+        : "[DATAGUARD] ✓ No data protection issues found. Data is safe.";
 
     return { shouldBlock, findings, message, completed: true };
   } finally {
@@ -476,16 +522,32 @@ export async function runDataGuard(
 
 /**
  * Format the DataGuard message to inject into the agent's context.
+ *
+ * @param findings  Findings to render (may be critical/high/medium/low).
+ * @param blocking  When true, frame as "MUST fix before finishing" (matches
+ *                  `shouldBlock=true` from runDataGuard). When false, frame as
+ *                  advisory — the IA can finish but should review the findings.
+ *                  The old signature always used the blocking framing, which
+ *                  contradicted the agent.ts handler that allows finish on
+ *                  medium/low-only.
  */
-function formatDataGuardMessage(findings: BugFinding[]): string {
+function formatDataGuardMessage(findings: BugFinding[], blocking: boolean = true): string {
   if (findings.length === 0) {
     return "[DATAGUARD] ✓ No data protection issues found. Data is safe.";
   }
 
   const lines: string[] = [];
-  lines.push(`[DATAGUARD] ✗ DATA PROTECTION RISKS FOUND — you MUST address these before finishing:`);
+  if (blocking) {
+    lines.push(`[DATAGUARD] ✗ DATA PROTECTION RISKS FOUND — you MUST address these before finishing:`);
+  } else {
+    lines.push(`[DATAGUARD] ⚠ Advisory: ${findings.length} medium/low data protection finding(s) — review recommended but not blocking:`);
+  }
   lines.push("");
-  lines.push(`IMPORTANT: These findings relate to PERMANENT DATA LOSS or CORRUPTION. Unlike logic bugs, data loss is IRREVERSIBLE. You MUST fix or dismiss each finding.`);
+  if (blocking) {
+    lines.push(`IMPORTANT: These findings relate to PERMANENT DATA LOSS or CORRUPTION. Unlike logic bugs, data loss is IRREVERSIBLE. You MUST fix or dismiss each finding.`);
+  } else {
+    lines.push(`These findings are MEDIUM/LOW severity — they don't block finish, but addressing them improves data safety. Review and fix if reasonable.`);
+  }
   lines.push("");
   lines.push(`## All Findings (${findings.length} total)`);
   lines.push("");

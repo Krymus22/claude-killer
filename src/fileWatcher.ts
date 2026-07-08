@@ -79,7 +79,22 @@ export class FileWatcher {
       const watcher = fs.watch(dirPath, { recursive }, (eventType, filename) => {
         if (!filename) return;
         const fullPath = path.join(dirPath, filename);
-        const changeType: FileChangeType = eventType === "rename" ? "created" : "modified";
+        // BUG FIX (Bug Hunter #7): previously any "rename" event was
+        // classified as "created". But "rename" in fs.watch fires for
+        // creation, deletion, AND renames inside the directory. Always
+        // emitting "created" meant a deleted file was reported as created,
+        // confusing watchers (and the agent) into thinking a non-existent
+        // file was just added.
+        //
+        // Fix: stat the path after the event. If it exists now, it was
+        // created (or renamed-to). If it doesn't, it was deleted (or
+        // renamed-away). "change" events stay as "modified".
+        let changeType: FileChangeType;
+        if (eventType === "rename") {
+          changeType = fs.existsSync(fullPath) ? "created" : "deleted";
+        } else {
+          changeType = "modified";
+        }
         this.emit({ type: changeType, filePath: fullPath, timestamp: new Date() });
       });
       this.watchers.set(dirPath, watcher);

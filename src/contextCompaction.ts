@@ -60,7 +60,11 @@ const strategies: CompactionStrategy[] = [
       let consecutive = 0;
       for (let i = 1; i < msgs.length; i++) {
         if (msgs[i].role === "tool" && msgs[i - 1]?.role === "tool") consecutive++;
-        if (consecutive >= 3) return true;
+        // Bug fix (Bug Hunter #2): BUSINESS_RULES.md §6.2 says "3+ tools seguidos → merge".
+        // With N consecutive tools there are N-1 adjacent pairs, so 3 tools = 2 pairs.
+        // Previously `consecutive >= 3` required 4+ tools (3 pairs), which violated the rule.
+        // Now `consecutive >= 2` triggers at exactly 3 tools (2 pairs), matching the rule.
+        if (consecutive >= 2) return true;
       }
       return false;
     },
@@ -100,7 +104,11 @@ const strategies: CompactionStrategy[] = [
       return msgs.some((m) => {
         if (m.role === "tool" && typeof m.content === "string" && m.content.includes("[ERROR]")) {
           errorCount++;
-          return errorCount > 5;
+          // Bug fix (Bug Hunter #2): BUSINESS_RULES.md §6.2 says "mantém só primeiros 3 [ERROR]".
+          // The apply() keeps first 3 and drops 4+. shouldApply must trigger at 4+ errors
+          // (so the apply actually has something to remove). Previously `errorCount > 5`
+          // required 6+ errors, leaving 4-5 errors unpruned — violating the rule.
+          return errorCount > 3;
         }
         return false;
       });

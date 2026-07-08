@@ -74,7 +74,15 @@ export function isRetryableError(error: any): boolean {
 
   if (typeof code === "string" && retryableCodes.includes(code)) return true;
   if (error?.status === 429) return true;
-  if (error?.status >= 500 && error?.status < 600) return true;
+
+  // 5xx: only 502 (Bad Gateway) and 503 (Service Unavailable) are retriable.
+  // Per BUSINESS_RULES.md §17.4 rule 20 and §3.3:
+  //   - 500 = bug real no servidor, NÃO retriable
+  //   - 504 = gateway timeout, retry provável de falhar igual, NÃO retriable
+  //   - 502/503 = frequentemente transientes (gateway restart, deploy, overload)
+  // This MUST match apiClient.ts RETRIABLE_5XX_STATUSES = new Set([502, 503]).
+  const RETRIABLE_5XX_STATUSES = new Set([502, 503]);
+  if (typeof error?.status === "number" && RETRIABLE_5XX_STATUSES.has(error.status)) return true;
 
   return false;
 }

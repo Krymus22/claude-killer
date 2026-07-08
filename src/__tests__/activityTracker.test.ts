@@ -123,10 +123,15 @@ describe("activityTracker", () => {
       done();
     });
 
-    it.skip("formats 'subagent' category", () => {
+    it("formats 'subagent' category", () => {
       const done = pushActivity("subagent", "#1: explorar código");
       const snap = getActivitySnapshot();
-      expect(snap.displayLabel).toBe("Sub-agent: #1: explorar código");
+      // BUG FIX (test): the test was previously `.skip` because the
+      // expected string was "Sub-agent" (English) but the source returns
+      // "Sub-agente" (Portuguese with 'e' at the end), which matches the
+      // project's PT-BR default language. Fixed the expectation to match
+      // the actual behavior.
+      expect(snap.displayLabel).toBe("Sub-agente: #1: explorar código");
       done();
     });
 

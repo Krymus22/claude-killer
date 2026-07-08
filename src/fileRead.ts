@@ -85,10 +85,34 @@ function readDirectory(dirPath: string): string {
 
 export function readBinarySafe(filePath: string): string | null {
   try {
-    const content = fs.readFileSync(filePath, "utf8");
-    // Check for null bytes (binary indicator)
-    if (content.includes("\0")) return null;
-    return content;
+    // BUG FIX (Bug Hunter #7): previously this called
+    // `fs.readFileSync(filePath, "utf8")` first and then checked the
+    // resulting string for null bytes. This had two problems:
+    //
+    //   1. Reading with the "utf8" encoding forces Node to decode the
+    //      file as UTF-8 — invalid byte sequences are silently replaced
+    //      with U+FFFD, which is a lossy operation on binary content.
+    //      The decoded string was already corrupted by the time we
+    //      checked it.
+    //
+    //   2. The null-byte check alone misses many binary files. A Latin-1
+    //      file with accented chars (e.g., "café" as 0x63 0x61 0x66 0xE9)
+    //      has no null bytes but is NOT valid UTF-8 — the old code would
+    //      return "caf\uFFFD" as if it were text.
+    //
+    // Fix: read as a Buffer (raw bytes) and:
+    //   - reject if it contains any NUL byte (most reliable binary signal)
+    //   - reject if it isn't valid UTF-8 (detected via round-trip:
+    //     decode → re-encode → compare). If the buffer had invalid
+    //     sequences, Node replaced them with U+FFFD (3 bytes: EF BF BD),
+    //     so the re-encoded buffer won't match the original.
+    const buf = fs.readFileSync(filePath);
+    if (buf.includes(0)) return null;
+    const str = buf.toString("utf8");
+    if (Buffer.from(str, "utf8").equals(buf)) {
+      return str;
+    }
+    return null;
   } catch {
     return null;
   }

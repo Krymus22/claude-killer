@@ -29,7 +29,7 @@ import { App } from "./tui/App.js";
 import { loadAllExtensions, shutdownMCPServers } from "./extensions.js";
 import { seedUserConfig } from "./configSeeder.js";
 import { performUpdateCheck } from "./toolUpdater.js";
-import { registerShutdownHandlers } from "./gracefulShutdown.js";
+import { registerShutdownHandlers, onShutdown } from "./gracefulShutdown.js";
 
 // --- Force UTF-8 everywhere (must run before any console output) ----------
 // Without this, terminals display accented chars (á, é, í, õ, ç, ê) as
@@ -66,6 +66,19 @@ if (_utf8Result.fallbackUsed) {
 async function main(): Promise<void> {
   // Register graceful shutdown handlers (SIGINT, SIGTERM, SIGHUP, uncaughtException)
   registerShutdownHandlers();
+
+  // BUG FIX: register shutdownMCPServers as an onShutdown handler so it
+  // runs for ALL signals (SIGINT, SIGTERM, SIGHUP, uncaughtException), not
+  // just SIGINT/SIGTERM (which are handled by the `cleanup` function below).
+  // Without this, MCP server child processes spawned with `detached: true`
+  // (POSIX) become orphaned on SIGHUP (terminal close) or uncaughtException
+  // (crash) — they're in their own process group and don't receive the
+  // parent's signal. The `cleanup` function below only covers SIGINT/SIGTERM,
+  // so SIGHUP and uncaughtException would leak MCP servers.
+  // NOTE: shutdownMCPServers is idempotent — calling it twice (once via
+  // onShutdown, once via cleanup) is safe because activeMCPServers.clear()
+  // makes the second call a no-op.
+  onShutdown(() => shutdownMCPServers());
 
   // Seed bundled defaults (Roblox CLI tools, library skills, modes) on first run.
   seedUserConfig();

@@ -236,40 +236,54 @@ let stdoutPatched = false;
 let stderrPatched = false;
 
 function patchWindowsStdoutForUtf8(): void {
-  if (stdoutPatched) return;
-  const stdout = process.stdout as any;
-  if (!stdout || typeof stdout.write !== "function") return;
-
-  const origWrite = stdout.write.bind(stdout);
-  stdout.write = function patchedWrite(data: any, ...args: any[]): boolean {
-    if (typeof data === "string") {
-      // Convert string to UTF-8 Buffer and write as bytes. This bypasses
-      // the console code page entirely.
-      const buf = Buffer.from(data, "utf8");
-      // args may contain encoding/callback — strip encoding since we're
-      // sending a Buffer now.
-      const cb = typeof args[args.length - 1] === "function" ? args[args.length - 1] : undefined;
-      return cb ? origWrite(buf, cb) : origWrite(buf);
+  // BUG FIX (Bug Hunter #7): previously this function had a single early
+  // return `if (stdoutPatched) return;` at the top, which meant that if
+  // the first call patched stdout but failed to patch stderr (e.g. stderr
+  // was undefined at that moment), the second call would bail out before
+  // even trying stderr. The "Same for stderr" branch with its own
+  // `if (stderrPatched) return;` was effectively dead code on the second
+  // call.
+  //
+  // Fix: patch each stream independently. Each stream has its own
+  // idempotency flag and its own existence check, so a missing stream on
+  // the first call doesn't prevent the other from being patched on a
+  // later call.
+  if (!stdoutPatched) {
+    const stdout = process.stdout as any;
+    if (stdout && typeof stdout.write === "function") {
+      const origWrite = stdout.write.bind(stdout);
+      stdout.write = function patchedWrite(data: any, ...args: any[]): boolean {
+        if (typeof data === "string") {
+          // Convert string to UTF-8 Buffer and write as bytes. This bypasses
+          // the console code page entirely.
+          const buf = Buffer.from(data, "utf8");
+          // args may contain encoding/callback — strip encoding since we're
+          // sending a Buffer now.
+          const cb = typeof args[args.length - 1] === "function" ? args[args.length - 1] : undefined;
+          return cb ? origWrite(buf, cb) : origWrite(buf);
+        }
+        // Already a Buffer or other type — pass through unchanged
+        return origWrite(data, ...args);
+      };
+      stdoutPatched = true;
     }
-    // Already a Buffer or other type — pass through unchanged
-    return origWrite(data, ...args);
-  };
-  stdoutPatched = true;
+  }
 
-  // Same for stderr
-  if (stderrPatched) return;
-  const stderr = process.stderr as any;
-  if (!stderr || typeof stderr.write !== "function") return;
-  const origWriteErr = stderr.write.bind(stderr);
-  stderr.write = function patchedWriteErr(data: any, ...args: any[]): boolean {
-    if (typeof data === "string") {
-      const buf = Buffer.from(data, "utf8");
-      const cb = typeof args[args.length - 1] === "function" ? args[args.length - 1] : undefined;
-      return cb ? origWriteErr(buf, cb) : origWriteErr(buf);
+  if (!stderrPatched) {
+    const stderr = process.stderr as any;
+    if (stderr && typeof stderr.write === "function") {
+      const origWriteErr = stderr.write.bind(stderr);
+      stderr.write = function patchedWriteErr(data: any, ...args: any[]): boolean {
+        if (typeof data === "string") {
+          const buf = Buffer.from(data, "utf8");
+          const cb = typeof args[args.length - 1] === "function" ? args[args.length - 1] : undefined;
+          return cb ? origWriteErr(buf, cb) : origWriteErr(buf);
+        }
+        return origWriteErr(data, ...args);
+      };
+      stderrPatched = true;
     }
-    return origWriteErr(data, ...args);
-  };
-  stderrPatched = true;
+  }
 }
 
 /**

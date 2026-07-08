@@ -145,9 +145,23 @@ List every issue you find. If none, say "Nada encontrado".`;
     // "crITICAL". This meant critical-severity findings silently fell through
     // to the default "medium" branch, understating severity. Now we compare
     // against the lowercase "critical".
-    if (lower.includes("critical") || lower.includes("grave") || lower.includes("high")) severity = "high";
-    else if (lower.includes("medium") || lower.includes("medio") || lower.includes("moderado")) severity = "medium";
-    else if (lower.includes("low") || lower.includes("baixo") || lower.includes("leve")) severity = "low";
+    //
+    // BUG FIX (false positives): `lower.includes("high")` matched substrings
+    // like "highlight", "higher", "thigh", "highway", etc. — flagging benign
+    // reviewer comments (e.g. "the highlighted section is fine", "use higher
+    // level abstractions") as severity=high and blocking the finish in
+    // agent.ts:1772-1778. Similarly `lower.includes("low")` matched "below",
+    // "follow", "flow", "shadow". Use word-boundary regexes anchored to the
+    // start of the severity keyword. The Devil's Advocate prompt asks the
+    // sub-agent to use severity words as classifiers, so "high" / "critical"
+    // always appear as standalone words — never as substrings of larger
+    // words — when the sub-agent actually intends them.
+    const hasWord = (word: string): boolean =>
+      new RegExp(`\\b${word}\\b`, "i").test(result);
+    if (hasWord("critical") || hasWord("grave")) severity = "high";
+    else if (hasWord("high")) severity = "high";
+    else if (hasWord("medium") || hasWord("medio") || hasWord("moderado")) severity = "medium";
+    else if (hasWord("low") || hasWord("baixo") || hasWord("leve")) severity = "low";
     else if (!lower.includes("nada encontrado")) severity = "medium"; // default if issues found
 
     const issues = result

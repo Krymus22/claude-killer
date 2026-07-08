@@ -2,7 +2,11 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 vi.mock("./../logger.js", () => ({ debug: vi.fn(), warn: vi.fn(), error: vi.fn(), info: vi.fn() }));
 vi.mock("./../apiClient.js", () => ({ chat: vi.fn() }));
-vi.mock("./../history.js", () => ({ getHistory: vi.fn(() => []) }));
+vi.mock("./../history.js", () => ({
+  getHistory: vi.fn(() => []),
+  // Bug Hunter #2: writeCheckpoint now calls estimateTokens() for contextPercent.
+  estimateTokens: vi.fn(() => 0),
+}));
 
 describe("checkpointWriter", () => {
   beforeEach(async () => {

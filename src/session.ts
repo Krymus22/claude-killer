@@ -298,11 +298,32 @@ export function loadSessionMessages(sessionId: string, cwd?: string): LoadedSess
 
 /**
  * Set the active session (after loading).
+ *
+ * BUG FIX (partial-id-double-write): If `sessionId` is a PARTIAL prefix
+ * (e.g., user typed `/session load 2026-07`), resolve it to the full ID
+ * before setting `activeSessionPath`. Without this, `activeSessionPath`
+ * would point to a non-existent file (`<dir>/2026-07.jsonl`), and the next
+ * `appendMessage` call would CREATE that file — splitting writes between
+ * the original full-ID file and the new partial-ID file (double-write).
+ *
+ * If the exact file exists, use it as-is (no resolution needed).
+ * If neither an exact nor a partial match exists, fall back to the raw
+ * input (callers ensure the file exists before calling this, so this
+ * branch is defensive only).
  */
 export function setActiveSession(sessionId: string, cwd?: string): void {
   const dir = getProjectSessionDir(cwd);
-  activeSessionId = sessionId;
-  activeSessionPath = path.join(dir, `${sessionId}.jsonl`);
+  const exactPath = path.join(dir, `${sessionId}.jsonl`);
+  if (fs.existsSync(exactPath)) {
+    activeSessionId = sessionId;
+    activeSessionPath = exactPath;
+    return;
+  }
+  // Exact file not found — try partial prefix match (same logic as
+  // loadSessionMessages so both resolve to the SAME file).
+  const resolvedId = resolveSessionId(sessionId, dir);
+  activeSessionId = resolvedId;
+  activeSessionPath = path.join(dir, `${resolvedId}.jsonl`);
 }
 
 /**
@@ -340,7 +361,21 @@ export function listSessions(cwd?: string): SessionMeta[] {
       if (lines.length === 0) continue;
 
       const header = JSON.parse(lines[0]!);
-      const msgCount = lines.length - 1; // minus header
+      // BUG FIX (inflated-count): Previously `msgCount = lines.length - 1`
+      // counted ALL non-header lines, including compaction-snapshot markers.
+      // A session with 5 real messages + 2 snapshots showed "7 msgs" in
+      // /session list. Now we skip snapshot lines so the count reflects
+      // only user/assistant/tool/system messages.
+      let msgCount = 0;
+      for (let i = 1; i < lines.length; i++) {
+        try {
+          const parsed = JSON.parse(lines[i]!);
+          if (parsed.type === "compaction-snapshot") continue;
+          msgCount++;
+        } catch {
+          // Malformed line — skip (don't count).
+        }
+      }
       const firstUserMsg = lines
         .slice(1)
         .map((l) => { try { return JSON.parse(l); } catch { return null; } })
@@ -393,6 +428,12 @@ function resolveSessionId(sessionId: string, dir: string): string {
 
 /**
  * Delete a session file. Supports partial ID match.
+ *
+ * BUG FIX (zombie-session): If the deleted session was the ACTIVE one,
+ * clear `activeSessionId`/`activeSessionPath`. Without this, the next
+ * `appendMessage` call would write to the deleted file path —
+ * `fs.appendFileSync` CREATES the file if missing, producing a "zombie"
+ * session file containing only the new message (and no header).
  */
 export function deleteSession(sessionId: string, cwd?: string): boolean {
   const dir = getProjectSessionDir(cwd);
@@ -400,11 +441,25 @@ export function deleteSession(sessionId: string, cwd?: string): boolean {
   const filePath = path.join(dir, `${fullId}.jsonl`);
   if (!fs.existsSync(filePath)) return false;
   fs.unlinkSync(filePath);
+  // If we just deleted the active session, clear the active pointers so
+  // the next appendMessage auto-creates a fresh session (with header)
+  // instead of writing to the now-deleted path.
+  if (activeSessionId === fullId) {
+    activeSessionId = null;
+    activeSessionPath = null;
+  }
   return true;
 }
 
 /**
  * Rename a session by copying + deleting. Supports partial ID match.
+ *
+ * BUG FIX (split-write-on-rename): If the renamed session was the ACTIVE
+ * one, update `activeSessionId`/`activeSessionPath` to point to the new
+ * file. Without this, the old file would be deleted but `activeSessionPath`
+ * would still point to the old path — the next `appendMessage` would
+ * CREATE a new file at the old path (with no header), splitting the
+ * conversation across two files.
  */
 export function renameSession(oldId: string, newId: string, cwd?: string): boolean {
   const dir = getProjectSessionDir(cwd);
@@ -426,6 +481,12 @@ export function renameSession(oldId: string, newId: string, cwd?: string): boole
     }
     fs.writeFileSync(newPath, lines.join("\n"), "utf8");
     fs.unlinkSync(oldPath);
+    // If we just renamed the active session, repoint the active pointers
+    // to the new file so subsequent appends go to the right place.
+    if (activeSessionId === fullOldId) {
+      activeSessionId = newId;
+      activeSessionPath = newPath;
+    }
     return true;
   } catch {
     return false;

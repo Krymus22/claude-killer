@@ -24,6 +24,7 @@
 
 import OpenAI from "openai";
 import https from "node:https";
+import fs from "node:fs";
 import * as log from "./logger.js";
 
 // Prewarm config — model name comes from process.env.MODEL at module load.
@@ -125,7 +126,6 @@ function loadKeysFromFile(filePath: string | undefined): string[] {
   const path = filePath?.trim();
   if (!path) return [];
   try {
-    const fs = require("node:fs");
     const content = fs.readFileSync(path, "utf8");
     const keys: string[] = [];
     for (const line of content.split(/\r?\n/)) {

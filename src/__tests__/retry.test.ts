@@ -89,8 +89,23 @@ describe("isRetryableError", () => {
     expect(isRetryableError({ status: 429 })).toBe(true);
   });
 
-  it("should detect 500 as retryable", () => {
-    expect(isRetryableError({ status: 500 })).toBe(true);
+  it("should detect 500 as NOT retryable (BUSINESS_RULES §17.4 rule 20)", () => {
+    // 500 = bug real no servidor, NÃO deve ser retried.
+    // Previously this returned true (bug); now correctly returns false.
+    expect(isRetryableError({ status: 500 })).toBe(false);
+  });
+
+  it("should detect 502 as retryable (transient gateway error)", () => {
+    expect(isRetryableError({ status: 502 })).toBe(true);
+  });
+
+  it("should detect 503 as retryable (service unavailable)", () => {
+    expect(isRetryableError({ status: 503 })).toBe(true);
+  });
+
+  it("should detect 504 as NOT retryable (BUSINESS_RULES §17.4 rule 20)", () => {
+    // 504 = gateway timeout, retry provável de falhar igual, NÃO retriable.
+    expect(isRetryableError({ status: 504 })).toBe(false);
   });
 
   it("should not detect 400 as retryable", () => {

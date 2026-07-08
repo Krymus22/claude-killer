@@ -21,6 +21,7 @@ import type OpenAI from "openai";
 import { getActiveSkills } from "./extensions.js";
 import { getEffortPromptSnippet } from "./effortLevels.js";
 import { config } from "./config.js";
+import { getPatternsCached } from "./patternExtractor.js";
 
 // --- Project Memory (CLAUDE.md / AGENTS.md) --
 
@@ -442,11 +443,16 @@ export function getSystemPrompt(): string {
 /**
  * Inject extracted code patterns into the system prompt.
  * This makes the AI match the project's existing coding style.
+ *
+ * Bug fix (Bug Hunter #2): previously used `require("./patternExtractor.js")`
+ * which is CommonJS syntax. This project is ESM (`"type": "module"` in
+ * package.json), so `require` is not available — at runtime this would
+ * throw "require is not defined" and the catch block silently swallowed it,
+ * meaning code patterns were NEVER injected. Now uses a static ESM import
+ * (no circular dependency — patternExtractor.ts does not import history.ts).
  */
 function injectPatterns(prompt: string): string {
   try {
-    // Dynamic import to avoid circular dependency at module load time
-    const { getPatternsCached } = require("./patternExtractor.js");
     const patterns = getPatternsCached(process.cwd());
     if (patterns.filesAnalyzed > 0) {
       return `${prompt}\n\n${patterns.rawSummary}`;
@@ -939,6 +945,8 @@ export function compactHistory(): CompactResult | null {
     "[CONVERSATION MEMORY",
     "[PLAN",  // Gap 3: preserve plan state across compaction
     "[SESSION CONTINUATION",  // Gap 2: preserve continuation message
+    "## Recently Modified Files",  // Gap 1: preserve re-hydrated files (Bug Hunter #2: was missing in sync version)
+    "## Invoked Skills",  // Gap 9: preserve re-injected skills (Bug Hunter #2: was missing in sync version)
   ];
 
   const preservedSystem: Message[] = [];

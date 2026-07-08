@@ -23,6 +23,7 @@ import React, { useState, useEffect, useCallback } from "react";
 import { Box, Text, useInput } from "ink";
 import fs from "node:fs";
 import path from "node:path";
+import os from "node:os";
 import { colors } from "./theme.js";
 
 const VIEWPORT_SIZE = 15;
@@ -167,7 +168,9 @@ export function FolderBrowser({ initialPath, onSelect, onCancel }: FolderBrowser
       }
     } else if (input === "h" || input === "H") {
       // 'h' shortcut: go home
-      const home = process.env.HOME ?? process.env.USERPROFILE ?? require("node:os").homedir();
+      // BUG FIX (esm-require): was `require("node:os").homedir()` which
+      // violates the ESM import rule. Use the top-level `import os` instead.
+      const home = process.env.HOME ?? process.env.USERPROFILE ?? os.homedir();
       setCurrentPath(home);
     }
   });

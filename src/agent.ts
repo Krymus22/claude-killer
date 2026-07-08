@@ -17,10 +17,20 @@
  */
 
 import OpenAI from "openai";
+import * as nodePath from "node:path";
 import { chat, TOOL_DEFINITIONS } from "./apiClient.js";
 import * as history from "./history.js";
 import { executePreToolCallHooks, executePostToolCallHooks } from "./hooks.js";
-import { getMCPToolDefinitions, callMCPTool } from "./extensions.js";
+import { getMCPToolDefinitions, callMCPTool, getActiveSkills } from "./extensions.js";
+// Static imports for skill tracker + file rehydration (Gap 1 + Gap 9).
+// BUG FIX: previously these were loaded via require() inside trackFileAccess,
+// but require() is undefined in ESM modules — the require() calls threw
+// ReferenceError, the surrounding try/catch swallowed it, and the
+// recordSkillInvocation / recordSessionFileEdit calls were NEVER executed.
+// That silently broke post-compaction skill re-injection (Gap 9) and
+// file re-hydration (Gap 1). Use static imports so the calls actually run.
+import { recordSkillInvocation } from "./skillTracker.js";
+import { recordSessionFileEdit } from "./fileRehydration.js";
 import * as log from "./logger.js";
 import { config } from "./config.js";
 import { readFileAdvanced } from "./fileRead.js";
@@ -1038,12 +1048,17 @@ function trackFileAccess(name: string, args: Record<string, unknown>): void {
     // Gap 9: Track skill invocations for post-compaction re-injection.
     // If the IA reads a file that's a skill, record it so we can re-inject
     // the skill content after compaction.
+    //
+    // BUG FIX: previously this block used require() to load extensions.js,
+    // skillTracker.js, and the path module. In ESM, require() is undefined
+    // and the require() calls threw ReferenceError — silently caught by the
+    // try/catch below — so recordSkillInvocation was NEVER called and skill
+    // re-injection after compaction was broken. Use the statically-imported
+    // helpers (and the already-imported nodePath alias) instead.
     try {
-      const { getActiveSkills } = require("./extensions.js");
       const skills = getActiveSkills() as Array<{ path: string }>;
-      const resolved = require("path").resolve(filePath);
-      if (skills.some((s) => require("path").resolve(s.path) === resolved)) {
-        const { recordSkillInvocation } = require("./skillTracker.js");
+      const resolved = nodePath.resolve(filePath);
+      if (skills.some((s) => nodePath.resolve(s.path) === resolved)) {
         recordSkillInvocation(resolved);
       }
     } catch { /* skillTracker not available — skip */ }
@@ -1053,8 +1068,10 @@ function trackFileAccess(name: string, args: Record<string, unknown>): void {
     turnTouchedFiles.add(resolved);
     // Gap 1: Track session-edited files for post-compaction re-hydration.
     // This lets the IA "remember" file contents even after context is compacted.
+    //
+    // BUG FIX: same require() issue as above — recordSessionFileEdit was
+    // never actually called. Use the statically-imported helper.
     try {
-      const { recordSessionFileEdit } = require("./fileRehydration.js");
       recordSessionFileEdit(resolved);
     } catch { /* fileRehydration not available — skip */ }
   }
@@ -1275,13 +1292,30 @@ async function processToolCalls(toolCalls: ToolCall[]): Promise<void> {
   const readOnlyCalls = toolCalls.filter((tc) => READ_ONLY_TOOLS.has(tc.function.name));
   const writeCalls = toolCalls.filter((tc) => !READ_ONLY_TOOLS.has(tc.function.name));
 
-  await executeReadOnlyCallsInParallel(readOnlyCalls);
+  // Execute read-only calls: in parallel when 2+ of them, sequentially when
+  // exactly 1 (no benefit from parallelism for a single call).
+  //
+  // BUG FIX: previously this was written as
+  //     await executeReadOnlyCallsInParallel(readOnlyCalls); // no-op when length<=1
+  //     if (writeCalls.length > 0) { ... } else if (readOnlyCalls.length <= 1) {
+  //         await executeToolCallsSequentially(readOnlyCalls);
+  //     }
+  // When the model returned exactly 1 read-only call + 1+ write calls, the
+  // parallel path was a no-op (length <= 1) AND the `else if` branch was
+  // skipped (because writeCalls.length > 0), so the single read-only call
+  // was SILENTLY DROPPED — never executed, never added to history. The model
+  // would then see an orphan tool_call_id and the API would 400 on the next
+  // request. We now explicitly route the single-call case through the
+  // sequential executor regardless of whether write calls are present.
+  if (readOnlyCalls.length > 1) {
+    await executeReadOnlyCallsInParallel(readOnlyCalls);
+  } else if (readOnlyCalls.length === 1) {
+    await executeToolCallsSequentially(readOnlyCalls);
+  }
 
   if (writeCalls.length > 0) {
     await executeToolCallsSequentially(writeCalls);
     fireOnFileTrigger(writeCalls);
-  } else if (readOnlyCalls.length <= 1) {
-    await executeToolCallsSequentially(readOnlyCalls);
   }
 
   checkAutoHeal(toolCalls);

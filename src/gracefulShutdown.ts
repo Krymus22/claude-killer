@@ -75,18 +75,28 @@ export async function shutdown(signal: string = "SIGINT"): Promise<void> {
       break;
     }
     const perHandlerBudget = Math.min(handlerTimeoutMs, budget);
+    // BUG FIX (timer leak): previously the per-handler `setTimeout` was
+    // created inside the Promise.race and never cleared. When the handler
+    // resolved before the timeout, the timer kept ticking for the full
+    // `perHandlerBudget` milliseconds — keeping the event loop alive
+    // (and the test process hanging for 5s per handler). We now track
+    // the timer and clear it in a `finally` block so it can't outlive
+    // the race.
+    let timer: NodeJS.Timeout | undefined;
     try {
       await Promise.race([
         Promise.resolve(handler()),
-        new Promise<void>((_, reject) =>
-          setTimeout(
+        new Promise<void>((_, reject) => {
+          timer = setTimeout(
             () => reject(new Error(`Handler timeout after ${perHandlerBudget}ms`)),
             perHandlerBudget,
-          ),
-        ),
+          );
+        }),
       ]);
     } catch (err) {
       log.warn(`[SHUTDOWN] Handler failed: ${(err as Error).message}`);
+    } finally {
+      if (timer) clearTimeout(timer);
     }
   }
 

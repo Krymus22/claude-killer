@@ -195,6 +195,28 @@ export async function runProjectVerification(projectDir: string): Promise<string
 }
 
 /**
+ * Walk up from a file's directory looking for the nearest project root
+ * (a directory containing package.json or default.project.json). Falls back
+ * to process.cwd() if neither is found within 10 levels — better to run in
+ * the wrong place than to crash.
+ *
+ * BUG FIX: replaces the old `dirname(f).replace("/src", "")` heuristic
+ * which mangled paths like `/x/src-project/` and broke for files in
+ * `tests/` or nested `src/utils/` dirs.
+ */
+export function findProjectDirForVerification(filePath: string): string {
+  let dir = nodePath.dirname(nodePath.resolve(filePath));
+  for (let i = 0; i < 10; i++) {
+    if (nodeFs.existsSync(nodePath.join(dir, "package.json"))) return dir;
+    if (nodeFs.existsSync(nodePath.join(dir, "default.project.json"))) return dir;
+    const parent = nodePath.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return process.cwd();
+}
+
+/**
  * IDEIA A: Compare current findings with previous round's findings.
  * Returns: fixed bugs, persisting bugs, and new bugs.
  */
@@ -398,8 +420,19 @@ export async function runBugHunter(
     // IDEIA D: Run project between rounds (if blocking)
     let projectOutput = "";
     if (shouldBlock && filesModified.length > 0) {
-      const projectDir = filesModified[0] ? nodePath.dirname(filesModified[0]).replace("/src", "") : process.cwd();
-      log.info(`[BUG_HUNTER] Running project verification...`);
+      // BUG FIX: the old computation
+      //   `nodePath.dirname(filesModified[0]).replace("/src", "")`
+      // was fragile — it assumed the file lives directly under `<root>/src/`,
+      // and `.replace("/src", "")` would also mangle paths like
+      // `/home/user/src-project/foo.ts` → `/home/user/-project/foo.ts`
+      // (removing "/src" from a directory name that happens to start with
+      // "src"). For files in `tests/`, `lib/`, or nested subdirs of `src/`,
+      // it produced a wrong cwd and the project either failed to start or
+      // ran from the wrong place. Now walk up from the file's directory
+      // looking for the nearest package.json (the standard project marker);
+      // fall back to process.cwd() if none is found.
+      const projectDir = findProjectDirForVerification(filesModified[0]);
+      log.info(`[BUG_HUNTER] Running project verification in ${projectDir}...`);
       projectOutput = await runProjectVerification(projectDir);
       log.info(`[BUG_HUNTER] Project output: ${projectOutput.slice(0, 200)}`);
     }

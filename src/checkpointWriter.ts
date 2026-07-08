@@ -94,7 +94,16 @@ export function shouldCheckpoint(historyLength: number): number {
 export async function writeCheckpoint(checkpointNum: number): Promise<CheckpointResult> {
   const start = Date.now();
   const history_msgs = history.getHistory();
-  const contextPercent = Math.round((history_msgs.length / MAX_CONTEXT_TOKENS) * 100);
+  // Bug fix (Bug Hunter #2): previously used `history_msgs.length` (MESSAGE COUNT)
+  // divided by MAX_CONTEXT_TOKENS, which is meaningless — 50 messages / 128000 tokens
+  // = ~0.04%, so contextPercent was always ~0. The caller (agent.ts) already
+  // correctly passes estimateTokens() to shouldCheckpoint(); this function must
+  // do the same for the reported contextPercent metadata. Falls back to 0 if
+  // estimateTokens is not available (e.g., in tests with partial mocks).
+  const currentTokens = typeof history.estimateTokens === "function"
+    ? history.estimateTokens()
+    : 0;
+  const contextPercent = Math.round((currentTokens / MAX_CONTEXT_TOKENS) * 100);
 
   log.info(`[CHECKPOINT] Writing checkpoint ${checkpointNum} at ~${contextPercent}% context`);
 

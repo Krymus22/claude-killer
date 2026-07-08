@@ -178,49 +178,67 @@ export function loadActiveManifests(): ToolManifest[] {
  * Scans all mode directories for manifests with `sharedWith` containing the
  * active mode name. Returns manifests that should be visible in the active
  * mode but live in a different mode's folder.
+ *
+ * Scans THREE locations (mirroring getManifestsDir):
+ *   1. ~/.claude-killer/modes/<mode>/manifests/  (user customizations)
+ *   2. <cwd>/defaults/modes/<mode>/manifests/    (dev mode)
+ *   3. <dist>/../defaults/modes/<mode>/manifests/ (production/bundled)
+ *
+ * BUG FIX: previously only locations 1 and 2 were scanned. When running from
+ * dist/ (production), location 3 is the ONLY place bundled modes exist (the
+ * user's home dir might not have been seeded yet, and cwd is not the package
+ * root). Shared tools from bundled-only modes (e.g., a bundled "devops" mode
+ * sharing tools with the active "roblox" mode) were silently missing.
  */
 function findSharedManifests(modeName: string | null): ToolManifest[] {
   if (!modeName) return [];
 
   const home = process.env.HOME ?? process.env.USERPROFILE ?? os.homedir();
-  const modesDir = path.join(home, ".claude-killer", "modes");
   const shared: ToolManifest[] = [];
+  const seenModeDirs = new Set<string>();
 
-  // Scan user's modes directory
-  if (fs.existsSync(modesDir)) {
+  // Build the list of candidate mode-directories to scan. We scan each
+  // location's parent "modes" dir, then iterate each mode subdirectory.
+  const candidateModesDirs: string[] = [
+    path.join(home, ".claude-killer", "modes"),
+    path.join(process.cwd(), "defaults", "modes"),
+  ];
+  // 3rd location: relative to this module (dist/ → ../defaults/modes).
+  // Mirrors the logic in getManifestsDir() so production/bundled mode
+  // directories are also scanned for sharedWith manifests.
+  if (typeof import.meta !== "undefined" && import.meta.dirname) {
+    candidateModesDirs.push(
+      path.join(import.meta.dirname, "..", "defaults", "modes"),
+      path.join(import.meta.dirname, "..", "..", "defaults", "modes"),
+    );
+  }
+
+  for (const modesDir of candidateModesDirs) {
+    if (!fs.existsSync(modesDir)) continue;
+    // Avoid scanning the same directory twice (e.g., when cwd == package root
+    // and the dist-relative path resolves to the same place).
+    const realModesDir = fs.realpathSync(modesDir);
+    if (seenModeDirs.has(realModesDir)) continue;
+    seenModeDirs.add(realModesDir);
+
     try {
       for (const entry of fs.readdirSync(modesDir)) {
         const entryPath = path.join(modesDir, entry);
-        if (!fs.statSync(entryPath).isDirectory()) continue;
+        try {
+          if (!fs.statSync(entryPath).isDirectory()) continue;
+        } catch {
+          continue;
+        }
         if (entry === modeName || entry === "normal") continue; // skip self + normal
 
-        // Load manifests from this mode
-        const otherManifests = loadModeManifests(entry);
-        for (const m of otherManifests) {
-          if (m.sharedWith?.includes(modeName)) {
-            shared.push(m);
-            log.debug(`[MANIFEST] Shared tool: ${m.name} from mode "${entry}" → "${modeName}"`);
-          }
-        }
-      }
-    } catch {
-      // Can't read dir, skip
-    }
-  }
-
-  // Also scan bundled defaults
-  const bundledModesDir = path.join(process.cwd(), "defaults", "modes");
-  if (fs.existsSync(bundledModesDir)) {
-    try {
-      for (const entry of fs.readdirSync(bundledModesDir)) {
-        const entryPath = path.join(bundledModesDir, entry);
-        if (!fs.statSync(entryPath).isDirectory()) continue;
-        if (entry === modeName || entry === "normal") continue;
-
+        // Load manifests from this mode (loadModeManifests checks all 3
+        // locations via getManifestsDir, so we don't need to worry about
+        // which specific dir the manifests come from).
         const otherManifests = loadModeManifests(entry);
         for (const m of otherManifests) {
           if (m.sharedWith?.includes(modeName) && !shared.some((s) => s.name === m.name)) {
             shared.push(m);
+            log.debug(`[MANIFEST] Shared tool: ${m.name} from mode "${entry}" → "${modeName}"`);
           }
         }
       }

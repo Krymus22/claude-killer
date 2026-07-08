@@ -1029,7 +1029,7 @@ function extractRetryAfter(err: unknown): number {
   return rawRetryAfter ? Number(rawRetryAfter) : Number.NaN;
 }
 
-function buildQuotaExhaustedMessage(retryAfterS: number, errBody: string): string {
+async function buildQuotaExhaustedMessage(retryAfterS: number, errBody: string): Promise<string> {
   const isQuotaExhausted = Number.isNaN(retryAfterS) || retryAfterS > MAX_RETRY_AFTER_S;
   const retryAfterLabel = Number.isNaN(retryAfterS) ? "N/A" : retryAfterS + "s";
   const hint = isQuotaExhausted
@@ -1038,9 +1038,13 @@ function buildQuotaExhaustedMessage(retryAfterS: number, errBody: string): strin
   const modelHint = config.model ?? "this model";
 
   // Defer i18n import to avoid circular dependency at module load time
-  // (apiClient is imported very early, before i18n is initialized)
+  // (apiClient is imported very early, before i18n is initialized).
+  // Use a dynamic ESM `import()` instead of `require()` to comply with
+  // the project's ESM-only convention (BUSINESS_RULES §17 / package.json
+  // "type": "module"). The dynamic import is awaited here so the function
+  // signature becomes async — callers already await handle429Error.
   try {
-    const { t } = require("./i18n.js") as { t: (key: string, ...args: unknown[]) => string };
+    const { t } = await import("./i18n.js");
     return t("error.429_quota", modelHint, errBody) + `\n\n   ${hint}`;
   } catch {
     // Fallback to EN if i18n not available
@@ -1114,7 +1118,7 @@ async function handle429Error(
     Number.isNaN(retryAfterS) || retryAfterS > MAX_RETRY_AFTER_S;
 
   if (isQuotaExhausted || attempt >= MAX_429_RETRIES) {
-    throw new Error(buildQuotaExhaustedMessage(retryAfterS, errBody));
+    throw new Error(await buildQuotaExhaustedMessage(retryAfterS, errBody));
   }
 
   return retryWithDelay(retryAfterS, attempt);

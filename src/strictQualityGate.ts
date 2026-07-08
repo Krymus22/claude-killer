@@ -21,7 +21,7 @@
  *   STRICT_GATE_SKIP_PATTERNS=     (comma-separated path globs to skip)
  */
 
-import { spawn } from "node:child_process";
+import { spawn, execSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as log from "./logger.js";
@@ -251,7 +251,13 @@ async function runRojoBuildCheck(cfg: QualityGateConfig, projectRoot: string): P
 
   // Check if rojo binary is available
   try {
-    const { execSync } = require("node:child_process");
+    // BUG FIX: use top-level `import { execSync }` (ESM) instead of dynamic
+    // `require("node:child_process")`. The whole codebase is ESM
+    // ({"type":"module"} in package.json) — `require()` only works here because
+    // of a CommonJS-compat shim, and it breaks `vi.mock("node:child_process")`
+    // in tests (the mock replaces the named export, but `require()` bypasses
+    // the mock and loads the real module). The static import is both correct
+    // and testable.
     execSync("which rojo 2>/dev/null || where rojo 2>/dev/null", {
       encoding: "utf8",
       timeout: 3000,

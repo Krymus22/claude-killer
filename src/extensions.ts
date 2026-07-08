@@ -2,10 +2,13 @@
  * extensions.ts - Skills & MCP (Model Context Protocol) plugin system.
  *
  * MCP Implementation:
- *   Uses JSON-RPC 2.0 over stdio (Content-Length framing) per the MCP spec.
- *   On startup, each configured MCP server is spawned, initialized via the
- *   `initialize` handshake, and queried for available tools via `tools/list`.
- *   Discovered tools are stored and can be invoked via `callMCPTool()`.
+ *   Uses JSON-RPC 2.0 over stdio with NDJSON framing (newline-delimited JSON)
+ *   per the MCP spec (https://spec.modelcontextprotocol.io/). NDJSON is
+ *   REQUIRED by Roblox Studio MCP — Content-Length/LSP framing is NOT used
+ *   (see BUSINESS_RULES.md §17 rule #22). On startup, each configured MCP
+ *   server is spawned, initialized via the `initialize` handshake, and
+ *   queried for available tools via `tools/list`. Discovered tools are
+ *   stored and can be invoked via `callMCPTool()`.
  *
  * Skills:
  *   Markdown files with YAML frontmatter loaded from ~/.claude-killer/skills/
@@ -290,15 +293,34 @@ function sendRequest(server: ActiveMCPServer, method: string, params?: Record<st
  *   2. LSP-style Content-Length framing (legacy, used by some older servers):
  *      `Content-Length: <n>\r\n\r\n<json body>`
  *
- * Auto-detection: if the buffer contains `\r\n\r\n` with a Content-Length
- * header, parse as LSP. Otherwise, parse as NDJSON (split by newlines).
+ * Auto-detection: if the buffer STARTS with a `Content-Length:` header
+ * (followed by `\r\n\r\n`), parse as LSP. Otherwise, parse as NDJSON
+ * (split by newlines).
+ *
+ * BUG FIX: previously the LSP detection used `/Content-Length:\s*\d+/i.test(remaining)`
+ * which matches "Content-Length:" ANYWHERE in the buffer. A NDJSON message
+ * whose JSON body contained the string "Content-Length: 1234" (e.g., a tool
+ * result returning HTTP headers, or an LSP/HTTP error message embedded in a
+ * string field) would be misclassified as LSP and silently dropped — the LSP
+ * parser would try to parse the JSON body as an LSP frame, fail JSON.parse
+ * on the wrong slice, and skip the message. This caused tools/call responses
+ * to be lost intermittently when the result mentioned Content-Length.
+ *
+ * The fix requires the buffer to START with `Content-Length:` (anchored with
+ * `^`). LSP frames always begin with the Content-Length header at the start
+ * of the frame, so this is safe and avoids false positives from NDJSON
+ * bodies that merely mention "Content-Length:" in a string value.
  */
 function parseMessages(buffer: string): { messages: JSONRPCResponse[]; remaining: string } {
   const messages: JSONRPCResponse[] = [];
   let remaining = buffer;
 
-  // Check if this looks like LSP-style Content-Length framing
-  const hasLspHeader = /Content-Length:\s*\d+/i.test(remaining) && remaining.includes("\r\n\r\n");
+  // Check if this looks like LSP-style Content-Length framing.
+  // BUG FIX: anchor to start of buffer (^) so NDJSON messages that merely
+  // contain "Content-Length:" inside a JSON string value are NOT
+  // misclassified as LSP. LSP frames always start with the Content-Length
+  // header at the beginning of the frame.
+  const hasLspHeader = /^Content-Length:\s*\d+/i.test(remaining) && remaining.includes("\r\n\r\n");
 
   if (hasLspHeader) {
     // Legacy LSP-style parsing (for backward compat with old servers)

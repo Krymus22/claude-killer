@@ -196,9 +196,56 @@ function matchesPattern(filePath: string, pattern: string): boolean {
 }
 
 /**
+ * Parse a command string into program + args, respecting double-quoted
+ * segments. This handles file paths containing spaces (or other whitespace)
+ * when the caller wraps them in double quotes.
+ *
+ * Examples:
+ *   `terraform fmt "/path/with spaces/file.tf"` → ["terraform", "fmt", "/path/with spaces/file.tf"]
+ *   `selene --no-global-check {file}`            → ["selene", "--no-global-check", "{file}"]
+ *   `echo "hello world"`                         → ["echo", "hello world"]
+ *
+ * BUG FIX: previously runHook used a naive `command.split(/\s+/)` which
+ * broke any quoted argument containing spaces. The {file} placeholder was
+ * replaced with `"${filePath}"` (with quotes), but the split would break
+ * the quoted path into multiple parts. When passed to spawn() (which
+ * doesn't use a shell), the literal quote characters became part of the
+ * argument values, so the tool received a filename like `"/path/with` and
+ * `spaces/file.tf"` instead of `/path/with spaces/file.tf`. Hooks would
+ * silently fail on any file path with spaces.
+ */
+function parseCommand(cmd: string): string[] {
+  const parts: string[] = [];
+  let current = "";
+  let inQuote = false;
+  for (let i = 0; i < cmd.length; i++) {
+    const c = cmd[i];
+    if (c === '"') {
+      // Toggle quote state. The quote character itself is NOT included in
+      // the argument value — spawn() passes each arg as-is, no shell
+      // parsing, so the quotes were only there as a delimiter.
+      inQuote = !inQuote;
+    } else if (/\s/.test(c) && !inQuote) {
+      // Whitespace outside quotes → argument separator
+      if (current.length > 0) {
+        parts.push(current);
+        current = "";
+      }
+    } else {
+      current += c;
+    }
+  }
+  if (current.length > 0) {
+    parts.push(current);
+  }
+  return parts;
+}
+
+/**
  * Run a hook command on a file.
  *
- * Replaces {file} in the command with the file path, then runs it via spawn.
+ * Replaces {file} in the command with the file path (quoted for safety,
+ * so paths with spaces are preserved), then runs it via spawn (no shell).
  * Returns { ok, stdout, stderr }.
  *
  * @param hook The hook definition
@@ -208,12 +255,15 @@ export async function runHook(
   hook: ModeHook,
   filePath: string
 ): Promise<{ ok: boolean; stdout: string; stderr: string; command: string }> {
-  // Replace {file} placeholder with actual file path (quoted for safety)
+  // Replace {file} placeholder with actual file path (quoted for safety,
+  // so paths with spaces survive the command parser below).
   const safePath = `"${filePath}"`;
   const command = hook.command.replace(/\{file\}/g, safePath);
 
-  // Parse command into program + args (simple split on spaces)
-  const parts = command.split(/\s+/).filter(Boolean);
+  // Parse command into program + args, respecting double-quoted segments.
+  // BUG FIX: was `command.split(/\s+/).filter(Boolean)` which broke quoted
+  // paths with spaces. See parseCommand() above.
+  const parts = parseCommand(command);
   if (parts.length === 0) {
     return { ok: false, stdout: "", stderr: "Empty command", command };
   }

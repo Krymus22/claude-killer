@@ -89,7 +89,15 @@ function truncateMiddle(s: string, max: number): string {
  */
 function formatToolArgs(args: Record<string, unknown>): string {
   // Tool "pensar" — não mostrar o pensamento no chat (é interno)
-  if (args.pensamento !== undefined || args.pensamento !== null) {
+  // BUG FIX (always-true-condition): The previous condition
+  //   `args.pensamento !== undefined || args.pensamento !== null`
+  // was ALWAYS true (for any value X, at least one of `X !== undefined`
+  // or `X !== null` holds — undefined !== null is true, null !== undefined
+  // is true, anything else makes both true). The inner `typeof === "string"`
+  // check happened to prevent incorrect output, so behavior was unchanged,
+  // but the outer guard was logically broken. Switch to `!= null` which
+  // correctly means "is neither undefined nor null".
+  if (args.pensamento != null) {
     if (typeof args.pensamento === "string") {
       const cat = args.categoria ?? args.category;
       return cat ? `(${cat}, ${args.pensamento.length} chars)` : `(${args.pensamento.length} chars)`;

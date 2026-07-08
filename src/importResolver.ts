@@ -151,7 +151,16 @@ function resolveImportPath(source: string, fromFile: string): string | null {
     }
   };
 
-  const extensions = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".luau", ".lua", ".py", ".rs", ".go", "/index.ts", "/index.js"];
+  // BUG FIX (Bug Hunter #7): the list was missing /index.tsx, /index.jsx,
+  // /index.mjs, /index.cjs. An import like `import { X } from './utils'`
+  // where utils/ is a directory containing index.tsx would fail to resolve,
+  // producing a false "missing import" warning. Now all 6 JS/TS index
+  // variants are tried.
+  const extensions = [
+    ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs",
+    ".luau", ".lua", ".py", ".rs", ".go",
+    "/index.ts", "/index.tsx", "/index.js", "/index.jsx", "/index.mjs", "/index.cjs",
+  ];
   if (existsAsFile(resolved)) return resolved;
   for (const ext of extensions) {
     if (existsAsFile(resolved + ext)) return resolved + ext;

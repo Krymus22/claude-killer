@@ -32,9 +32,22 @@ function powershellSingleQuote(s: string): string {
 /**
  * Escape a string for use inside an AppleScript double-quoted string.
  * AppleScript escapes `\` and `"` with a leading backslash.
+ *
+ * BUG FIX (shell injection via single quote): the result of this function
+ * is embedded inside a bash single-quoted argument (`osascript -e '...'`).
+ * A single `'` in the path would terminate the bash single-quoted string
+ * early, allowing the rest of the path to be interpreted by bash as
+ * arbitrary commands. We now also escape `'` using the standard bash
+ * `'\''` idiom (close, escaped-quote, reopen) so it survives the bash
+ * layer and reaches AppleScript as a literal single quote.
  */
 function applescriptDoubleQuote(s: string): string {
-  return `"${s.replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`;
+  // First, escape for the AppleScript double-quoted string context.
+  const applescriptSafe = s.replaceAll("\\", "\\\\").replaceAll('"', '\\"');
+  // Then, escape `'` for the bash single-quoted context (the AppleScript
+  // is embedded inside `osascript -e '...'`).
+  const bashSafe = applescriptSafe.replaceAll("'", "'\\''");
+  return `"${bashSafe}"`;
 }
 
 export function copyToClipboard(text: string): boolean {
@@ -107,8 +120,8 @@ export function copyFileToClipboard(filePath: string): boolean {
       // fallback. A `"`, `'`, `$()`, or backtick in the path could break
       // out and run arbitrary commands. Now we escape for both layers:
       //   - applescriptDoubleQuote escapes `\` and `"` for the AppleScript
-      //     double-quoted string that lives inside the bash single-quoted
-      //     -e argument.
+      //     double-quoted string AND `'` for the bash single-quoted -e
+      //     argument that wraps the AppleScript.
       //   - bashSingleQuote wraps the path for the `cat` fallback so any
       //     shell metacharacter is treated literally.
       const appPath = applescriptDoubleQuote(filePath);

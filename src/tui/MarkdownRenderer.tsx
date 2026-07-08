@@ -127,6 +127,50 @@ function displayWidth(str: string): number {
 // ─── Block Parser ─────────────────────────────────────────────────────────
 
 /**
+ * Check if a line is a valid closing code fence.
+ *
+ * Per CommonMark, a closing code fence must be a line containing only
+ * backticks (at least as many as the opening fence, but we accept 3+)
+ * and optional trailing whitespace. Any other content (e.g. ```` ```javascript ````
+ * — backticks followed by a word) is NOT a closing fence and should be
+ * preserved as code content.
+ *
+ * BUG FIX (false-close): previously the parser used
+ * `lines[i].trim().startsWith("```")` to detect the closing fence, which
+ * incorrectly treated ```` ```javascript ```` as a closing fence. This caused
+ * code blocks to be prematurely closed when they contained a line starting
+ * with backticks (e.g. an example of a code fence inside a code block).
+ */
+function isCodeFenceClose(line: string): boolean {
+  return /^\s*`{3,}\s*$/.test(line);
+}
+
+/**
+ * Check if the line at index `i` is the start of a valid GFM table.
+ *
+ * A table starts when:
+ *   1. The current line starts with `|` (we require leading pipes).
+ *   2. There is a next line.
+ *   3. The next line is a valid table separator (dashes/colons only).
+ *
+ * Used by both the outer `parseBlocks` loop (to decide whether to enter
+ * table-parsing mode) and the inner text-block loop (to decide whether to
+ * terminate the current text block so the outer loop can handle the table).
+ *
+ * BUG FIX (infinite-loop-table): the text-block loop previously used the
+ * weaker `lines[i].trim().startsWith("|")` check, which terminated the text
+ * block on ANY pipe-prefixed line — including lines that were NOT valid
+ * table headers. The outer loop then re-reached the same line without
+ * advancing, causing an infinite loop on inputs like
+ * `| a | b |\n| c | d |`. Using `isTableStart` instead ensures the text
+ * block only yields to a genuine table.
+ */
+function isTableStart(lines: string[], i: number): boolean {
+  if (i + 1 >= lines.length) return false;
+  return lines[i].trim().startsWith("|") && isTableSeparator(lines[i + 1].trim());
+}
+
+/**
  * Parse markdown text into blocks (block-level elements).
  * Each block is a separate render unit.
  */
@@ -146,11 +190,24 @@ function parseBlocks(text: string): MarkdownBlock[] {
     }
 
     // Code block (```)
+    // BUG FIX (lang-bloat): previously `line.trim().slice(3).trim()` returned
+    // everything after the opening fence as the lang, so ```` ```ts extra info ````
+    // produced lang = "ts extra info" instead of just "ts". CommonMark says the
+    // info string's first word is the language; the rest is metadata. Now we
+    // split on whitespace and take only the first word.
+    //
+    // BUG FIX (false-close): previously the closing-fence check
+    // `!lines[i].trim().startsWith("```")` treated ANY line starting with ``` as
+    // a closing fence, even ```` ```javascript ```` (with content after the
+    // backticks). Per CommonMark, a closing fence must be ONLY backticks (+ optional
+    // trailing whitespace) — no other content. Now `isCodeFenceClose` enforces that,
+    // so a line like ```` ```javascript ```` inside a code block is preserved as
+    // code content instead of prematurely closing the block.
     if (line.trim().startsWith("```")) {
-      const lang = line.trim().slice(3).trim() || undefined;
+      const lang = line.trim().slice(3).trim().split(/\s+/)[0] || undefined;
       const codeLines: string[] = [];
       i++;
-      while (i < lines.length && !lines[i].trim().startsWith("```")) {
+      while (i < lines.length && !isCodeFenceClose(lines[i])) {
         codeLines.push(lines[i]);
         i++;
       }
@@ -239,18 +296,42 @@ function parseBlocks(text: string): MarkdownBlock[] {
     }
 
     // Regular text (may span multiple lines until empty line or block element)
+    //
+    // BUG FIX (infinite-loop-table): previously the loop terminated on ANY
+    // line starting with `|`, but if that line was NOT a valid table header
+    // (no separator on the next line), the outer `while` loop reached this
+    // branch again WITHOUT advancing `i`. Result: infinite loop on inputs
+    // like `| a | b |\n| c | d |` (pipe-prefixed text that isn't a table).
+    // Now we only terminate the text block when a VALID table starts
+    // (`isTableStart`), so non-table pipe lines are consumed as text.
+    //
+    // BUG FIX (infinite-loop-header): previously the loop terminated on the
+    // weak regex `/^(#{1,6})\s+/` (no content required), but the outer loop's
+    // header check requires `^(#{1,6})\s+(.+)$` (content required). So a line
+    // like `# ` (hash + space, no content) terminated the text block but was
+    // NOT consumed by the outer header branch — infinite loop. Now the text
+    // block condition uses the same content-requiring regex as the outer loop.
     const textLines: string[] = [];
     while (
       i < lines.length &&
       lines[i].trim() !== "" &&
       !lines[i].trim().startsWith("```") &&
-      !lines[i].match(/^(#{1,6})\s+/) &&
+      !/^(#{1,6})\s+.+/.test(lines[i]) &&
       !/^\s*([-*_])(\s*\1){2,}\s*$/.test(lines[i]) &&
-      !lines[i].trim().startsWith("|") &&
+      !isTableStart(lines, i) &&
       !lines[i].trim().startsWith(">") &&
       !/^\s*[-*+]\s+/.test(lines[i]) &&
       !/^\s*\d+\.\s+/.test(lines[i])
     ) {
+      textLines.push(lines[i]);
+      i++;
+    }
+    // SAFETY: if the text block produced zero lines (i.e. the current line
+    // matched a terminator but the outer loop didn't consume it), force
+    // advancement to prevent an infinite loop. This is a defensive guard —
+    // the fixes above should make it unreachable, but if a future change
+    // re-introduces a mismatch, this keeps the parser total.
+    if (textLines.length === 0 && i < lines.length) {
       textLines.push(lines[i]);
       i++;
     }
@@ -274,6 +355,18 @@ function parseBlocks(text: string): MarkdownBlock[] {
  * Invalid (not a table):
  *   |abc|def|        (letters in cells)
  *   | | |            (no dashes)
+ *   |=-=|=-=|        (equals signs — BUG FIX: previously accepted)
+ *
+ * BUG FIX (equals-accept): previously the char-class regex was `[ :\-=]+`,
+ * which allowed `=` in separator cells. A line like `|=-=|=-=|` was
+ * incorrectly detected as a valid separator, so `| a | b |\n|=-=|=-=|`
+ * was parsed as a (malformed) table instead of falling back to text.
+ * GFM separators must contain only `-`, `:`, and spaces — never `=`.
+ * The regex is now `[ :\-]+`.
+ *
+ * BUG FIX (convoluted-logic): the previous `if (!/^-/.test(trimmed) && ...)`
+ * branch was dead-code-heavy and hard to follow. Simplified to a single
+ * rule: the trimmed cell must match `^[ :\-]+$` AND contain at least one `-`.
  */
 function isTableSeparator(line: string): boolean {
   if (!line.startsWith("|")) return false;
@@ -283,13 +376,10 @@ function isTableSeparator(line: string): boolean {
   // Each cell must contain at least one dash and only dashes/colons/spaces
   return cells.every((cell) => {
     const trimmed = cell.trim();
-    if (!/^[ :\-=]+$/.test(trimmed)) return false; // only allowed chars
-    if (!/^-/.test(trimmed) && !/:--/.test(trimmed) && !/--/.test(trimmed)) {
-      // Must contain at least one dash (allow `:-`, `:-:`, `--`, etc.)
-      // Simplified: require at least one `-`
-      return trimmed.includes("-");
-    }
-    return true;
+    // Only spaces, colons, dashes are allowed (NOT `=` — GFM spec).
+    if (!/^[ :\-]+$/.test(trimmed)) return false;
+    // Must contain at least one dash (allow `:-`, `:-:`, `--`, etc.)
+    return trimmed.includes("-");
   });
 }
 
@@ -748,4 +838,4 @@ export const MarkdownRenderer = React.memo(function MarkdownRenderer({ text }: {
 
 // ─── Exports for testing ──────────────────────────────────────────────────
 
-export { parseBlocks, renderInline, splitTableRow, padCell, displayWidth, isTableSeparator };
+export { parseBlocks, renderInline, splitTableRow, padCell, displayWidth, isTableSeparator, isTableStart, isCodeFenceClose };

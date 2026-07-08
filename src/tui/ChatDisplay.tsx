@@ -173,24 +173,44 @@ function renderMessage(msg: ChatMessage, keyPrefix: string): React.ReactElement 
   }
 
   // assistant - note the leading space in content for alignment
-  // Use MarkdownRenderer for ALL assistant messages (supports bold, tables,
-  // code, etc.), including error and streaming messages.
   //
-  // BUG FIX (error-markdown-raw): previously, error messages (isError=true)
-  // were rendered as plain <Text>, which meant any markdown syntax in the
-  // error content (e.g. `**Erro na execução:**` and ``` code fences that
-  // App.tsx puts in the error content) showed up as literal `**` and ```
-  // characters instead of being formatted. Now error messages also go
-  // through MarkdownRenderer so the user sees formatted output. The red
-  // "❌ Erro:" label above the content still signals the error.
+  // §17.4.21 VIOLATION FIX (error-as-markdown): previously, error messages
+  // (isError=true) were rendered through MarkdownRenderer along with normal
+  // assistant messages. This violated §17.4.21 ("MarkdownRenderer só em
+  // assistant messages — user/tool/error = texto puro"). Error messages
+  // MUST be plain text per the business rules.
   //
-  // Streaming messages also go through MarkdownRenderer — parseBlocks is
+  // The previous "fix" (error-markdown-raw) made App.tsx put markdown
+  // syntax (`**Erro na execução:**` and ``` code fences) into the error
+  // content and then routed it through MarkdownRenderer to format it.
+  // That was the wrong direction — the right fix is to keep error content
+  // as plain text (no `**`, no ```) AND render it as plain <Text>.
+  //
+  // App.tsx has been updated to produce plain-text error content. Error
+  // messages here now render as plain <Text> with the red error color,
+  // matching §17.4.21.
+  //
+  // Streaming messages still go through MarkdownRenderer — parseBlocks is
   // tolerant of partial/unclosed markdown (e.g. an unfinished ``` code
   // fence during streaming is treated as a code block containing the
   // remaining lines), so the live view stays correct as tokens arrive.
+  if (msg.isError) {
+    return (
+      <Box key={keyPrefix} flexDirection="column">
+        <Text color={colors.error} bold> ❌ Erro:</Text>
+        <Box marginLeft={1}>
+          <Text color={colors.error}>{msg.content}</Text>
+        </Box>
+        {msg.isStreaming ? null : <Text></Text>}
+      </Box>
+    );
+  }
+
+  // Normal assistant message — render through MarkdownRenderer (bold,
+  // tables, code, headers, lists, etc.).
   return (
     <Box key={keyPrefix} flexDirection="column">
-      <Text color={msg.isError ? colors.error : colors.secondary} bold> {msg.isError ? "❌ Erro:" : "Claude-Killer:"}</Text>
+      <Text color={colors.secondary} bold> Claude-Killer:</Text>
       <Box marginLeft={1}>
         <MarkdownRenderer text={msg.content} />
       </Box>
@@ -240,6 +260,24 @@ export function ChatDisplay({ messages, maxVisible }: Readonly<ChatDisplayProps>
 
   const { staticMsgs, liveMsgs } = splitStaticLive(candidateMsgs);
 
+  // BUG FIX (indexOf-on2): previously the <Static> and live render loops
+  // called `messages.indexOf(msg)` for each item to compute a stable key.
+  // That is O(n) per item, making the whole render O(n²) — for a 1000-msg
+  // conversation, that's ~500K reference comparisons on every re-render
+  // (every 80ms throttle flush during streaming).
+  //
+  // Since static items live at the BEGINNING of `candidateMsgs` and live
+  // items follow them, the index in `candidateMsgs` (and therefore in
+  // `messages`, when maxVisible is undefined) is just:
+  //   static[i] → i
+  //   live[i]   → staticMsgs.length + i
+  // When maxVisible IS defined, candidateMsgs is a tail slice of messages,
+  // so we add `candidateStart = messages.length - candidateMsgs.length`.
+  // Both lookups are now O(1) per item → O(n) total.
+  const candidateStart = messages.length - candidateMsgs.length;
+  const staticKeyBase = candidateStart;
+  const liveKeyBase = candidateStart + staticMsgs.length;
+
   return (
     <Box flexDirection="column">
       {/*
@@ -252,18 +290,16 @@ export function ChatDisplay({ messages, maxVisible }: Readonly<ChatDisplayProps>
         detects new items in the `items` array (by reference/key) and
         writes only the new ones.
 
-        IMPORTANT: keys must be stable across renders. We use the message
-        index in the FULL messages array (not the staticMsgs slice) so that
-        a message's key doesn't change when it moves from live to static.
+        IMPORTANT: keys must be stable across renders. We compute the key
+        from the index in the FULL messages array (not the staticMsgs
+        slice) so that a message's key doesn't change when it moves from
+        live to static. The index is computed in O(1) via the
+        staticKeyBase / liveKeyBase offsets (see the comment above).
       */}
       <Static items={staticMsgs}>
-        {(msg, i) => {
-          // Find the original index in the full messages array for a stable key.
-          // This ensures the key doesn't change when the message graduates
-          // from live to static (which would cause Ink to re-write it).
-          const originalIdx = messages.indexOf(msg);
-          const key = `msg-${originalIdx >= 0 ? originalIdx : i}`;
-          return renderMessage(msg, key);
+        {(_, i) => {
+          const key = `msg-${staticKeyBase + i}`;
+          return renderMessage(staticMsgs[i]!, key);
         }}
       </Static>
 
@@ -272,8 +308,7 @@ export function ChatDisplay({ messages, maxVisible }: Readonly<ChatDisplayProps>
           tool call, etc.). Kept small (MIN_LIVE_MESSAGES + streaming) so
           the frame never exceeds the terminal viewport. */}
       {liveMsgs.map((msg, i) => {
-        const originalIdx = messages.indexOf(msg);
-        const key = `msg-${originalIdx >= 0 ? originalIdx : `live-${i}`}`;
+        const key = `msg-${liveKeyBase + i}`;
         return renderMessage(msg, key);
       })}
     </Box>

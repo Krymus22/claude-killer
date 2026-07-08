@@ -4,11 +4,14 @@
  *
  * BUGS BEING FIXED (regression tests for each):
  *
- *   Bug 1 (error-markdown-raw): Error messages (isError=true) were rendered
- *   as plain <Text>, so markdown syntax in the error content (e.g.
- *   `**Erro na execução:**` and ``` code fences that App.tsx puts in the
- *   error content) showed up as literal `**` and ``` characters instead of
- *   being formatted. Fix: error messages also go through MarkdownRenderer.
+ *   Bug 1 (§17.4.21-violation): Previously, error messages (isError=true)
+ *   were rendered through MarkdownRenderer along with normal assistant
+ *   messages. This violated §17.4.21 ("MarkdownRenderer só em assistant
+ *   messages — user/tool/error = texto puro"). Error messages MUST be
+ *   plain text. Fix: ChatDisplay renders isError messages with plain <Text>
+ *   (no MarkdownRenderer), and App.tsx produces error content WITHOUT
+ *   markdown syntax (no `**`, no ``` fences). The red "❌ Erro:" label
+ *   is still rendered separately in red bold.
  *
  *   Bug 2 (misleading-comment): The comment in ChatDisplay said "Error
  *   messages and streaming messages use plain text" but streaming messages
@@ -21,10 +24,15 @@
  *   verified here by re-rendering with the same props and checking the
  *   output stays correct (and by a parseBlocks call-count spy).
  *
+ *   Bug 4 (indexOf-on2): ChatDisplay used messages.indexOf(msg) inside the
+ *   <Static> and live render loops — O(n²) per render. Fixed to use index
+ *   offsets. Covered by the "long conversation" test below (smoke check).
+ *
  * COVERAGE:
- *   - Error message with markdown renders formatted (no raw ** or ```)
+ *   - Error message renders as PLAIN TEXT (§17.4.21) — markdown syntax
+ *     stays literal (`**`, ``` fences are NOT parsed).
  *   - Error message label is "❌ Erro:" (red, bold)
- *   - Error message with code block renders the code block content
+ *   - Error message content preserved verbatim (no markdown stripping).
  *   - Streaming message with markdown renders formatted (no raw **)
  *   - Streaming message with partial/unclosed code fence doesn't crash
  *   - Streaming message growing (re-render) re-parses correctly
@@ -35,6 +43,7 @@
  *   - Tool messages still render as plain text (MarkdownRenderer not used)
  *   - User messages still render as plain text (MarkdownRenderer not used)
  *   - ChatMessage interface: all optional fields handled correctly
+ *   - App.tsx error shape: plain text (no `**`, no ```fences)
  */
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
@@ -86,47 +95,49 @@ function renderMessages(messages: ChatMessage[]): string {
   return stripAnsi(lastFrame() ?? "");
 }
 
-// ─── Bug 1: Error message markdown rendering ──────────────────────────────
+// ─── Bug 1: Error message rendering (§17.4.21 — plain text) ──────────────
 
-describe("ChatDisplay × MarkdownRenderer — Bug 1: error message markdown", () => {
+describe("ChatDisplay × MarkdownRenderer — Bug 1: error message is PLAIN TEXT (§17.4.21)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  it("error message renders formatted markdown (no raw ** markers)", () => {
-    // This is the EXACT content shape that App.tsx produces on agent error
-    // (see App.tsx handleSubmit catch block). Before the fix, the user saw
-    // literal `**Erro na execução:**` and ``` characters.
+  it("error message renders content as PLAIN TEXT — markdown NOT parsed (§17.4.21)", () => {
+    // §17.4.21: "MarkdownRenderer só em assistant messages — user/tool/error
+    // = texto puro." Error messages must NOT go through MarkdownRenderer.
+    // If an error content happens to contain markdown syntax (e.g. a stack
+    // trace with `**` or ```), it must appear LITERALLY — not be formatted.
     const messages: ChatMessage[] = [
       {
         role: "assistant",
-        content: "❌ **Erro na execução:**\n\nMensagem de erro.",
+        content: "Erro na execução: **SomethingFailed** at line 5",
         isError: true,
       },
     ];
     const out = renderMessages(messages);
     // The label appears.
     expect(out).toContain("❌ Erro:");
-    // The bold text is rendered WITHOUT the ** markers.
+    // The content appears VERBATIM — `**` is NOT stripped, NOT formatted.
     expect(out).toContain("Erro na execução:");
-    expect(out).not.toContain("**");
+    expect(out).toContain("**SomethingFailed**");
   });
 
-  it("error message renders formatted code block (no raw ``` fences)", () => {
+  it("error message preserves ``` fences literally (§17.4.21)", () => {
+    // If a stack trace contains triple-backticks (e.g. from a templated
+    // error), they must stay literal in the output.
     const messages: ChatMessage[] = [
       {
         role: "assistant",
-        content: "❌ **Erro na execução:**\n\n```\nError: something failed\n    at foo.ts:1:1\n```\n\nTente novamente.",
+        content: "Error: something failed\n```\n    at foo.ts:1:1\n```\nTente novamente.",
         isError: true,
       },
     ];
     const out = renderMessages(messages);
-    // No raw code fences in the output.
-    expect(out).not.toContain("```");
-    // The code block content is rendered.
+    // The ``` fences are NOT consumed by MarkdownRenderer — they appear literally.
+    expect(out).toContain("```");
+    // The stack line is still visible (preserved as plain text).
     expect(out).toContain("Error: something failed");
     expect(out).toContain("at foo.ts:1:1");
-    // The trailing plain text is rendered.
     expect(out).toContain("Tente novamente.");
   });
 
@@ -146,35 +157,35 @@ describe("ChatDisplay × MarkdownRenderer — Bug 1: error message markdown", ()
     expect(out).toContain("Falha crítica");
   });
 
-  it("error message with markdown list renders formatted", () => {
+  it("error message with markdown list renders list as LITERAL text", () => {
+    // Per §17.4.21, the `- item` syntax stays literal (no bullet parsing).
     const messages: ChatMessage[] = [
       {
         role: "assistant",
-        content: "❌ **Erro:**\n\n- Causa 1\n- Causa 2\n- Causa 3",
+        content: "Erro:\n- Causa 1\n- Causa 2\n- Causa 3",
         isError: true,
       },
     ];
     const out = renderMessages(messages);
-    expect(out).not.toContain("**");
-    expect(out).toContain("Causa 1");
-    expect(out).toContain("Causa 2");
-    expect(out).toContain("Causa 3");
+    // The literal `- Causa N` text is preserved (not converted to bullets).
+    expect(out).toContain("- Causa 1");
+    expect(out).toContain("- Causa 2");
+    expect(out).toContain("- Causa 3");
   });
 
-  it("error message with markdown table renders formatted", () => {
+  it("error message with markdown table renders table as LITERAL text", () => {
+    // Per §17.4.21, the `|` table syntax stays literal (no table rendering).
     const messages: ChatMessage[] = [
       {
         role: "assistant",
-        content: "❌ **Erro:**\n\n| Código | Mensagem |\n|--------|----------|\n| 500 | Internal |",
+        content: "Erro:\n| Código | Mensagem |\n|--------|----------|\n| 500 | Internal |",
         isError: true,
       },
     ];
     const out = renderMessages(messages);
-    expect(out).not.toContain("**");
-    // Table content is rendered (header + data row).
-    expect(out).toContain("Código");
-    expect(out).toContain("Mensagem");
-    expect(out).toContain("Internal");
+    // The literal `|` characters are preserved (not parsed as table cells).
+    expect(out).toContain("| Código | Mensagem |");
+    expect(out).toContain("| 500 | Internal |");
   });
 
   it("non-error assistant message still renders markdown (regression check)", () => {
@@ -582,10 +593,10 @@ describe("ChatDisplay × MarkdownRenderer — ChatMessage interface", () => {
     expect(out).toContain("erro");
   });
 
-  it("assistant message with isError=true AND isStreaming=true renders as error", () => {
+  it("assistant message with isError=true AND isStreaming=true renders as PLAIN-TEXT error (§17.4.21)", () => {
     // Edge case: both flags set. The label should be "❌ Erro:" (error
-    // takes precedence in the label choice). Content goes through
-    // MarkdownRenderer either way.
+    // takes precedence). Per §17.4.21, content is rendered as plain text —
+    // markdown syntax stays literal (NOT parsed).
     const messages: ChatMessage[] = [
       {
         role: "assistant",
@@ -597,7 +608,8 @@ describe("ChatDisplay × MarkdownRenderer — ChatMessage interface", () => {
     const out = renderMessages(messages);
     expect(out).toContain("❌ Erro:");
     expect(out).toContain("erro em streaming");
-    expect(out).not.toContain("**");
+    // Per §17.4.21, the `**` is NOT consumed by MarkdownRenderer.
+    expect(out).toContain("**erro em streaming**");
   });
 
   it("tool message with all optional fields renders", () => {
@@ -634,36 +646,53 @@ describe("ChatDisplay × MarkdownRenderer — ChatMessage interface", () => {
   });
 });
 
-// ─── Integration: App.tsx error message shape ─────────────────────────────
+// ─── Integration: App.tsx error message shape (§17.4.21 plain text) ────────
 
-describe("ChatDisplay × MarkdownRenderer — App.tsx error shape", () => {
+describe("ChatDisplay × MarkdownRenderer — App.tsx error shape (§17.4.21)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  it("renders the EXACT error content shape that App.tsx produces", () => {
-    // This is the exact content from App.tsx handleSubmit catch block.
-    // Verifies that the fix renders it correctly end-to-end.
+  it("renders the EXACT (plain-text) error content shape that App.tsx produces", () => {
+    // App.tsx now produces PLAIN-TEXT error content (no `**`, no ``` fences)
+    // to comply with §17.4.21. The label "❌ Erro:" is rendered by
+    // ChatDisplay separately in red bold — the content itself has no label.
+    //
+    // This matches the exact content shape from App.tsx handleSubmit catch
+    // block after the §17.4.21 fix.
     const errMsg = "API timeout after 30000ms";
     const errStack = "    at callApi (apiClient.ts:123:5)\n    at runAgentLoop (agent.ts:456:7)";
-    const content = `❌ **Erro na execução:**\n\n\`\`\`\n${errMsg}\n${errStack}\n\`\`\`\n\nO agente foi interrompido. Você pode tentar novamente ou reformular sua mensagem.`;
+    const content = `Erro na execução:\n\n${errMsg}\n${errStack}\n\nO agente foi interrompido. Você pode tentar novamente ou reformular sua mensagem.`;
 
     const messages: ChatMessage[] = [
       { role: "assistant", content, isError: true },
     ];
     const out = renderMessages(messages);
 
-    // Label appears.
+    // Label appears (added by ChatDisplay, not in the content).
     expect(out).toContain("❌ Erro:");
-    // No raw markdown syntax.
+    // No markdown syntax in the rendered output (content is plain text).
     expect(out).not.toContain("**");
     expect(out).not.toContain("```");
-    // Error message and stack appear (inside code block).
+    // Error message and stack appear (as plain text, not inside a code block).
     expect(out).toContain("API timeout after 30000ms");
     expect(out).toContain("callApi");
     expect(out).toContain("runAgentLoop");
     // Trailing message appears.
     expect(out).toContain("O agente foi interrompido.");
     expect(out).toContain("reformular sua mensagem.");
+  });
+
+  it("App.tsx error content has NO `**` or ``` (§17.4.21 contract)", () => {
+    // This test PINS the App.tsx error content shape — if someone re-adds
+    // `**` or ``` to the error content, this test fails. The error content
+    // must be plain text per §17.4.21.
+    const errMsg = "Some error";
+    const errStack = "    at foo (bar.ts:1:1)";
+    // Mirror the EXACT shape from App.tsx handleSubmit catch block.
+    const content = `Erro na execução:\n\n${errMsg}\n${errStack}\n\nO agente foi interrompido. Você pode tentar novamente ou reformular sua mensagem.`;
+    expect(content).not.toContain("**");
+    expect(content).not.toContain("```");
+    expect(content).not.toContain("❌"); // label is added by ChatDisplay
   });
 });

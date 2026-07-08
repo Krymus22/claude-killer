@@ -65,6 +65,15 @@ import type { AskUserQuestion, AskUserResponse } from "../askUser.js";
 import { getSearxStatus } from "../searxManager.js";
 import { loadConfig as loadDotfileConfig, updateConfig as updateDotfileConfig, saveConfig as saveDotfileConfig } from "../dotfileConfig.js";
 import { listSessions, deleteSession, renameSession, startSession, getLastSession, loadSessionMessages, setActiveSession, getActiveSessionId } from "../session.js";
+// Static import (no circular dep) — fixes the syncPlan() race condition.
+// Previously syncPlan() used `await import("../planExecutor.js")` which
+// scheduled a microtask that could fire AFTER createPlan() was called in
+// the same tick, producing a transient render with `planSteps = []`
+// before the plan appeared (flicker). The static import lets syncPlan
+// read getPlan() synchronously, so setPlanSteps() reflects the new plan
+// immediately. The createPlan() call site also calls syncPlan() right
+// after, eliminating the race entirely.
+import { getPlan as getPlanSync, createPlan as createPlanSync, type Plan as PlanShape } from "../planExecutor.js";
 
 // --- Types ------------------------------------------------------------------
 
@@ -1568,17 +1577,35 @@ export function App() {
     setTodos([...current]);
   }, []);
 
-  // Sync plan steps from planExecutor (separate callback because planExecutor
-  // is loaded dynamically to avoid circular deps)
+  // Sync plan steps from planExecutor (synchronous — static import).
+  //
+  // BUG FIX (syncPlan-race): previously this used `import("../planExecutor.js").then(...)`,
+  // which scheduled a microtask that could resolve AFTER `createPlan()` was
+  // called in the same handleSubmit tick (the explicit `await import()` for
+  // createPlan came AFTER syncPlan but both queued on the same microtask
+  // queue, so syncPlan's `.then()` ran FIRST with the OLD plan state —
+  // setPlanSteps([]) — then createPlan ran, then the finally-block syncPlan
+  // re-read the new plan). The result was a transient render with no plan
+  // panel between the "create" and "sync" calls (visual flicker / plan
+  // appears to disappear and reappear).
+  //
+  // The static import makes getPlan() synchronous, so setPlanSteps() reflects
+  // the current plan state immediately. The createPlan() call site (in
+  // handleSubmit) also calls syncPlan() right after to push the new plan
+  // into React state without waiting for the next tick.
   const syncPlan = useCallback(() => {
-    import("../planExecutor.js").then(({ getPlan }) => {
-      const plan = getPlan();
+    try {
+      const plan: PlanShape | null = getPlanSync();
       if (plan) {
         setPlanSteps(plan.steps.map((s) => ({ description: s.description, done: s.done })));
       } else {
         setPlanSteps([]);
       }
-    }).catch(() => { /* planExecutor not available */ });
+    } catch {
+      // planExecutor should always be available (static import), but be
+      // defensive in case the module failed to load.
+      setPlanSteps([]);
+    }
   }, []);
 
   // -- Streaming helpers (extracted to reduce handleSubmit complexity) ---
@@ -1982,17 +2009,24 @@ export function App() {
         // stayed null, hasIncompletePlan() always returned false, so
         // checkPlanCompletion() never blocked. The two systems were
         // completely decoupled.
+        //
+        // BUG FIX (syncPlan-race): use the statically-imported createPlanSync
+        // (no `await import()`) AND call syncPlan() immediately after, so the
+        // plan appears in the TUI in the SAME React commit. Previously the
+        // dynamic import + missing immediate syncPlan() caused a one-tick
+        // delay where planSteps was still [] right after creation.
         if (history.isPlanMode() && response.includes("===END PLAN===")) {
           try {
-            const { createPlan } = await import("../planExecutor.js");
             const steps = extractPlanSteps(response);
             if (steps.length > 0) {
-              createPlan(steps);
+              createPlanSync(steps);
               setSystemMessages((prev) => [...prev,
                 `[PLAN] Plano criado com ${steps.length} passo(s). Modo Plan desativado — execute os passos agora.`,
               ]);
               // Auto-disable plan mode after plan is created
               history.setPlanMode(false);
+              // Push the new plan into React state immediately — no flicker.
+              syncPlan();
             }
           } catch { /* planExecutor not available */ }
         }
@@ -2001,14 +2035,24 @@ export function App() {
         // systemMessages (which may be hidden/scrolled away). Without this,
         // the user sees the input field reappear with no explanation —
         // looks like "the CLI died silently".
+        //
+        // §17.4.21: error messages MUST be plain text (no MarkdownRenderer).
+        // The previous version embedded `**bold**` and ``` code fences ```
+        // in the content AND routed it through MarkdownRenderer — both
+        // violated the rule. Now the content is plain text (the label
+        // "❌ Erro:" is rendered separately by ChatDisplay in red bold),
+        // and ChatDisplay renders isError messages with plain <Text>.
         const errMsg = (err as Error).message ?? String(err);
         const errStack = (err as Error).stack?.split("\n").slice(0, 3).join("\n") ?? "";
+        const errContent = errStack
+          ? `Erro na execução:\n\n${errMsg}\n${errStack}\n\nO agente foi interrompido. Você pode tentar novamente ou reformular sua mensagem.`
+          : `Erro na execução:\n\n${errMsg}\n\nO agente foi interrompido. Você pode tentar novamente ou reformular sua mensagem.`;
         setMessages((prev) => {
           // Replace any in-progress streaming message with the error
           const withoutStreaming = prev.filter((m) => !m.isStreaming);
           return [...withoutStreaming, {
             role: "assistant" as const,
-            content: `❌ **Erro na execução:**\n\n\`\`\`\n${errMsg}\n${errStack}\n\`\`\`\n\nO agente foi interrompido. Você pode tentar novamente ou reformular sua mensagem.`,
+            content: errContent,
             isError: true,
           }];
         });

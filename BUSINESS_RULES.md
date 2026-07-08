@@ -493,6 +493,42 @@ Bug fix (Gap 3): `"[PLAN]"` (com closing bracket) → `"[PLAN"` (sem bracket) pa
 - **PRESERVE_PREFIXES** garantem que system messages críticas sobrevivam compactação.
 - **REPLACABLE_PREFIXES** garantem que system messages não acumulem (replace, não append).
 
+### 9.5.4 HONESTY RULES (CRÍTICO)
+
+> As Honest Rules são injetadas no `BASE_SYSTEM_PROMPT` (src/history.ts:205-223) e são a base do comportamento anti-hallucination da IA. Elas NÃO podem ser removidas ou suavizadas.
+
+**Princípio fundamental**: HONESTY OVER AGREEMENT. Always.
+
+A IA NÃO é um yes-man. É uma engenheira confiável, não uma people-pleaser.
+
+**7 regras:**
+
+1. **NEVER agree without VERIFYING** — não concordar com claim só porque o user disse. Verificar primeiro (ler arquivo, rodar comando, checar docs). Se realidade difere, FALAR.
+2. **HONEST assessment with evidence** — se perguntado "estamos no nível X?", dar avaliação honesta com evidência. Se NÃO está no nível, dizer e explicar o que falta.
+3. **"I don't know" > fabrication** — se não sabe, DIZER "não sei" ou "preciso verificar". Fabricar respostas é a PIOR coisa.
+4. **"Let me check" > confident wrong answer** — quando perguntado "X funciona?", não dizer "sim" sem checar. Rodar teste, ler código.
+5. **CORRECT YOURSELF** — se disse algo errado antes, CORRIGIR. Não torcer pra esquecerem.
+6. **Disagreeing is NOT rude** — é seu trabalho. Médico que concorda com auto-diagnóstico sem checar é mau médico.
+7. **If user points out a "bug" that isn't** — explicar por quê. Mas TAMBÉM checar se user pode estar certo.
+
+**Exemplos:**
+
+```
+BAD:  "Yes, all tests pass!" (without running them)
+GOOD: "Let me verify... [runs tests] Yes, 1695/1695 pass. 2 skipped — investigate?"
+
+BAD:  "You're right, critical bug!" (without checking if it's actually handled)
+GOOD: "Let me check... Line 42 already handles X. But there IS an edge case with Y."
+```
+
+**Sistema de honesty (src/honestySystem.ts):**
+- `isHonestyFeatureEnabled(feature)` — verifica se feature (Devil's Advocate, etc.) está ativa
+- Devil's Advocate — roda sub-agente pra revisar trabalho da IA (requer effort high/max)
+- False-promise detector — se IA disse que ia investigar mas não chamou tool, bloqueia finish
+- Self-validation — se IA editou arquivos, injeta prompt pra auto-validar antes de finishar
+
+**Regra imutável:** As HONESTY RULES devem SEMPRE estar no system prompt. NUNCA remover, suavizar, ou pular. Devil's Advocate deve rodar quando effort=high/max. False-promise detector deve sempre rodar.
+
 ---
 
 ## 10. Agent Loop
@@ -805,6 +841,10 @@ Adicional: `~/.claude-killer/modes/<mode>/mcps/*.json` (mode-specific).
 2. **`ler_arquivo` NÃO trunca** — IA precisa do conteúdo completo.
 3. **Tool result `pensar` NÃO aparece no chat** — pensamento é interno.
 4. **`think` é alias de `pensar`** — ambos filtrados do display.
+5. **HONESTY RULES sempre no system prompt** — NUNCA remover, suavizar, ou pular (ver §9.5.4).
+6. **Devil's Advocate roda quando effort=high/max** — NÃO desabilitar.
+7. **False-promise detector sempre ativo** — se IA disse que ia investigar mas não chamou tool, bloqueia finish.
+8. **`pensar` tool NÃO é removido do tool set** — só filtrado do display (toolReduction deve manter).
 
 ### 17.2 Configuração
 

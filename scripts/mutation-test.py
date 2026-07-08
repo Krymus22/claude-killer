@@ -106,7 +106,16 @@ SKIP_FILES = {
 }
 
 # Maximum mutations per file (0 = unlimited)
-MAX_MUTATIONS_PER_FILE = 0  # 0 = all
+# BUG FIX: 0 (unlimited) caused runs to take 13h+ and hit the 10h CI timeout.
+# agent.ts (2199 lines) alone generates ~400 mutations × 10s = 67min.
+# With 111 files, total was ~13h. Now capped at 30/file = ~3300 mutations
+# total × 8s = ~7h (fits in 10h CI timeout with margin).
+MAX_MUTATIONS_PER_FILE = 30
+
+# Skip files larger than this (lines) — they generate too many mutations
+# and the per-file cap would only test the first N mutations (biased).
+# Better to skip entirely than give a false sense of coverage.
+MAX_FILE_LINES = 1500
 
 # Timeout for each test run (seconds) — increased from 30 to 60
 TEST_TIMEOUT = 60
@@ -286,11 +295,27 @@ def main():
         for f in SRC_DIR.glob('*.ts'):
             if f.name in SKIP_FILES:
                 continue
+            # Skip files larger than MAX_FILE_LINES (would generate too many
+            # mutations and hit the per-file cap before covering the whole file)
+            try:
+                line_count = sum(1 for _ in open(f, 'r', encoding='utf-8', errors='ignore'))
+            except Exception:
+                line_count = 0
+            if line_count > MAX_FILE_LINES:
+                print(f"  ⏭️  {f.name} — {line_count} lines (>{MAX_FILE_LINES}, skipping)")
+                continue
             source_files.append(str(f))
         # Also include src/tui/*.tsx (UI components)
         tui_dir = SRC_DIR / "tui"
         if tui_dir.exists():
             for f in tui_dir.glob('*.tsx'):
+                try:
+                    line_count = sum(1 for _ in open(f, 'r', encoding='utf-8', errors='ignore'))
+                except Exception:
+                    line_count = 0
+                if line_count > MAX_FILE_LINES:
+                    print(f"  ⏭️  tui/{f.name} — {line_count} lines (>{MAX_FILE_LINES}, skipping)")
+                    continue
                 source_files.append(str(f))
 
     print(f"╔══════════════════════════════════════════════════════════╗")

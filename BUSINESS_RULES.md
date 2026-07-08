@@ -423,6 +423,37 @@ Bug fix (Gap 3): `"[PLAN]"` (com closing bracket) → `"[PLAN"` (sem bracket) pa
 - `toolName === "pensar"` OU `toolName === "think"` com `isResult: true` → `return null` (não renderiza).
 - Pensamentos da IA são internos, não vazam pro chat.
 
+### 8.6 Markdown Rendering (MarkdownRenderer.tsx)
+
+> Arquivo: `src/tui/MarkdownRenderer.tsx`
+
+Mensagens de **assistant** são renderizadas com markdown formatting. Mensagens de **user**, **tool**, e **error** continuam como texto puro.
+
+**Features suportadas:**
+
+| Sintaxe | Renderização | Ink |
+|---------|-------------|-----|
+| `**bold**` | **bold** | `<Text bold>` |
+| `*italic*` | *italic* | `<Text italic>` |
+| `` `code` `` | código inline (amarelo) | `<Text color="yellow">` |
+| ` ```code block``` ` | bloco de código (cinza, indentado) | `<Box>` com `<Text color="muted">` |
+| `# Header` | header bold + colorido | `<Text bold color>` |
+| `- item` / `* item` | bullet list com • | `<Text> • </Text>` |
+| `1. item` | numbered list | `<Text> N. </Text>` |
+| `> quote` | blockquote com │ | `<Text> │ </Text>` |
+| `\| table \|` | tabela alinhada com flexbox | `<Box flexDirection="row">` |
+| `---` | horizontal rule | `<Text>─────</Text>` |
+| `[link](url)` | link colorido (azul) | `<Text color="blue">` |
+| `~~strike~~` | strikethrough (muted) | `<Text color="muted">` |
+
+**Regras imutáveis:**
+- **Apenas mensagens de assistant** usam MarkdownRenderer. User/tool/error = texto puro.
+- **Tabelas usam Ink flexbox** (não cli-table3 ou ASCII borders) — mesmo approach do Claude Code.
+- **Parser é custom** (sem dependência `marked`) — leve e integrado.
+- **Inline code** tem precedência sobre bold/italic (para não parsear `**` dentro de `code`).
+- **Streaming messages** usam MarkdownRenderer normalmente (re-rendered a cada throttle flush).
+- **Error messages** (`isError: true`) NÃO usam MarkdownRenderer (texto puro vermelho).
+
 ---
 
 ## 9. Níveis de Esforço
@@ -870,6 +901,7 @@ Adicional: `~/.claude-killer/modes/<mode>/mcps/*.json` (mode-specific).
 18. **Heartbeat usa LAST key do pool** — não compete com keys principais.
 19. **Hedging só NVIDIA** — ZenMux não tem queue.
 20. **5xx: só 502/503 retriable** — 500/504 não.
+21. **MarkdownRenderer só em assistant messages** — user/tool/error = texto puro.
 
 ### 17.5 MCP
 

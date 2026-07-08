@@ -47,6 +47,7 @@
 import React from "react";
 import { Box, Text, Static } from "ink";
 import { colors, icons } from "./theme.js";
+import { MarkdownRenderer } from "./MarkdownRenderer.js";
 
 export interface ChatMessage {
   role: "user" | "assistant" | "system" | "tool";
@@ -172,10 +173,27 @@ function renderMessage(msg: ChatMessage, keyPrefix: string): React.ReactElement 
   }
 
   // assistant - note the leading space in content for alignment
+  // Use MarkdownRenderer for ALL assistant messages (supports bold, tables,
+  // code, etc.), including error and streaming messages.
+  //
+  // BUG FIX (error-markdown-raw): previously, error messages (isError=true)
+  // were rendered as plain <Text>, which meant any markdown syntax in the
+  // error content (e.g. `**Erro na execução:**` and ``` code fences that
+  // App.tsx puts in the error content) showed up as literal `**` and ```
+  // characters instead of being formatted. Now error messages also go
+  // through MarkdownRenderer so the user sees formatted output. The red
+  // "❌ Erro:" label above the content still signals the error.
+  //
+  // Streaming messages also go through MarkdownRenderer — parseBlocks is
+  // tolerant of partial/unclosed markdown (e.g. an unfinished ``` code
+  // fence during streaming is treated as a code block containing the
+  // remaining lines), so the live view stays correct as tokens arrive.
   return (
     <Box key={keyPrefix} flexDirection="column">
       <Text color={msg.isError ? colors.error : colors.secondary} bold> {msg.isError ? "❌ Erro:" : "Claude-Killer:"}</Text>
-      <Text color={msg.isError ? colors.error : colors.white}> {msg.content}</Text>
+      <Box marginLeft={1}>
+        <MarkdownRenderer text={msg.content} />
+      </Box>
       {msg.isStreaming ? null : <Text></Text>}
     </Box>
   );

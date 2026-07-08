@@ -54,6 +54,7 @@ import { colors } from "./theme.js";
 import { ChatDisplay, ChatMessage } from "./ChatDisplay.js";
 import { StatusBar } from "./StatusBar.js";
 import { TodoPanel, TodoItem } from "./TodoPanel.js";
+import { PlanPanel } from "./PlanPanel.js";
 import { ThinkingIndicator } from "./ThinkingIndicator.js";
 import { ExtensionHub } from "./ExtensionHub.js";
 import { FolderBrowser } from "./FolderBrowser.js";
@@ -1450,6 +1451,8 @@ export function App() {
   const [input, setInput] = useState("");
   const [status, setStatus] = useState<AppStatus>("idle");
   const [todos, setTodos] = useState<TodoItem[]>([]);
+  // Plan state — synced from planExecutor.getPlan() on each turn
+  const [planSteps, setPlanSteps] = useState<Array<{ description: string; done: boolean }>>([]);
   const [lastUsage, setLastUsage] = useState<{
     prompt_tokens: number;
     completion_tokens: number;
@@ -1559,10 +1562,23 @@ export function App() {
     });
   }, []);
 
-  // -- Update todos from shared state -------------------------------------
+  // -- Update todos and plan from shared state --------------------------------
   const syncTodos = useCallback(() => {
     const current = todo.getTodos();
     setTodos([...current]);
+  }, []);
+
+  // Sync plan steps from planExecutor (separate callback because planExecutor
+  // is loaded dynamically to avoid circular deps)
+  const syncPlan = useCallback(() => {
+    import("../planExecutor.js").then(({ getPlan }) => {
+      const plan = getPlan();
+      if (plan) {
+        setPlanSteps(plan.steps.map((s) => ({ description: s.description, done: s.done })));
+      } else {
+        setPlanSteps([]);
+      }
+    }).catch(() => { /* planExecutor not available */ });
   }, []);
 
   // -- Streaming helpers (extracted to reduce handleSubmit complexity) ---
@@ -1955,6 +1971,7 @@ export function App() {
         const { response, streamStarted } = await runStreaming(fullInput);
         finalizeMessage(response, streamStarted);
         syncTodos();
+        syncPlan();
 
         // ── Gap 3: Parse ===END PLAN=== to populate planExecutor ──────────
         // When plan mode is active and IA outputs a plan ending with
@@ -2000,6 +2017,7 @@ export function App() {
         isProcessing.current = false;
         setStatus("idle");
         syncTodos();
+        syncPlan();
       }
     },
     [exit, syncTodos, showAutocomplete, acMatches, acIndex, hasSpace]
@@ -2168,6 +2186,7 @@ export function App() {
 
       {/* Task panel */}
       <TodoPanel todos={todos} />
+      {planSteps.length > 0 && <PlanPanel steps={planSteps} />}
 
       {/* Autocomplete dropdown */}
       {showAutocomplete && acMatches.length > 0 && (

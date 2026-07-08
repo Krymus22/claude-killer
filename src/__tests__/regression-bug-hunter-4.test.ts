@@ -268,7 +268,8 @@ describe("Bug Hunter #4 — §17 invariants not violated", () => {
     );
     // The require() for "node:fs" should be gone — replaced with top-level import
     expect(src).not.toMatch(/require\s*\(\s*["']node:fs["']\s*\)/);
-    expect(src).toMatch(/^import\s+fs\s+from\s+["']node:fs["']/m);
+    // Accept both `import fs from` and `import * as fs from` styles
+    expect(src).toMatch(/^import\s+(\*\s+as\s+)?fs\s+from\s+["']node:fs["']/m);
   });
 
   it("apiClient.ts: no require() calls remain for i18n (ESM-only convention)", () => {
@@ -276,9 +277,13 @@ describe("Bug Hunter #4 — §17 invariants not violated", () => {
       path.resolve(__dirname, "../apiClient.ts"),
       "utf8"
     );
-    expect(src).not.toMatch(/require\s*\(\s*["']\.\/i18n\.js["']\s*\)/);
-    // Dynamic import is the ESM-compliant alternative
-    expect(src).toMatch(/await\s+import\s*\(\s*["']\.\/i18n\.js["']\s*\)/);
+    // Strip comments before checking (comments may mention historical require() calls)
+    const codeOnly = src.replace(/\/\/.*$/gm, "").replace(/\/\*[\s\S]*?\*\//g, "");
+    expect(codeOnly).not.toMatch(/require\s*\(\s*["']\.\/i18n\.js["']\s*\)/);
+    // Accept both static import and dynamic await import
+    const hasStaticImport = /^import\s+.*\s+from\s+["']\.\/i18n\.js["']/m.test(codeOnly);
+    const hasDynamicImport = /await\s+import\s*\(\s*["']\.\/i18n\.js["']\s*\)/.test(codeOnly);
+    expect(hasStaticImport || hasDynamicImport).toBe(true);
   });
 
   it("heartbeat.ts: heartbeat uses max_tokens = 1 (§4)", () => {

@@ -51,20 +51,15 @@ describe("Bug Hunter #7 — fileLock re-entrant TTL", () => {
     // Wait 50ms so "remaining" is meaningfully less than the outer TTL.
     await new Promise((r) => setTimeout(r, 50));
 
-    // Inner re-entrant acquire with a much SHORTER TTL (100ms).
-    // Before the fix: this overwrote ttlMs to 100, so the lock would
-    // expire ~100ms after this call — well before the outer 10s window.
-    // After the fix: ttlMs is max(remaining, 100) ≈ 9.95s.
+    // Re-entrant acquire with same holderId now returns null (concurrency fix:
+    // removed unsafe re-entrant path to prevent parallel sub-agents with same
+    // holderId from both acquiring the lock).
     const inner = tryAcquireLock("/bh7/reentrant-ttl.luau", "main", 100);
-    expect(inner).not.toBeNull();
+    expect(inner).toBeNull(); // Re-entrant acquisition is BLOCKED
 
-    // Wait 200ms — longer than the inner TTL (100ms) but much shorter
-    // than the outer TTL (10s).
+    // Wait 200ms — the lock should still be held by "main" (outer TTL 10s).
     await new Promise((r) => setTimeout(r, 200));
 
-    // The lock MUST still be held by "main" (not expired).
-    // Before the fix: the lock would have expired (200ms > 100ms inner TTL),
-    // and getLockHolder would return null.
     const holder = getLockHolder("/bh7/reentrant-ttl.luau");
     expect(holder).not.toBeNull();
     expect(holder!.holderId).toBe("main");
@@ -72,24 +67,23 @@ describe("Bug Hunter #7 — fileLock re-entrant TTL", () => {
     outer!();
   });
 
-  it("re-entrant acquire extends TTL when inner TTL is longer", async () => {
+  it("re-entrant acquire with longer TTL also blocked (same holderId)", async () => {
     const { tryAcquireLock, getLockHolder } = await import("../fileLock.js");
 
     // Outer acquire with short TTL (100ms).
     const outer = tryAcquireLock("/bh7/extend-ttl.luau", "main", 100);
     expect(outer).not.toBeNull();
 
-    // Immediately re-acquire with a longer TTL (10s).
+    // Re-entrant acquire with same holderId returns null (concurrency fix).
     const inner = tryAcquireLock("/bh7/extend-ttl.luau", "main", 10_000);
-    expect(inner).not.toBeNull();
+    expect(inner).toBeNull(); // Re-entrant acquisition is BLOCKED
 
-    // Wait 300ms — longer than the original outer TTL (100ms).
+    // Wait 300ms — longer than the outer TTL (100ms).
+    // The lock should have expired (TTL was NOT extended by the blocked re-entrant call).
     await new Promise((r) => setTimeout(r, 300));
 
-    // The lock should still be held (TTL was extended to 10s).
     const holder = getLockHolder("/bh7/extend-ttl.luau");
-    expect(holder).not.toBeNull();
-    expect(holder!.holderId).toBe("main");
+    expect(holder).toBeNull(); // Lock expired (outer TTL 100ms, not extended)
 
     outer!();
   });

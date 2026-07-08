@@ -2276,22 +2276,26 @@ export function App() {
         {/* Status bar row (below input, not beside it).
             Right-aligned: the StatusBar itself uses justifyContent="flex-end"
             with width="100%" so all its content (tokens, bar, %, effort, cost,
-            MCPs, Skills, PLAN tag) is pushed to the right edge of the screen. */}
-        {lastUsage && (
-          <Box marginTop={0} width="100%">
-            <StatusBar
-              promptTokens={lastUsage.prompt_tokens}
-              completionTokens={lastUsage.completion_tokens}
-              totalTokens={lastUsage.total_tokens}
-              contextWindow={config.contextWindowTokens}
-              warnThreshold={config.contextWarnThreshold}
-              compactThreshold={config.contextCompactThreshold}
-              costPerKPrompt={config.costPerKPrompt}
-              costPerKCompletion={config.costPerKCompletion}
-              planMode={history.isPlanMode()}
-              mcpCount={getActiveMCPServers().length}
-              skillsCount={getActiveSkills().length}
-              effortLabel={effortLabel}
+            MCPs, Skills, PLAN tag) is pushed to the right edge of the screen.
+            
+            BUG FIX (cold-start): StatusBar was hidden until first IA response
+            because of `lastUsage &&` guard. Now always renders — uses 0 values
+            when no usage data yet, so the bar/effort/activity are visible
+            immediately on startup. */}
+        <Box marginTop={0} width="100%">
+          <StatusBar
+            promptTokens={lastUsage?.prompt_tokens ?? 0}
+            completionTokens={lastUsage?.completion_tokens ?? 0}
+            totalTokens={lastUsage?.total_tokens ?? 0}
+            contextWindow={config.contextWindowTokens}
+            warnThreshold={config.contextWarnThreshold}
+            compactThreshold={config.contextCompactThreshold}
+            costPerKPrompt={config.costPerKPrompt}
+            costPerKCompletion={config.costPerKCompletion}
+            planMode={history.isPlanMode()}
+            mcpCount={getActiveMCPServers().length}
+            skillsCount={getActiveSkills().length}
+            effortLabel={effortLabel}
               tokensPerSecond={tokensPerSecond}
               // Cumulative session totals — passed separately from lastUsage
               // so the StatusBar can show both last-turn and session-wide values.
@@ -2301,7 +2305,6 @@ export function App() {
               activityStatus={status}
             />
           </Box>
-        )}
       </Box>
     </Box>
   );

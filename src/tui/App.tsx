@@ -909,6 +909,10 @@ function handleEffortCommand(arg: string | null): CommandResult {
     return { handled: true, message: `Invalid level: ${arg}\nOptions: low, medium, high, max` };
   }
   setEffortLevel(level as any);
+  // Note: setEffortLevel() already updates the system prompt (history[0])
+  // immediately via getSystemPrompt(), so the IA DOES get the new effort
+  // on the next request. The visual label update is handled by
+  // handleSlashCommandFlow which calls setEffortLabel after this returns.
   return { handled: true, message: `Effort alterado para: ${getEffortLabel()}` };
 }
 
@@ -1852,6 +1856,12 @@ export function App() {
       return true;
     }
     if (result.handled) {
+      // BUG FIX: Refresh effort label immediately after any slash command.
+      // /effort changes the level via setEffortLevel() which updates the
+      // system prompt instantly, but the visual label (effortLabel state)
+      // was only refreshed inside onUsage (after next IA response).
+      // Now it updates right after the command is processed.
+      setEffortLabel(getEffortLabel());
       if (result.openHub) {
         setShowHub(true);
       }

@@ -77,9 +77,13 @@ const CHECKPOINT_THRESHOLDS = [0.20, 0.45, 0.70];  // 20%, 45%, 70%
  * registry / env.
  */
 function resolveContextTokens(override?: number): number {
+  // Override takes PRIORITY — tests pass explicit values to pin behavior.
+  // Without this priority, tests that pass 128_000 would still use the
+  // real config value (256_000 for Kimi K2.6), causing assertions to fail.
+  if (typeof override === "number" && override > 0) return override;
+  // Then try config (production path — uses modelRegistry value per §1.1)
   const fromConfig = config?.contextWindowTokens;
   if (typeof fromConfig === "number" && fromConfig > 0) return fromConfig;
-  if (typeof override === "number" && override > 0) return override;
   // Defensive fallback (e.g., partial config mock in a test that doesn't
   // override). Matches the historical hardcoded value so behavior is
   // unchanged if config is unavailable.

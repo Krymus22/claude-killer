@@ -182,6 +182,11 @@ const sessionSpies = vi.hoisted(() => ({
   deleteSession: vi.fn(() => true),
   renameSession: vi.fn(() => true),
   appendCompactionSnapshot: vi.fn(),
+  getSessionProjectCwd: vi.fn(() => null),
+  getSessionEffortLevel: vi.fn(() => null),
+  updateSessionEffortLevel: vi.fn(),
+  getSessionUsage: vi.fn(() => null),
+  updateSessionUsage: vi.fn(),
 }));
 
 vi.mock("../session.js", () => sessionSpies);
@@ -259,11 +264,15 @@ describe("App auto-load — projectCwd restoration (race fix)", () => {
       id: "2026-01-01_00-00-00_abc1",
       path: "/fake/path.jsonl",
       projectCwd,
+      effortLevel: null,
+      usage: null,
     });
     sessionSpies.loadSessionMessages.mockReturnValue({
       messages: [{ role: "user", content: "hello world" }],
       lastSnapshot: null,
       postSnapshotMessages: [{ role: "user", content: "hello world" }],
+      effortLevel: null,
+      usage: null,
     });
 
     const { lastFrame } = render(<App />);
@@ -292,11 +301,15 @@ describe("App auto-load — projectCwd restoration (race fix)", () => {
       id: "old-session",
       path: "/fake/old.jsonl",
       projectCwd: null,
+      effortLevel: null,
+      usage: null,
     });
     sessionSpies.loadSessionMessages.mockReturnValue({
       messages: [{ role: "user", content: "old msg" }],
       lastSnapshot: null,
       postSnapshotMessages: [{ role: "user", content: "old msg" }],
+      effortLevel: null,
+      usage: null,
     });
 
     render(<App />);
@@ -319,11 +332,15 @@ describe("App auto-load — projectCwd restoration (race fix)", () => {
       id: "race-test-session",
       path: "/fake/race.jsonl",
       projectCwd,
+      effortLevel: null,
+      usage: null,
     });
     sessionSpies.loadSessionMessages.mockReturnValue({
       messages: [{ role: "user", content: "race-fix-msg" }],
       lastSnapshot: null,
       postSnapshotMessages: [{ role: "user", content: "race-fix-msg" }],
+      effortLevel: null,
+      usage: null,
     });
 
     render(<App />);
@@ -370,11 +387,15 @@ describe("App /cd command — calls updateSessionProjectCwd", () => {
       id: "cd-test-session",
       path: "/fake/cd-test.jsonl",
       projectCwd: tmpDir,
+      effortLevel: null,
+      usage: null,
     });
     sessionSpies.loadSessionMessages.mockReturnValue({
       messages: [{ role: "user", content: "previous msg" }],
       lastSnapshot: null,
       postSnapshotMessages: [{ role: "user", content: "previous msg" }],
+      effortLevel: null,
+      usage: null,
     });
     // Real chdir so /cd's effect side (process.cwd()) actually changes —
     // the /cd handler calls process.chdir(resolved) then reads process.cwd()

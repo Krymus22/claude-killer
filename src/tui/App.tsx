@@ -2227,20 +2227,34 @@ export function App() {
           const queued = sidequestsRef.current.slice();
           sidequestsRef.current = [];
           setSidequests([]);
-          for (const sq of queued) {
-            history.addUserMessage(sq);
-            // NOTE: the sidequest was already added to `messages` with
-            // isSidequest=true when the user typed it (see the early-return
-            // above). We do NOT re-add it here — that would render the same
-            // text twice (once as ⚡ sidequest, once as a normal "you:"
-            // message), which was the previous behavior.
-          }
+          // BUG FIX (sidequest-double-send): previously, each sidequest was
+          // added to history INDIVIDUALLY via history.addUserMessage(sq)
+          // here, AND then runStreaming → runAgentLoop added the COMBINED
+          // message ([USER SIDEQUEST] sq1\n\n...) via history.addUserMessage.
+          // The IA saw each sidequest TWICE: once raw (no prefix) and once
+          // with the [USER SIDEQUEST] prefix. This also wrote duplicates to
+          // the session JSONL file (each addUserMessage calls tryAppendToSession).
+          // Fix: do NOT add individual sidequests to history here — let
+          // runAgentLoop add the combined message (it calls
+          // history.addUserMessage(userInput) internally).
           try {
-            // BUG FIX (typo): was "SIDEPQUEST" — typo in the agent prompt.
-            // The agent still understood it, but fix the spelling.
-            const { response, streamStarted } = await runStreaming(
-              queued.map((sq) => `[USER SIDEQUEST] ${sq}`).join("\n\n"),
-            );
+            // BUG FIX (sidequest-no-at-mention): @-mentions were NOT expanded
+            // in sidequests (only in the main path). A sidequest like
+            // "@package.json" was sent as the literal string instead of the
+            // file's content. Fix: expand @-mentions in each sidequest,
+            // same as the main path (expandAtMentions).
+            const expandedQueued = queued.map((sq) => expandAtMentions(sq));
+            // BUG FIX (sidequest-no-plan-suffix): plan mode suffix was NOT
+            // added to sidequests. If plan mode was active, the IA could
+            // call tools in response to a sidequest — violating plan mode.
+            // Fix: add the plan mode suffix, same as the main path.
+            const planSuffix = history.isPlanMode()
+              ? "\n\n[PLAN MODE IS ACTIVE] You must NOT call any tools. Output a step-by-step plan as markdown. End with ===END PLAN==="
+              : "";
+            const sidequestInput = expandedQueued
+              .map((sq) => `[USER SIDEQUEST] ${sq}`)
+              .join("\n\n") + planSuffix;
+            const { response, streamStarted } = await runStreaming(sidequestInput);
             finalizeMessage(response, streamStarted);
             syncTodos();
             // BUG FIX (missing-syncPlan): syncPlan was only called at the

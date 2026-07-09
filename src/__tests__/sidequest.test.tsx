@@ -17,6 +17,9 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
 import React from "react";
 import { render } from "ink-testing-library";
+import * as fs from "node:fs";
+import * as path from "node:path";
+import * as os from "node:os";
 import { ChatDisplay, ChatMessage } from "../tui/ChatDisplay.js";
 
 function stripAnsi(s: string): string {
@@ -111,6 +114,9 @@ vi.mock("../history.js", () => ({
   getCavemanLevel: vi.fn(() => null),
   setCavemanLevel: vi.fn(),
   reloadProjectMemory: vi.fn(() => null),
+  loadHistoryDirect: vi.fn(),
+  getSystemPrompt: vi.fn(() => "system prompt"),
+  optimizeContext: vi.fn(),
 }));
 
 vi.mock("../externalTools.js", () => ({
@@ -137,13 +143,36 @@ vi.mock("../memory.js", () => ({
   runDistill: vi.fn(async () => ({ skillsExtracted: 0 })),
 }));
 
+// Session mock: return a valid session with 1 dummy message so the App
+// loads it and does NOT open the FolderBrowser on startup (which would
+// intercept all stdin and break tests). The dummy message is a system
+// message that won't appear in the visual chat display (system messages
+// are filtered out by ChatDisplay).
 vi.mock("../session.js", () => ({
   startSession: vi.fn(() => "test-session"),
   appendMessage: vi.fn(),
-  getLastSession: vi.fn(() => null),
-  loadSessionMessages: vi.fn(() => []),
+  appendCompactionSnapshot: vi.fn(),
+  getLastSession: vi.fn(() => ({
+    id: "test-session",
+    path: "/tmp/test-session.jsonl",
+    projectCwd: "/tmp",
+    effortLevel: null,
+  })),
+  loadSessionMessages: vi.fn(() => ({
+    // Use a USER message (not system) so convertSessionToVisualMessages
+    // includes it in the visual messages list. System messages are filtered
+    // out, leaving loadedVisualMessagesRef empty → FolderBrowser opens.
+    messages: [{ role: "user", content: "dummy-previous-message" }],
+    lastSnapshot: null,
+    postSnapshotMessages: [{ role: "user", content: "dummy-previous-message" }],
+    effortLevel: null,
+  })),
+  getSessionProjectCwd: vi.fn(() => "/tmp"),
+  getSessionEffortLevel: vi.fn(() => null),
+  updateSessionProjectCwd: vi.fn(),
+  updateSessionEffortLevel: vi.fn(),
   setActiveSession: vi.fn(),
-  getActiveSessionId: vi.fn(() => null),
+  getActiveSessionId: vi.fn(() => "test-session"),
   listSessions: vi.fn(() => []),
   deleteSession: vi.fn(() => true),
   renameSession: vi.fn(() => true),
@@ -156,6 +185,7 @@ vi.mock("../readBeforeWrite.js", () => ({ clearReadPaths: vi.fn() }));
 
 // Imports AFTER mocks — App.tsx carrega todos os módulos acima.
 import { runAgentLoop } from "../agent.js";
+import * as history from "../history.js";
 import { App } from "../tui/App.js";
 
 function delay(ms: number): Promise<void> {
@@ -473,5 +503,240 @@ describe("Sidequest — App handleSubmit regression", () => {
     expect(runAgentLoop).toHaveBeenCalledTimes(3);
     const thirdInput = vi.mocked(runAgentLoop).mock.calls[2]?.[0] ?? "";
     expect(thirdInput).toContain("sq-beta");
+  });
+});
+
+// ─── Bug fix regression tests ───────────────────────────────────────────────
+//
+// These tests cover the 3 bugs found by the bug hunter pass:
+//   Bug 1 (CRITICAL): sidequest sent TWICE to IA (raw + combined)
+//   Bug 2 (MEDIUM):   @-mentions not expanded in sidequests
+//   Bug 3 (MEDIUM):   plan mode suffix not added to sidequests
+
+describe("Sidequest — bug hunter fixes", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(runAgentLoop).mockReset();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  // ─── Bug 1: sidequest NOT sent twice to IA ──────────────────────────────
+  it("history.addUserMessage is NOT called for individual sidequests (Bug 1 fix)", async () => {
+    // BUG FIX (sidequest-double-send): previously, the finally block called
+    // history.addUserMessage(sq) for EACH sidequest individually, AND then
+    // runAgentLoop called history.addUserMessage(combined). The IA saw each
+    // sidequest twice. Now, only the combined message is added (by runAgentLoop).
+    //
+    // Since runAgentLoop is mocked (doesn't call addUserMessage), the total
+    // addUserMessage calls should be 0 for the sidequest path.
+    vi.mocked(runAgentLoop).mockImplementation(async () => {
+      await delay(200);
+      return "response";
+    });
+
+    const { stdin } = render(<App />);
+    stdin.write("task");
+    await delay(30);
+    stdin.write("\r");
+    await delay(60);
+    stdin.write("sidequest-unique-text");
+    await delay(30);
+    stdin.write("\r");
+    await delay(700);
+
+    // history.addUserMessage should NOT have been called with the raw
+    // sidequest text. (It would be called by runAgentLoop in production,
+    // but runAgentLoop is mocked here, so it's not called at all.)
+    const addUserMessageCalls = vi.mocked(history.addUserMessage).mock.calls;
+    const rawSidequestCalls = addUserMessageCalls.filter(
+      ([content]) => content === "sidequest-unique-text",
+    );
+    expect(rawSidequestCalls.length).toBe(0);
+  });
+
+  it("multiple sidequests: none are added to history individually (Bug 1 fix)", async () => {
+    vi.mocked(runAgentLoop).mockImplementation(async () => {
+      await delay(200);
+      return "response";
+    });
+
+    const { stdin } = render(<App />);
+    stdin.write("task");
+    await delay(30);
+    stdin.write("\r");
+    await delay(60);
+    stdin.write("sq-A");
+    await delay(20);
+    stdin.write("\r");
+    await delay(20);
+    stdin.write("sq-B");
+    await delay(20);
+    stdin.write("\r");
+    await delay(700);
+
+    // Neither sq-A nor sq-B should appear as a raw addUserMessage call.
+    const calls = vi.mocked(history.addUserMessage).mock.calls.map(([c]) => c);
+    expect(calls).not.toContain("sq-A");
+    expect(calls).not.toContain("sq-B");
+    // The combined message ([USER SIDEQUEST] ...) is added by runAgentLoop
+    // (mocked, so not added here). Verify runAgentLoop got the combined input.
+    const sidequestInput = vi.mocked(runAgentLoop).mock.calls[1]?.[0] ?? "";
+    expect(sidequestInput).toContain("[USER SIDEQUEST] sq-A");
+    expect(sidequestInput).toContain("[USER SIDEQUEST] sq-B");
+  });
+
+  // ─── Bug 2: @-mentions expanded in sidequests ───────────────────────────
+  it("sidequest @-mention of existing file is expanded (Bug 2 fix)", async () => {
+    // Create a temp file that expandAtMentions can read.
+    const tmpFile = path.join(os.tmpdir(), `sidequest-test-${Date.now()}.txt`);
+    fs.writeFileSync(tmpFile, "FILE_CONTENT_HERE");
+
+    try {
+      vi.mocked(runAgentLoop).mockImplementation(async () => {
+        await delay(200);
+        return "done";
+      });
+
+      const { stdin } = render(<App />);
+      stdin.write("task");
+      await delay(30);
+      stdin.write("\r");
+      await delay(60);
+      // Sidequest with @-mention of the temp file.
+      stdin.write(`review @${tmpFile}`);
+      await delay(30);
+      stdin.write("\r");
+      await delay(700);
+
+      // The sidequest input passed to runAgentLoop should contain the
+      // FILE CONTENT (expanded), not just the literal @path.
+      const sidequestInput = vi.mocked(runAgentLoop).mock.calls[1]?.[0] ?? "";
+      expect(sidequestInput).toContain("FILE_CONTENT_HERE");
+      // The [USER SIDEQUEST] prefix should still be there.
+      expect(sidequestInput).toContain("[USER SIDEQUEST]");
+    } finally {
+      try { fs.unlinkSync(tmpFile); } catch { /* ignore */ }
+    }
+  });
+
+  it("sidequest @-mention of non-existent file stays as literal (Bug 2 fix)", async () => {
+    vi.mocked(runAgentLoop).mockImplementation(async () => {
+      await delay(200);
+      return "done";
+    });
+
+    const { stdin } = render(<App />);
+    stdin.write("task");
+    await delay(30);
+    stdin.write("\r");
+    await delay(60);
+    stdin.write("check @nonexistent-file-xyz.txt");
+    await delay(30);
+    stdin.write("\r");
+    await delay(700);
+
+    // Non-existent file: @-mention stays as literal (no expansion).
+    const sidequestInput = vi.mocked(runAgentLoop).mock.calls[1]?.[0] ?? "";
+    expect(sidequestInput).toContain("@nonexistent-file-xyz.txt");
+    expect(sidequestInput).toContain("[USER SIDEQUEST]");
+  });
+
+  // ─── Bug 3: plan mode suffix added to sidequests ────────────────────────
+  it("plan mode suffix is added to sidequest when plan mode is active (Bug 3 fix)", async () => {
+    // Mock isPlanMode to return true (plan mode active).
+    vi.mocked(history.isPlanMode).mockReturnValue(true);
+    vi.mocked(runAgentLoop).mockImplementation(async () => {
+      await delay(200);
+      return "plan response";
+    });
+
+    const { stdin } = render(<App />);
+    stdin.write("task");
+    await delay(30);
+    stdin.write("\r");
+    await delay(60);
+    stdin.write("sidequest-during-plan");
+    await delay(30);
+    stdin.write("\r");
+    await delay(700);
+
+    // The sidequest input should contain the plan mode suffix.
+    const sidequestInput = vi.mocked(runAgentLoop).mock.calls[1]?.[0] ?? "";
+    expect(sidequestInput).toContain("[USER SIDEQUEST] sidequest-during-plan");
+    expect(sidequestInput).toContain("[PLAN MODE IS ACTIVE]");
+    expect(sidequestInput).toContain("You must NOT call any tools");
+
+    // Reset mock.
+    vi.mocked(history.isPlanMode).mockReturnValue(false);
+  });
+
+  it("plan mode suffix is NOT added when plan mode is inactive (Bug 3 fix)", async () => {
+    // Plan mode inactive (default mock returns false).
+    vi.mocked(runAgentLoop).mockImplementation(async () => {
+      await delay(200);
+      return "normal response";
+    });
+
+    const { stdin } = render(<App />);
+    stdin.write("task");
+    await delay(30);
+    stdin.write("\r");
+    await delay(60);
+    stdin.write("sidequest-no-plan");
+    await delay(30);
+    stdin.write("\r");
+    await delay(700);
+
+    const sidequestInput = vi.mocked(runAgentLoop).mock.calls[1]?.[0] ?? "";
+    expect(sidequestInput).toContain("[USER SIDEQUEST] sidequest-no-plan");
+    // Plan mode suffix should NOT be present.
+    expect(sidequestInput).not.toContain("[PLAN MODE IS ACTIVE]");
+  });
+
+  // ─── Combined: all 3 fixes work together ────────────────────────────────
+  it("sidequest with @-mention + plan mode: all 3 fixes apply together", async () => {
+    const tmpFile = path.join(os.tmpdir(), `sidequest-combined-${Date.now()}.txt`);
+    fs.writeFileSync(tmpFile, "COMBINED_FILE_CONTENT");
+
+    try {
+      vi.mocked(history.isPlanMode).mockReturnValue(true);
+      vi.mocked(runAgentLoop).mockImplementation(async () => {
+        await delay(200);
+        return "combined response";
+      });
+
+      const { stdin } = render(<App />);
+      stdin.write("task");
+      await delay(30);
+      stdin.write("\r");
+      await delay(60);
+      stdin.write(`fix @${tmpFile}`);
+      await delay(30);
+      stdin.write("\r");
+      await delay(700);
+
+      const sidequestInput = vi.mocked(runAgentLoop).mock.calls[1]?.[0] ?? "";
+
+      // Bug 1: no raw sidequest in history.addUserMessage.
+      const rawCalls = vi.mocked(history.addUserMessage).mock.calls
+        .map(([c]) => c);
+      expect(rawCalls).not.toContain(`fix @${tmpFile}`);
+
+      // Bug 2: @-mention expanded.
+      expect(sidequestInput).toContain("COMBINED_FILE_CONTENT");
+
+      // Bug 3: plan mode suffix added.
+      expect(sidequestInput).toContain("[PLAN MODE IS ACTIVE]");
+
+      // Prefix still present.
+      expect(sidequestInput).toContain("[USER SIDEQUEST]");
+
+      vi.mocked(history.isPlanMode).mockReturnValue(false);
+    } finally {
+      try { fs.unlinkSync(tmpFile); } catch { /* ignore */ }
+    }
   });
 });

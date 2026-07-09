@@ -168,11 +168,11 @@ describe("scoutAgent — runScout", () => {
     expect(result!.error).toContain("does not support tools");
   });
 
-  it("produces summary when scout completes", async () => {
+  it("completes with no tool calls when model says DONE", async () => {
     process.env.SCOUT_ENABLED = "1";
     vi.mocked(chatWithModel).mockResolvedValue({
       choices: [{
-        message: { content: "## Summary\nFound the file.", tool_calls: undefined },
+        message: { content: "DONE", tool_calls: undefined },
         finish_reason: "stop",
       }],
     } as any);
@@ -184,17 +184,17 @@ describe("scoutAgent — runScout", () => {
 
     expect(result).not.toBeNull();
     expect(result!.completed).toBe(true);
-    expect(result!.summary).toContain("Found the file");
+    expect(result!.toolResults).toHaveLength(0);
     expect(result!.modelUsed).toBe("mistralai/mistral-medium-3.5-128b");
   });
 
-  it("executes tool calls and returns summary", async () => {
+  it("executes tool calls and returns raw results (not summary)", async () => {
     process.env.SCOUT_ENABLED = "1";
     const { lerArquivo } = await import("../tools.js");
     vi.mocked(lerArquivo).mockResolvedValue("file content here");
 
     // First call: model requests tool call (relative path within cwd)
-    // Second call: model returns summary
+    // Second call: model says DONE
     vi.mocked(chatWithModel)
       .mockResolvedValueOnce({
         choices: [{
@@ -211,7 +211,7 @@ describe("scoutAgent — runScout", () => {
       } as any)
       .mockResolvedValueOnce({
         choices: [{
-          message: { content: "## Summary\nFile has 100 lines.", tool_calls: undefined },
+          message: { content: "DONE", tool_calls: undefined },
           finish_reason: "stop",
         }],
       } as any);
@@ -223,10 +223,13 @@ describe("scoutAgent — runScout", () => {
 
     expect(result).not.toBeNull();
     expect(result!.completed).toBe(true);
-    expect(result!.summary).toContain("100 lines");
-    expect(result!.toolCallCount).toBe(2);
+    // The scout should return the RAW tool result, not a summary
+    expect(result!.toolResults).toHaveLength(1);
+    expect(result!.toolResults[0]!.tool).toBe("ler_arquivo");
+    expect(result!.toolResults[0]!.result).toBe("file content here");
+    expect(result!.toolResults[0]!.success).toBe(true);
+    expect(result!.toolCallCount).toBe(1);
     // The path is resolved relative to cwd, so it should be an absolute path
-    // ending with test.ts
     expect(lerArquivo).toHaveBeenCalled();
     const calledArg = vi.mocked(lerArquivo).mock.calls[0]?.[0];
     expect(calledArg?.caminho).toContain("test.ts");
@@ -280,32 +283,40 @@ describe("scoutAgent — runScout", () => {
 });
 
 describe("scoutAgent — formatScoutResult", () => {
-  it("formats completed result with model and summary", () => {
+  it("formats completed result with raw tool results", () => {
     const result = {
-      summary: "Found 3 files.",
-      filesInspected: ["a.ts", "b.ts"],
+      toolResults: [
+        { tool: "ler_arquivo", args: { caminho: "a.ts" }, result: "content of a.ts", success: true },
+        { tool: "buscar_texto", args: { padrao: "foo" }, result: "found 3 matches", success: true },
+      ],
+      filesInspected: ["/project/a.ts"],
       completed: true,
       modelUsed: "mistralai/mistral-medium-3.5-128b",
-      toolCallCount: 5,
+      toolCallCount: 2,
     };
-    const formatted = formatScoutResult(result);
-    expect(formatted).toContain("[SCOUT CONTEXT");
+    const formatted = formatScoutResult(result as any);
+    expect(formatted).toContain("[SCOUT RESULTS");
     expect(formatted).toContain("mistralai/mistral-medium-3.5-128b");
-    expect(formatted).toContain("5 tool calls");
-    expect(formatted).toContain("Found 3 files.");
-    expect(formatted).toContain("[End of scout context");
+    expect(formatted).toContain("2 tool calls");
+    // Raw results should be present, not a summary
+    expect(formatted).toContain("content of a.ts");
+    expect(formatted).toContain("found 3 matches");
+    expect(formatted).toContain("ler_arquivo");
+    expect(formatted).toContain("buscar_texto");
+    expect(formatted).toContain("Files Inspected by Scout");
+    expect(formatted).toContain("[End of scout results");
   });
 
   it("formats failed result with error", () => {
     const result = {
-      summary: "",
+      toolResults: [],
       filesInspected: [],
       completed: false,
       modelUsed: "mistralai/mistral-medium-3.5-128b",
       toolCallCount: 0,
       error: "API_TIMEOUT",
     };
-    const formatted = formatScoutResult(result);
+    const formatted = formatScoutResult(result as any);
     expect(formatted).toContain("[SCOUT FAILED]");
     expect(formatted).toContain("API_TIMEOUT");
   });

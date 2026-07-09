@@ -57,10 +57,21 @@ export interface ScoutArgs {
   maxToolCalls?: number;
 }
 
+export interface ToolCallRecord {
+  /** Nome da tool chamada (ler_arquivo, buscar_texto, etc) */
+  tool: string;
+  /** Argumentos passados para a tool */
+  args: Record<string, unknown>;
+  /** Resultado completo retornado pela tool (conteúdo do arquivo, resultados de busca, etc) */
+  result: string;
+  /** Se a tool executou com sucesso (não começou com [ERROR]) */
+  success: boolean;
+}
+
 export interface ScoutResult {
-  /** Summary estruturado do que o scout encontrou */
-  summary: string;
-  /** Lista de arquivos inspecionados (path + relevância) */
+  /** Resultados crus de cada tool call feita pelo scout */
+  toolResults: ToolCallRecord[];
+  /** Lista de arquivos inspecionados (paths resolvidos) */
   filesInspected: string[];
   /** Se o scout completou com sucesso */
   completed: boolean;
@@ -102,32 +113,19 @@ export function validateScoutModel(): string | null {
 
 // --- System prompt ----------------------------------------------------------
 
-const SCOUT_SYSTEM_PROMPT = `You are a SCOUT sub-agent for Claude-Killer. Your job: quickly gather context by reading files and searching code, then return a CONCISE summary for the main agent.
+const SCOUT_SYSTEM_PROMPT = `You are a SCOUT sub-agent for Claude-Killer. Your job: make all the read/search tool calls the main agent needs, then say "DONE".
 
-YOU ARE FAST: You use a smaller, faster model. Be efficient — don't over-explore.
+YOU ARE FAST: You use a smaller, faster model. Your ONLY purpose is to execute read/search calls quickly so the main (slower) model doesn't have to.
 
 RULES:
 - You have ONLY read tools: ler_arquivo, buscar_arquivos, buscar_texto, parse_ast.
-- You CANNOT edit, write, or run commands. Just read and report.
-- Do AT MOST 12 tool calls. If you can't answer in 12, give your best guess.
-- Be SPECIFIC: file paths, line numbers, key code snippets, function signatures.
-- Don't repeat what you already found — summarize concisely.
+- You CANNOT edit, write, or run commands. Just read and search.
+- Do AT MOST 12 tool calls. Execute ALL the tasks given to you.
+- DO NOT summarize, DO NOT interpret, DO NOT write analysis — just make the calls.
+- After ALL tool calls are done, respond with exactly: DONE
+- The main agent will receive the FULL results of your tool calls (file contents, search results) directly in its context — it does NOT need you to summarize them.
 
-FORMAT YOUR FINAL ANSWER AS:
-
-## Summary
-[concise answer to the main agent's objective — what you found, key insights]
-
-## Files Inspected
-- [path]: [what's relevant there, key line numbers]
-
-## Key Findings
-- [bullet points with file:line references, code snippets if useful]
-
-## Recommendations
-- [what the main agent should do next with this context]
-
-If you can't find something, say so explicitly — don't invent.`;
+Your output is irrelevant — only your tool calls matter. The tool results are passed verbatim to the main agent.`;
 
 // --- Read-only tools (same as subAgents READ_ONLY mode) ---------------------
 
@@ -381,7 +379,7 @@ export async function runScout(args: ScoutArgs): Promise<ScoutResult | null> {
   if (modelError) {
     log.warn(`[SCOUT] Model validation failed: ${modelError}`);
     return {
-      summary: "",
+      toolResults: [],
       filesInspected: [],
       completed: false,
       modelUsed: getScoutModel(),
@@ -401,7 +399,7 @@ export async function runScout(args: ScoutArgs): Promise<ScoutResult | null> {
   if (cwdRelative.startsWith("..") || nodePath.isAbsolute(cwdRelative)) {
     log.warn(`[SCOUT] cwd "${rawCwd}" is outside project directory — blocking`);
     return {
-      summary: "",
+      toolResults: [],
       filesInspected: [],
       completed: false,
       modelUsed: getScoutModel(),
@@ -420,7 +418,7 @@ export async function runScout(args: ScoutArgs): Promise<ScoutResult | null> {
   // TypeError if caller passes undefined/non-string/non-array.
   if (typeof args.objective !== "string" || args.objective.length === 0) {
     return {
-      summary: "",
+      toolResults: [],
       filesInspected: [],
       completed: false,
       modelUsed: scoutModel,
@@ -430,7 +428,7 @@ export async function runScout(args: ScoutArgs): Promise<ScoutResult | null> {
   }
   if (!Array.isArray(args.tasks) || args.tasks.length === 0) {
     return {
-      summary: "",
+      toolResults: [],
       filesInspected: [],
       completed: false,
       modelUsed: scoutModel,
@@ -465,7 +463,11 @@ export async function runScout(args: ScoutArgs): Promise<ScoutResult | null> {
     let history: any[] = [...initialHistory];
     let callNum = 0;
     const filesInspected = new Set<string>();
-    let finalSummary = "";
+    // BUG FIX (raw-results): collect ALL tool results (file contents, search
+    // results) to pass VERBATIM to the main agent. The scout does NOT
+    // summarize — the main agent gets the full raw data so it can work with
+    // it directly, skipping the slow round-trips of reading files itself.
+    const toolResults: ToolCallRecord[] = [];
 
     const scoutStartTime = Date.now();
 
@@ -474,14 +476,12 @@ export async function runScout(args: ScoutArgs): Promise<ScoutResult | null> {
       // timeout. If so, return what we have so far (or timeout error).
       if (Date.now() - scoutStartTime > SCOUT_MAX_DURATION_MS) {
         log.warn(`[SCOUT] Timeout after ${callNum} calls (${Date.now() - scoutStartTime}ms > ${SCOUT_MAX_DURATION_MS}ms)`);
-        // If we have any summary content, return it; otherwise timeout error
-        if (finalSummary || history.length > 0) {
-          const lastAssistant = [...history].reverse().find((m: any) => m.role === "assistant");
-          finalSummary = finalSummary || lastAssistant?.content || "[SCOUT] Timed out before producing a summary.";
+        // If we have tool results, return them — the main agent can still use partial data
+        if (toolResults.length > 0) {
           break;
         }
         return {
-          summary: "",
+          toolResults: [],
           filesInspected: [...filesInspected],
           completed: false,
           modelUsed: scoutModel,
@@ -499,8 +499,12 @@ export async function runScout(args: ScoutArgs): Promise<ScoutResult | null> {
       // return completed=false instead of treating empty content as summary.
       if (response.finish_reason === "error" || (!response.content && !response.tool_calls?.length)) {
         log.warn(`[SCOUT] API returned no useful response (finish_reason=${response.finish_reason})`);
+        // If we already have tool results from previous rounds, return them
+        if (toolResults.length > 0) {
+          break;
+        }
         return {
-          summary: "",
+          toolResults: [],
           filesInspected: [...filesInspected],
           completed: false,
           modelUsed: scoutModel,
@@ -516,9 +520,8 @@ export async function runScout(args: ScoutArgs): Promise<ScoutResult | null> {
         tool_calls: response.tool_calls,
       });
 
-      // If no tool calls, this is the final summary
+      // If no tool calls, the scout is done (said "DONE" or ran out of ideas)
       if (!response.tool_calls || response.tool_calls.length === 0) {
-        finalSummary = response.content;
         break;
       }
 
@@ -526,33 +529,23 @@ export async function runScout(args: ScoutArgs): Promise<ScoutResult | null> {
       // BUG FIX (tcId-collision): use entries() to get index for unique tcId.
       for (const [tcIdx, tc] of (response.tool_calls as any[]).entries()) {
         const toolName = tc.function?.name ?? "unknown";
-        // BUG FIX (tool_call_id): validate tc.id — if missing, generate a
-        // synthetic ID so the API doesn't reject the next request with 400.
-        // Include tcIdx to avoid collision when multiple tool_calls in the
-        // same round lack IDs.
         const tcId = tc.id ?? `scout-tc-${callNum}-${tcIdx}-${Date.now()}`;
         let parsedArgs: Record<string, unknown> = {};
         try {
-          // BUG FIX (empty-arguments): treat empty string as "{}" (some
-          // providers return arguments: "" in streaming/partial tool calls).
           const argStr = tc.function?.arguments?.trim() || "{}";
           parsedArgs = JSON.parse(argStr);
         } catch (parseErr) {
-          // BUG FIX (instanceof-error): use instanceof Error for safe access.
           const parseMsg = parseErr instanceof Error ? parseErr.message : String(parseErr);
           log.warn(`[SCOUT] Malformed JSON args for ${toolName}: ${parseMsg}`);
-          history.push({
-            role: "tool",
-            tool_call_id: tcId,
-            content: `[ERROR] Malformed JSON arguments: ${parseMsg}`,
-          });
+          const errResult = `[ERROR] Malformed JSON arguments: ${parseMsg}`;
+          history.push({ role: "tool", tool_call_id: tcId, content: errResult });
+          toolResults.push({ tool: toolName, args: {}, result: errResult, success: false });
           continue;
         }
 
         log.info(`[SCOUT] Tool: ${toolName}(${JSON.stringify(parsedArgs).slice(0, 80)})`);
 
-        // BUG FIX (tool-exception-aborts): wrap executeScoutTool in local
-        // try/catch so a single tool failure doesn't abort the entire scout.
+        // Execute the tool
         let result: string;
         let success = false;
         try {
@@ -563,21 +556,26 @@ export async function runScout(args: ScoutArgs): Promise<ScoutResult | null> {
           result = `[ERROR] ${toolName} internal error: ${errMsg}`;
         }
 
-        // BUG FIX (filesInspected-timing): only track files AFTER successful
-        // execution, and store the resolved path (not raw). Previously, paths
-        // that failed (traversal blocked, file not found) were tracked as
-        // "inspected" — misleading the main agent.
+        // Track files inspected (resolved path, only on success)
         if (success) {
           const pathArg = parsedArgs.caminho ?? parsedArgs.path;
           if (typeof pathArg === "string") {
             try {
               const resolved = resolveAndCheckPath(pathArg, cwd);
               filesInspected.add(resolved);
-            } catch {
-              // path resolution failed — don't track
-            }
+            } catch { /* path resolution failed — don't track */ }
           }
         }
+
+        // BUG FIX (raw-results): record the FULL tool result (file content,
+        // search results, etc) — NOT a summary. The main agent gets this
+        // verbatim so it has the actual data to work with.
+        toolResults.push({
+          tool: toolName,
+          args: parsedArgs,
+          result,
+          success,
+        });
 
         history.push({
           role: "tool",
@@ -585,32 +583,22 @@ export async function runScout(args: ScoutArgs): Promise<ScoutResult | null> {
           content: result,
         });
       }
-
-      // BUG FIX (dead-code): removed the unreachable `finish_reason === "stop"
-      // && !tool_calls?.length` check — it was already handled by the
-      // `!response.tool_calls` break above.
     }
 
-    // If we ran out of calls without a final summary, use the last content
-    if (!finalSummary && history.length > 0) {
-      const lastAssistant = [...history].reverse().find((m: any) => m.role === "assistant");
-      finalSummary = lastAssistant?.content ?? "[SCOUT] Ran out of tool calls without producing a summary.";
-    }
-
-    log.info(`[SCOUT] Completed: ${callNum} calls, ${filesInspected.size} files inspected`);
+    log.info(`[SCOUT] Completed: ${callNum} rounds, ${toolResults.length} tool calls, ${filesInspected.size} files inspected`);
 
     return {
-      summary: finalSummary,
+      toolResults,
       filesInspected: [...filesInspected],
       completed: true,
       modelUsed: scoutModel,
-      toolCallCount: callNum,
+      toolCallCount: toolResults.length,
     };
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);
     log.error(`[SCOUT] Failed: ${errMsg}`);
     return {
-      summary: "",
+      toolResults: [],
       filesInspected: [],
       completed: false,
       modelUsed: scoutModel,
@@ -624,22 +612,52 @@ export async function runScout(args: ScoutArgs): Promise<ScoutResult | null> {
 
 /**
  * Format the scout result for injection into the main agent's context.
- * Returns a string that can be added as a system message.
+ *
+ * BUG FIX (raw-results): the scout does NOT summarize. It returns the FULL
+ * raw results of every tool call (file contents, search results, AST output)
+ * verbatim. The main agent gets the actual data — not a summary — so it can
+ * work with it directly without re-reading files.
+ *
+ * Format:
+ *   [SCOUT RESULTS — gathered by <model> (N tool calls)]
+ *
+ *   ## Tool Call 1: ler_arquivo
+ *   Args: {"caminho": "src/foo.ts"}
+ *   Result:
+ *   <full file content>
+ *
+ *   ## Tool Call 2: buscar_texto
+ *   Args: {"padrao": "SetAsync"}
+ *   Result:
+ *   <full search results>
+ *   ...
+ *
+ *   ## Files Inspected (already read — no need to re-read)
+ *   - path1
+ *   - path2
  */
 export function formatScoutResult(result: ScoutResult): string {
-  if (!result.completed) {
-    return `[SCOUT FAILED] Model: ${result.modelUsed}, Error: ${result.error ?? "unknown"}. Continue with ler_arquivo/buscar_texto directly.`;
+  if (!result.completed || result.toolResults.length === 0) {
+    return `[SCOUT FAILED] Model: ${result.modelUsed}, Error: ${result.error ?? "no results"}. Continue with ler_arquivo/buscar_texto directly.`;
   }
 
+  // Build the raw results section — each tool call with its full result
+  const resultsStr = result.toolResults.map((tr, i) => {
+    const argsStr = JSON.stringify(tr.args);
+    const statusTag = tr.success ? "" : " [FAILED]";
+    return `## Tool Call ${i + 1}: ${tr.tool}${statusTag}\nArgs: ${argsStr}\nResult:\n${tr.result}`;
+  }).join("\n\n---\n\n");
+
   const filesList = result.filesInspected.length > 0
-    ? `\n\n## Files Inspected by Scout (already read \u2014 no need to re-read)\n${result.filesInspected.map((f) => `- ${f}`).join("\n")}\n`
+    ? `\n\n## Files Inspected by Scout (already read — no need to re-read)\n${result.filesInspected.map((f) => `- ${f}`).join("\n")}`
     : "";
 
-  return `[SCOUT CONTEXT — gathered by ${result.modelUsed} (${result.toolCallCount} tool calls)]
+  return `[SCOUT RESULTS — gathered by ${result.modelUsed} (${result.toolResults.length} tool calls)]
 
-${result.summary}
+${resultsStr}
 ${filesList}
-[End of scout context — use this to proceed directly to editing without re-reading these files]`;
+
+[End of scout results — use these raw file contents and search results directly. Do NOT re-read these files.]`;
 }
 
 /**

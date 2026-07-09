@@ -1479,6 +1479,11 @@ export function App() {
   // (in the useState initializer below) and consumed by useEffect to
   // populate the `messages` state after the first render.
   const loadedVisualMessagesRef = useRef<ChatMessage[]>([]);
+  // BUG FIX (folderbrowser-over-session): track whether a session was
+  // successfully loaded, even if convertSessionToVisualMessages returns
+  // an empty array. This prevents the FolderBrowser from opening when
+  // a session IS loaded but has no visual messages (ex: all system msgs).
+  const loadedSessionIdRef = useRef<string | null>(null);
   // Flag to show FolderBrowser on startup if no session was loaded
   const needsFolderBrowserRef = useRef(false);
 
@@ -1515,6 +1520,10 @@ export function App() {
           // auto-creating a new session file (double-write bug fix).
           // §17.3.10: must be before loadHistoryDirect.
           setActiveSession(last.id);
+          // BUG FIX (folderbrowser-over-session): record that a session was
+          // loaded so the FolderBrowser doesn't open even if visual messages
+          // are empty (ex: all system messages after compaction).
+          loadedSessionIdRef.current = last.id;
           // BUG FIX (BS-18): clear readBeforeWrite state on auto-load too.
           // §17.3.11: clearReadPaths on auto-load.
           clearReadPaths();
@@ -1620,7 +1629,16 @@ export function App() {
     // By showing FolderBrowser on startup, the user selects their project
     // directory, which is then saved in the session header (projectCwd)
     // and restored on next startup.
-    if (!loadedVisualMessagesRef.current.length) {
+    //
+    // BUG FIX (folderbrowser-over-session): previously, the check was only
+    // `!loadedVisualMessagesRef.current.length`. If convertSessionToVisualMessages
+    // returned an empty array (ex: all messages are system messages, or the
+    // session had compaction snapshots but no regular user/assistant messages),
+    // the FolderBrowser would open EVEN THOUGH the session was loaded
+    // successfully. Now we also check if a session was actually loaded
+    // (loadedSessionIdRef) — if a session WAS loaded, don't show FolderBrowser
+    // regardless of whether visual messages were produced.
+    if (!loadedVisualMessagesRef.current.length && !loadedSessionIdRef.current) {
       // Will be shown via state — see showFolderBrowser below
       // We can't call setShowFolderBrowser here (it's defined later in the
       // component), so we use a ref flag instead.

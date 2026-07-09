@@ -338,6 +338,9 @@ export async function runBugHunter(
 
       if (!apiSuccess || !response) {
         log.warn(`[BUG_HUNTER] All API retries exhausted — skipping review this round`);
+        // BUG FIX (stale-previous-findings): clear previousFindings on early
+        // return so next round doesn't compare against stale state.
+        previousFindings = [];
         // Don't block finish if we can't review — better to let IA finish than hang
         return { shouldBlock: false, findings: [], message: "[BUG_HUNTER] Review skipped — API unavailable. Code not reviewed.", completed: false };
       }
@@ -411,6 +414,8 @@ export async function runBugHunter(
 
     if (!finalContent || finalContent.length < 20) {
       log.warn(`[BUG_HUNTER] Empty or too-short response after loop (finalContent=${finalContent ? finalContent.length + " chars" : "null"})`);
+      // BUG FIX (stale-previous-findings): clear on early return.
+      previousFindings = [];
       return { shouldBlock: false, findings: [], message: "", completed: false };
     }
 
@@ -422,7 +427,14 @@ export async function runBugHunter(
       log.warn(`[BUG_HUNTER] Parser found 0 findings! Content preview: ${finalContent.slice(0, 500)}`);
     }
     const criticalAndHigh = findings.filter(f => f.severity === "critical" || f.severity === "high");
-    const shouldBlock = criticalAndHigh.length > 0;
+    // BUG FIX (medium-low-never-blocks): previously shouldBlock was only true
+    // for critical/high. This made the medium/low blocking branch in agent.ts
+    // (MAX_MEDIUM_LOW_ROUNDS = 3) unreachable dead code — medium/low findings
+    // were never injected and never blocked finish, violating §10.1.
+    // Fix: shouldBlock = true for ANY findings (critical/high OR medium/low).
+    // The agent.ts handler distinguishes severity and applies the appropriate
+    // cap (10 for critical/high, 3 for medium/low).
+    const shouldBlock = findings.length > 0;
 
     // IDEIA A: Compare with previous round
     let comparison: { fixed: BugFinding[]; persisting: BugFinding[]; newBugs: BugFinding[] } | null = null;

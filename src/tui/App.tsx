@@ -56,6 +56,11 @@ import { StatusBar } from "./StatusBar.js";
 import { TodoPanel, TodoItem } from "./TodoPanel.js";
 import { PlanPanel } from "./PlanPanel.js";
 import { ThinkingIndicator } from "./ThinkingIndicator.js";
+// BUG FIX (bug-hunter-dataguard-invisible): import getActivitySnapshot so the
+// ThinkingIndicator stays visible when Bug Hunter or DataGuard are running,
+// even if the App status has already left "thinking"/"compacting". Without
+// this, the user sees no feedback while these sub-agents review the code.
+import { getActivitySnapshot } from "../activityTracker.js";
 import { ExtensionHub } from "./ExtensionHub.js";
 import { FolderBrowser } from "./FolderBrowser.js";
 import { QuestionPrompt } from "./QuestionPrompt.js";
@@ -2515,9 +2520,16 @@ export function App() {
         <ChatDisplay messages={messages} />
       </Box>
 
-      {/* Thinking indicator (also shows during compaction) */}
+      {/* Thinking indicator (also shows during compaction)
+          BUG FIX (bug-hunter-dataguard-invisible): the indicator is now also
+          active when the activity tracker has a non-empty stack (Bug Hunter
+          or DataGuard running). Previously, when the agent loop finished
+          (status left "thinking") but Bug Hunter/DataGuard started, the
+          indicator disappeared — the user had NO visual feedback that a
+          review was in progress. Now it stays visible as long as ANY
+          activity is on the stack. */}
       <ThinkingIndicator
-        active={status === "thinking" || status === "compacting"}
+        active={status === "thinking" || status === "compacting" || getActivitySnapshot().current !== null}
         label={status === "compacting" ? "COMPACTANDO" : undefined}
       />
 

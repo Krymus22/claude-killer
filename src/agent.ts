@@ -1917,155 +1917,127 @@ async function handleStopReason(message: { content?: string | null }): Promise<b
   //   1. It reports ALL findings to the main IA
   //   2. The IA is forced to fix them (finish is blocked)
   //   3. After fixing, the IA tries to finish again
-  //   4. Bug Hunter runs AGAIN on the fixed code
-  //   5. This repeats until Bug Hunter finds NO critical/high bugs
-  //   6. Safety limit: max 10 rounds to prevent infinite loops
-  //   7. Medium/low findings are injected as advisory — IA can fix them
-  //      spontaneously but they don't block finish
+  // ─── BUG HUNTER + DATAGUARD (parallel) ──────────────────────────────────
+  // BUG FIX (sequential-shortcircuit): previously Bug Hunter and DataGuard
+  // ran SEQUENTIALLY — if Bug Hunter blocked (critical/high), DataGuard
+  // NEVER ran (return true before reaching it). This meant data-loss risks
+  // went undetected during Bug Hunter correction loops.
+  //
+  // Fix: run BOTH in parallel via Promise.all. Both reviews complete, both
+  // results are injected into the IA's context, and we block if EITHER has
+  // critical/high findings. This matches §10.5 (steps 7 and 8 are
+  // independent reviews) and the docstring in dataGuard.ts ("Roda em
+  // paralelo com o Bug Hunter").
   try {
-    const { runBugHunter } = await import("./bugHunter.js");
     const MAX_BUG_HUNTER_ROUNDS = 10;
-    // For medium/low-only rounds, cap at 3 to avoid nitpick loops
     const MAX_MEDIUM_LOW_ROUNDS = 3;
     if (turnTouchedFiles.size > 0 && bugHunterBlocksThisTurn < MAX_BUG_HUNTER_ROUNDS) {
       const userRequestRaw = history.getHistory().find((m) => m.role === "user")?.content;
       const userRequest = typeof userRequestRaw === "string" ? userRequestRaw : "";
+      const filesArr = [...turnTouchedFiles];
+      const agentResponse = message.content ?? "";
 
-      console.log(`[BUG_HUNTER] Starting round ${bugHunterBlocksThisTurn + 1}/${MAX_BUG_HUNTER_ROUNDS} — reviewing ${turnTouchedFiles.size} file(s)`);
-      const result = await runBugHunter(
-        [...turnTouchedFiles],
-        userRequest as string,
-        message.content ?? ""
-      );
+      // BUG FIX (parallel-reviews): launch both reviews in parallel.
+      // Both sub-agents have independent clean contexts — no shared state.
+      // Promise.all waits for both, then we process combined results.
+      console.log(`[BUG_HUNTER+DATAGUARD] Starting parallel review of ${filesArr.length} file(s)`);
+      const [{ runBugHunter }, { runDataGuard }] = await Promise.all([
+        import("./bugHunter.js"),
+        import("./dataGuard.js"),
+      ]);
+      const [bhResult, dgResult] = await Promise.all([
+        runBugHunter(filesArr, userRequest, agentResponse),
+        runDataGuard(filesArr, userRequest, agentResponse),
+      ]);
 
-      // DEBUG: explicit log so we can see what Bug Hunter returned
-      console.log(`[BUG_HUNTER] Result: shouldBlock=${result.shouldBlock}, completed=${result.completed}, findings=${result.findings.length}, messageLen=${result.message?.length ?? 0}`);
-      if (result.findings.length > 0) {
-        const ch = result.findings.filter(f => f.severity === "critical" || f.severity === "high").length;
-        const ml = result.findings.filter(f => f.severity === "medium" || f.severity === "low").length;
-        console.log(`[BUG_HUNTER] Breakdown: critical/high=${ch}, medium/low=${ml}`);
-      }
+      console.log(`[BUG_HUNTER] Result: shouldBlock=${bhResult.shouldBlock}, completed=${bhResult.completed}, findings=${bhResult.findings.length}`);
+      console.log(`[DATAGUARD] Result: shouldBlock=${dgResult.shouldBlock}, completed=${dgResult.completed}, findings=${dgResult.findings.length}`);
 
-      // ─── TEST-BASED VERIFICATION ─────────────────────────────────────────
-      // Run tests for findings that have test files. This provides deterministic
-      // pass/fail verification of bug fixes, preventing the "IA introduces new
-      // bugs while fixing old ones" loop.
+      // ─── BUG HUNTER test verification ─────────────────────────────────
       try {
         const { runTestsForFindings, allCriticalHighTestsPass } = await import("./bugHunter.js");
         const projectRoot = process.cwd();
-        runTestsForFindings(result.findings, projectRoot);
-
-        const allPass = allCriticalHighTestsPass(result.findings);
-        const testedCount = result.findings.filter(f => f.testStatus === "passed" || f.testStatus === "failed").length;
-        const passedCount = result.findings.filter(f => f.testStatus === "passed").length;
-        const failedCount = result.findings.filter(f => f.testStatus === "failed").length;
-
+        runTestsForFindings(bhResult.findings, projectRoot);
+        const allPass = allCriticalHighTestsPass(bhResult.findings);
+        const testedCount = bhResult.findings.filter(f => f.testStatus === "passed" || f.testStatus === "failed").length;
+        const passedCount = bhResult.findings.filter(f => f.testStatus === "passed").length;
+        const failedCount = bhResult.findings.filter(f => f.testStatus === "failed").length;
         if (testedCount > 0) {
           console.log(`[BUG_HUNTER] Test verification: ${passedCount}/${testedCount} tests passed, ${failedCount} failed`);
-
-          // Append test results to the message so IA sees them
           if (failedCount > 0) {
-            const failedFindings = result.findings.filter(f => f.testStatus === "failed");
-            result.message += `\n\n## TEST RESULTS\n${passedCount}/${testedCount} tests PASSED, ${failedCount} FAILED.\n`;
-            result.message += `The following findings have FAILING tests (bug NOT fixed):\n`;
+            const failedFindings = bhResult.findings.filter(f => f.testStatus === "failed");
+            bhResult.message += `\n\n## TEST RESULTS\n${passedCount}/${testedCount} tests PASSED, ${failedCount} FAILED.\n`;
+            bhResult.message += `The following findings have FAILING tests (bug NOT fixed):\n`;
             for (const f of failedFindings) {
-              result.message += `- [${f.severity.toUpperCase()}] ${f.file} — ${f.description.slice(0, 80)}\n`;
-              result.message += `  Test: ${f.testFile}\n`;
+              bhResult.message += `- [${f.severity.toUpperCase()}] ${f.file} — ${f.description.slice(0, 80)}\n`;
+              bhResult.message += `  Test: ${f.testFile}\n`;
             }
-            result.message += `\nThese bugs PERSIST. Try a DIFFERENT fix approach.\n`;
+            bhResult.message += `\nThese bugs PERSIST. Try a DIFFERENT fix approach.\n`;
           } else if (passedCount > 0) {
-            result.message += `\n\n## TEST RESULTS\n✓ All ${passedCount} tests PASSED. The bugs covered by tests are FIXED.\n`;
+            bhResult.message += `\n\n## TEST RESULTS\n✓ All ${passedCount} tests PASSED. The bugs covered by tests are FIXED.\n`;
           }
         }
+        void allPass;
       } catch (err) {
         console.log(`[BUG_HUNTER] Test verification skipped: ${(err as Error).message}`);
       }
 
-      if (result.shouldBlock && result.completed) {
-        // Bug Hunter found ANY findings (critical/high OR medium/low) — block finish
-        const hasCriticalHigh = result.findings.some(f => f.severity === "critical" || f.severity === "high");
-        const hasMediumLow = result.findings.some(f => f.severity === "medium" || f.severity === "low");
-        console.log(`[BUG_HUNTER] Handler: shouldBlock=true, completed=true, hasCriticalHigh=${hasCriticalHigh}, hasMediumLow=${hasMediumLow}, bugHunterMediumLowRounds=${bugHunterMediumLowRounds}`);
-
+      // ─── Process Bug Hunter results ───────────────────────────────────
+      let bhBlocked = false;
+      if (bhResult.shouldBlock && bhResult.completed) {
+        const hasCriticalHigh = bhResult.findings.some(f => f.severity === "critical" || f.severity === "high");
+        const hasMediumLow = bhResult.findings.some(f => f.severity === "medium" || f.severity === "low");
         if (hasCriticalHigh) {
           bugHunterBlocksThisTurn++;
           console.log(`[BUG_HUNTER] ACTION: blocking finish for critical/high (round ${bugHunterBlocksThisTurn}/${MAX_BUG_HUNTER_ROUNDS})`);
-          console.log(`[BUG_HUNTER] Round ${bugHunterBlocksThisTurn}/${MAX_BUG_HUNTER_ROUNDS}: found critical/high bugs — BLOCKING finish, reporting to IA for fixing`);
-          history.addSystemMessage(result.message);
-          return true;  // Block finish — IA must fix bugs, then Bug Hunter will run again
+          history.addSystemMessage(bhResult.message);
+          bhBlocked = true;
         } else if (hasMediumLow && bugHunterMediumLowRounds < MAX_MEDIUM_LOW_ROUNDS) {
-          // Only medium/low — block but with tighter cap
           bugHunterBlocksThisTurn++;
           bugHunterMediumLowRounds++;
           console.log(`[BUG_HUNTER] ACTION: blocking finish for medium/low (round ${bugHunterMediumLowRounds}/${MAX_MEDIUM_LOW_ROUNDS})`);
-          console.log(`[BUG_HUNTER] Round ${bugHunterBlocksThisTurn} (medium/low round ${bugHunterMediumLowRounds}/${MAX_MEDIUM_LOW_ROUNDS}): found ${result.findings.length} medium/low findings — BLOCKING finish, reporting to IA for fixing`);
-          history.addSystemMessage(result.message);
-          return true;  // Block finish — IA must address medium/low findings too
+          history.addSystemMessage(bhResult.message);
+          bhBlocked = true;
         } else {
-          // Medium/low cap reached — allow finish with advisory
           console.log(`[BUG_HUNTER] ACTION: medium/low cap reached — allowing finish`);
-          console.log(`[BUG_HUNTER] Medium/low cap (${MAX_MEDIUM_LOW_ROUNDS}) reached — allowing finish with ${result.findings.length} advisory findings`);
-          history.addSystemMessage(`[BUG_HUNTER] Medium/low review cap reached. ${result.findings.length} findings remain unaddressed — please review manually.\n\n${result.message}`);
+          history.addSystemMessage(`[BUG_HUNTER] Medium/low review cap reached. ${bhResult.findings.length} findings remain unaddressed — please review manually.\n\n${bhResult.message}`);
         }
-      } else if (result.completed && result.findings.length === 0) {
+      } else if (bhResult.completed && bhResult.findings.length === 0) {
         console.log(`[BUG_HUNTER] ACTION: clean pass — no bugs found`);
-        // No bugs found — clean pass!
-        console.log(`[BUG_HUNTER] Round ${bugHunterBlocksThisTurn + 1}: ✓ NO BUGS FOUND — code passed critical review`);
         if (bugHunterBlocksThisTurn > 0) {
           history.addSystemMessage(`[BUG_HUNTER] ✓ All previously identified bugs have been fixed. Code passed critical review on round ${bugHunterBlocksThisTurn + 1}.`);
         }
-      } else {
-        console.log(`[BUG_HUNTER] ACTION: no action (shouldBlock=${result.shouldBlock}, completed=${result.completed}, findings=${result.findings.length})`);
       }
-    } else if (bugHunterBlocksThisTurn >= MAX_BUG_HUNTER_ROUNDS) {
-      // Safety: after max rounds, let it finish even if bugs remain
-      console.log(`[BUG_HUNTER] Max rounds (${MAX_BUG_HUNTER_ROUNDS}) reached — allowing finish despite potential bugs`);
-      history.addSystemMessage(`[BUG_HUNTER] Max review rounds (${MAX_BUG_HUNTER_ROUNDS}) reached. The code may still have issues — please review manually.`);
-    }
-  } catch (err) {
-    console.log(`[BUG_HUNTER] Skipped (error in handler): ${(err as Error).message}`);
-  }
 
-  // ─── DATAGUARD: Data protection review (runs after Bug Hunter) ──────────
-  // While Bug Hunter hunts for logic bugs, DataGuard hunts for DATA LOSS risks.
-  // It checks for patterns like:
-  //   - SetAsync without GetAsync (overwrites existing data)
-  //   - RemoveAsync without backup (permanent deletion)
-  //   - Missing pcall around DataStore operations
-  //   - RemoteEvent without server-side validation
-  //   - Race conditions (GetAsync+SetAsync instead of UpdateAsync)
-  try {
-    const { runDataGuard } = await import("./dataGuard.js");
-    if (turnTouchedFiles.size > 0) {
-      const userRequestRaw = history.getHistory().find((m) => m.role === "user")?.content;
-      const userRequest = typeof userRequestRaw === "string" ? userRequestRaw : "";
-
-      console.log(`[DATAGUARD] Starting data protection review of ${turnTouchedFiles.size} file(s)`);
-      const dgResult = await runDataGuard(
-        [...turnTouchedFiles],
-        userRequest as string,
-        message.content ?? ""
-      );
-
-      console.log(`[DATAGUARD] Result: shouldBlock=${dgResult.shouldBlock}, completed=${dgResult.completed}, findings=${dgResult.findings.length}`);
-
+      // ─── Process DataGuard results ────────────────────────────────────
+      // BUG FIX: DataGuard now ALWAYS runs (not skipped when Bug Hunter blocks).
+      // Both results are injected so the IA can fix both logic bugs AND data
+      // risks in the same turn.
+      let dgBlocked = false;
       if (dgResult.shouldBlock && dgResult.completed) {
         const hasCriticalHigh = dgResult.findings.some(f => f.severity === "critical" || f.severity === "high");
         if (hasCriticalHigh) {
           console.log(`[DATAGUARD] Found ${dgResult.findings.length} data protection issue(s) — BLOCKING finish`);
           history.addSystemMessage(dgResult.message);
-          return true;  // Block finish — IA must fix data risks
+          dgBlocked = true;
         } else {
-          // Only medium/low — advisory
           console.log(`[DATAGUARD] Only medium/low data risks — advisory only`);
           history.addSystemMessage(dgResult.message);
         }
       } else if (dgResult.completed && dgResult.findings.length === 0) {
         console.log(`[DATAGUARD] ✓ NO DATA RISKS — data protection review passed`);
       }
+
+      // Block if EITHER review found critical/high issues
+      if (bhBlocked || dgBlocked) {
+        return true;
+      }
+    } else if (bugHunterBlocksThisTurn >= MAX_BUG_HUNTER_ROUNDS) {
+      console.log(`[BUG_HUNTER] Max rounds (${MAX_BUG_HUNTER_ROUNDS}) reached — allowing finish despite potential bugs`);
+      history.addSystemMessage(`[BUG_HUNTER] Max review rounds (${MAX_BUG_HUNTER_ROUNDS}) reached. The code may still have issues — please review manually.`);
     }
   } catch (err) {
-    console.log(`[DATAGUARD] Skipped (error in handler): ${(err as Error).message}`);
+    console.log(`[BUG_HUNTER+DATAGUARD] Skipped (error in handler): ${(err as Error).message}`);
   }
 
   // IDEIA 14: Inject failure memory before finishing (for next turn's awareness)

@@ -200,6 +200,8 @@ function formatDisplayLabel(entry: ActivityEntry): string {
     case "checkpoint":   return `Salvando checkpoint…`;
     case "api_call":     return `Chamando API: ${entry.label}`;
     case "api_retry":    return `Tentando novamente: ${entry.label}`;
+    case "bug_hunter":   return `🐛 Bug Hunter: ${entry.label}`;
+    case "dataguard":    return `🛡️ DataGuard: ${entry.label}`;
     case "idle":
     default:             return entry.label;
   }
@@ -216,6 +218,8 @@ function formatShortLabel(entry: ActivityEntry): string {
     case "checkpoint":   return "checkpoint";
     case "api_call":     return "API";
     case "api_retry":    return "retry";
+    case "bug_hunter":   return "bug hunter";
+    case "dataguard":    return "dataguard";
     case "idle":
     default:             return "";
   }

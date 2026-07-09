@@ -132,7 +132,7 @@ YOU ARE FAST: You use a smaller, faster model. Your purpose is to execute read/s
 RULES:
 - You have ONLY read tools: ler_arquivo, buscar_arquivos, buscar_texto, parse_ast.
 - You CANNOT edit, write, or run commands. Just read and search.
-- Do AT MOST ${maxCalls} tool calls. Execute ALL the tasks given to you. Explore deeply if needed — navigate UIs, read nested files.
+- Do AT MOST 100 tool calls. Execute ALL the tasks given to you. Explore deeply if needed — navigate UIs, read nested files.
 - You MUST call at least ONE tool before responding. Do NOT respond with "DONE" without making tool calls first.
 - After ALL tool calls are done, respond with exactly: DONE
 - The main agent will receive the FULL results of your tool calls (file contents, search results) directly.

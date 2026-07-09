@@ -53,8 +53,20 @@ export interface ScoutArgs {
   tasks: ScoutTask[];
   /** Diretório base (default: cwd) */
   cwd?: string;
-  /** Max tool calls (default 12) */
+  /** Max tool calls (default 50 — scout can explore deep UIs) */
   maxToolCalls?: number;
+  /**
+   * Optional callback fired BEFORE each tool call — lets the TUI show
+   * what the scout is doing in real-time (same as main agent's onToolCall).
+   * The toolName is prefixed with "scout:" so the user knows it's the
+   * smaller model doing the work.
+   */
+  onToolCall?: (toolName: string, args: Record<string, unknown>) => void;
+  /**
+   * Optional callback fired AFTER each tool call completes — lets the TUI
+   * show the result (or error) in real-time (same as main agent's onToolResult).
+   */
+  onToolResult?: (toolName: string, ok: boolean, resultStr: string) => void;
 }
 
 export interface ToolCallRecord {
@@ -120,7 +132,7 @@ YOU ARE FAST: You use a smaller, faster model. Your ONLY purpose is to execute r
 RULES:
 - You have ONLY read tools: ler_arquivo, buscar_arquivos, buscar_texto, parse_ast.
 - You CANNOT edit, write, or run commands. Just read and search.
-- Do AT MOST 12 tool calls. Execute ALL the tasks given to you.
+- Do AT MOST 50 tool calls. Execute ALL the tasks given to you. Explore deeply if needed — navigate UIs, read nested files.
 - DO NOT summarize, DO NOT interpret, DO NOT write analysis — just make the calls.
 - After ALL tool calls are done, respond with exactly: DONE
 - The main agent will receive the FULL results of your tool calls (file contents, search results) directly in its context — it does NOT need you to summarize them.
@@ -410,7 +422,7 @@ export async function runScout(args: ScoutArgs): Promise<ScoutResult | null> {
   const cwd = resolvedCwd;
   // BUG FIX (maxToolCalls-clamp): clamp maxToolCalls to [1, 50] to prevent
   // DoS via prompt injection (model could pass maxToolCalls: 1000000).
-  const rawMaxCalls = args.maxToolCalls ?? 12;
+  const rawMaxCalls = args.maxToolCalls ?? 50;
   const maxCalls = Math.max(1, Math.min(50, typeof rawMaxCalls === "number" && !Number.isNaN(rawMaxCalls) ? rawMaxCalls : 12));
   const scoutModel = getScoutModel();
 
@@ -545,6 +557,13 @@ export async function runScout(args: ScoutArgs): Promise<ScoutResult | null> {
 
         log.info(`[SCOUT] Tool: ${toolName}(${JSON.stringify(parsedArgs).slice(0, 80)})`);
 
+        // BUG FIX (visual-feedback): fire onToolCall callback so the TUI shows
+        // what the scout is doing in real-time. Prefix with "scout:" so the
+        // user knows it's the smaller model, not the main agent.
+        if (args.onToolCall) {
+          try { args.onToolCall(`scout:${toolName}`, parsedArgs); } catch { /* callback error shouldn't break scout */ }
+        }
+
         // Execute the tool
         let result: string;
         let success = false;
@@ -554,6 +573,14 @@ export async function runScout(args: ScoutArgs): Promise<ScoutResult | null> {
         } catch (toolErr) {
           const errMsg = toolErr instanceof Error ? toolErr.message : String(toolErr);
           result = `[ERROR] ${toolName} internal error: ${errMsg}`;
+        }
+
+        // BUG FIX (visual-feedback): fire onToolResult callback so the TUI
+        // shows the result (or error) in real-time. ALL calls appear visually
+        // — including failed ones — so the user can see if the scout is
+        // looping or hitting errors.
+        if (args.onToolResult) {
+          try { args.onToolResult(`scout:${toolName}`, success, result.slice(0, 200)); } catch { /* callback error shouldn't break scout */ }
         }
 
         // Track files inspected (resolved path, only on success)
@@ -641,21 +668,37 @@ export function formatScoutResult(result: ScoutResult): string {
     return `[SCOUT FAILED] Model: ${result.modelUsed}, Error: ${result.error ?? "no results"}. Continue with ler_arquivo/buscar_texto directly.`;
   }
 
-  // Build the raw results section — each tool call with its full result
-  const resultsStr = result.toolResults.map((tr, i) => {
+  // BUG FIX (filter-errors): only include SUCCESSFUL tool results in the
+  // formatted output that goes to the main agent. Failed calls (errors,
+  // path traversal blocked, file not found, etc) are filtered out so the
+  // main agent doesn't waste context window on useless error messages.
+  // The user already saw ALL calls (including failures) in real-time via
+  // the onToolCall/onToolResult callbacks — so nothing is hidden from the
+  // user, only from the main agent's context.
+  const successfulResults = result.toolResults.filter((tr) => tr.success);
+
+  if (successfulResults.length === 0) {
+    const failedCount = result.toolResults.length;
+    return `[SCOUT] All ${failedCount} tool calls failed. The scout could not read any files or search any code. Continue with ler_arquivo/buscar_texto directly.`;
+  }
+
+  const resultsStr = successfulResults.map((tr, i) => {
     const argsStr = JSON.stringify(tr.args);
-    const statusTag = tr.success ? "" : " [FAILED]";
-    return `## Tool Call ${i + 1}: ${tr.tool}${statusTag}\nArgs: ${argsStr}\nResult:\n${tr.result}`;
+    return `## Tool Call ${i + 1}: ${tr.tool}\nArgs: ${argsStr}\nResult:\n${tr.result}`;
   }).join("\n\n---\n\n");
+
+  const failedSummary = successfulResults.length < result.toolResults.length
+    ? `\n\n(${result.toolResults.length - successfulResults.length} failed calls were filtered out — you saw them in the chat already)`
+    : "";
 
   const filesList = result.filesInspected.length > 0
     ? `\n\n## Files Inspected by Scout (already read — no need to re-read)\n${result.filesInspected.map((f) => `- ${f}`).join("\n")}`
     : "";
 
-  return `[SCOUT RESULTS — gathered by ${result.modelUsed} (${result.toolResults.length} tool calls)]
+  return `[SCOUT RESULTS — gathered by ${result.modelUsed} (${successfulResults.length} successful calls, ${result.toolResults.length} total)]
 
 ${resultsStr}
-${filesList}
+${filesList}${failedSummary}
 
 [End of scout results — use these raw file contents and search results directly. Do NOT re-read these files.]`;
 }

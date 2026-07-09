@@ -899,7 +899,18 @@ const toolHandlers: Record<string, ToolHandler> = {
     // Scout uses the sub-agent slot semaphore (same concurrency limit)
     await acquireSubAgentSlot();
     try {
-      const scoutArgs: ScoutArgs = { objective, tasks, cwd, maxToolCalls: maxCalls };
+      // BUG FIX (visual-feedback): pass the current onToolCall/onToolResult
+      // callbacks so the scout's tool calls appear in the TUI in real-time.
+      // The user sees ALL calls (including failures) as they happen, with
+      // "scout:" prefix so they know it's the smaller model doing the work.
+      const scoutArgs: ScoutArgs = {
+        objective,
+        tasks,
+        cwd,
+        maxToolCalls: maxCalls,
+        onToolCall: currentOnToolCall,
+        onToolResult: currentOnToolResult,
+      };
       const result = await runScout(scoutArgs);
 
       if (result === null) {

@@ -297,7 +297,7 @@ describe("scoutAgent — formatScoutResult", () => {
     const formatted = formatScoutResult(result as any);
     expect(formatted).toContain("[SCOUT RESULTS");
     expect(formatted).toContain("mistralai/mistral-medium-3.5-128b");
-    expect(formatted).toContain("2 tool calls");
+    expect(formatted).toContain("2 successful calls");
     // Raw results should be present, not a summary
     expect(formatted).toContain("content of a.ts");
     expect(formatted).toContain("found 3 matches");

@@ -61,6 +61,9 @@ export interface ChatMessage {
   ok?: boolean;
   /** For assistant messages: whether this is an error message (displayed in red). */
   isError?: boolean;
+  /** For user messages: whether this is a sidequest (typed while IA was working).
+   *  Rendered in dimmed/muted color to distinguish from normal messages. */
+  isSidequest?: boolean;
 }
 
 interface ChatDisplayProps {
@@ -163,6 +166,16 @@ function renderMessage(msg: ChatMessage, keyPrefix: string): React.ReactElement 
   }
 
   if (msg.role === "user") {
+    // Sidequest messages (typed while IA was working) are rendered in dimmed color
+    if (msg.isSidequest) {
+      return (
+        <Box key={keyPrefix} flexDirection="column">
+          <Text color={colors.muted} bold> ⚡ sidequest:</Text>
+          <Text color={colors.muted}> {msg.content}</Text>
+          <Text></Text>
+        </Box>
+      );
+    }
     return (
       <Box key={keyPrefix} flexDirection="column">
         <Text color={colors.primary} bold> you:</Text>

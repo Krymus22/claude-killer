@@ -1473,6 +1473,9 @@ export function App() {
   } | null>(null);
   const [tokensPerSecond, setTokensPerSecond] = useState(0);
 
+  // ── Sidequest: messages typed while IA is working ──────────────────────
+  const [sidequests, setSidequests] = useState<string[]>([]);
+
   // ─── Streaming throttle (scroll-steal fix) ─────────────────────────────
   // BUG FIX (scroll-roubo): Without throttling, setMessages was called on
   // EVERY token from the API, causing Ink to re-render the entire chat
@@ -1931,7 +1934,19 @@ export function App() {
   const handleSubmit = useCallback(
     async (value: string) => {
       let trimmedValue = value.trim();
-      if (!trimmedValue || isProcessing.current) {
+      if (!trimmedValue) {
+        setInput("");
+        return;
+      }
+
+      // ── Sidequest: if IA is processing, queue the message ──
+      if (isProcessing.current) {
+        if (trimmedValue.startsWith("/")) {
+          setInput("");
+          return;
+        }
+        setSidequests((prev) => [...prev, trimmedValue]);
+        setMessages((prev) => [...prev, { role: "user", content: trimmedValue, isSidequest: true } as any]);
         setInput("");
         return;
       }
@@ -2068,6 +2083,32 @@ export function App() {
         });
         setSystemMessages((prev) => [...prev, `Error: ${errMsg}`]);
       } finally {
+        // ── Sidequest injection ──
+        if (sidequests.length > 0) {
+          const queued = sidequests.slice();
+          setSidequests([]);
+          for (const sq of queued) {
+            history.addUserMessage(sq);
+            setMessages((prev) => [...prev, { role: "user", content: sq }]);
+          }
+          try {
+            const { response, streamStarted } = await runStreaming(
+              queued.map((sq) => `[USER SIDEPQUEST] ${sq}`).join("\n\n")
+            );
+            finalizeMessage(response, streamStarted);
+            syncTodos();
+          } catch (err) {
+            const errMsg = (err as Error).message ?? String(err);
+            setMessages((prev) => {
+              const withoutStreaming = prev.filter((m) => !m.isStreaming);
+              return [...withoutStreaming, {
+                role: "assistant" as const,
+                content: `❌ Sidequest error: ${errMsg}`,
+                isError: true,
+              }];
+            });
+          }
+        }
         isProcessing.current = false;
         setStatus("idle");
         syncTodos();
@@ -2276,7 +2317,7 @@ export function App() {
                   value={input}
                   onChange={handleChange}
                   onSubmit={handleSubmit}
-                  placeholder={status === "idle" ? "Digite sua mensagem..." : ""}
+                  placeholder={status === "idle" ? "Digite sua mensagem..." : "Digite uma sidequest..."}
                 />
               </>
             )}

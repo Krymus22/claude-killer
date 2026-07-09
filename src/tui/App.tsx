@@ -1368,13 +1368,40 @@ export function convertSessionToVisualMessages(sessionMsgs: unknown[]): ChatMess
   for (const raw of sessionMsgs) {
     const m = raw as Record<string, unknown>;
     if (m.role === "user") {
-      visual.push({ role: "user", content: String(m.content ?? "") });
+      // BUG FIX (content-array): content can be a string OR an array of
+      // content parts ([{type:"text", text:"..."}]) per the OpenAI spec.
+      // Previously only string was handled — array content was silently
+      // dropped, making the visual history empty.
+      const content = m.content;
+      let textContent = "";
+      if (typeof content === "string") {
+        textContent = content;
+      } else if (Array.isArray(content)) {
+        // Extract text from content parts array
+        for (const part of content) {
+          if (typeof part === "object" && part !== null && "text" in part) {
+            textContent += String((part as Record<string, unknown>).text);
+          }
+        }
+      }
+      visual.push({ role: "user", content: textContent });
     } else if (m.role === "assistant") {
       // Add text content if present (some assistant messages are ONLY
-      // tool_calls with no text)
+      // tool_calls with no text, or have content as null for reasoning models)
       const content = m.content;
       if (typeof content === "string" && content.length > 0) {
         visual.push({ role: "assistant", content });
+      } else if (Array.isArray(content)) {
+        // Content parts array — extract text
+        let textContent = "";
+        for (const part of content) {
+          if (typeof part === "object" && part !== null && "text" in part) {
+            textContent += String((part as Record<string, unknown>).text);
+          }
+        }
+        if (textContent.length > 0) {
+          visual.push({ role: "assistant", content: textContent });
+        }
       }
       // Explode tool_calls into individual visual tool call messages
       const toolCalls = m.tool_calls as Array<{

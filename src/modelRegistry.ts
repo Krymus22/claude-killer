@@ -119,6 +119,18 @@ export const MODEL_REGISTRY: ModelInfo[] = [
     provider: "nvidia",
   },
   {
+    id: "deepseek-ai/deepseek-v4-pro",
+    name: "DeepSeek V4 Pro",
+    contextWindow: 1_000_000,
+    maxOutputTokens: 32_768,
+    costPer1MPrompt: 0,
+    costPer1MCompletion: 0,
+    supportsTools: true,
+    supportsParallelTools: true,
+    hasThinking: true,
+    provider: "nvidia",
+  },
+  {
     id: "meta/llama-3.3-70b-instruct",
     name: "Llama 3.3 70B",
     contextWindow: 128_000,

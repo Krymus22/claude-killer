@@ -513,13 +513,15 @@ describe("operationStartedAt — elapsed timer stability", () => {
     done1();
   });
 
-  it("elapsed resets to 0 when ALL activities are popped", () => {
+  it("elapsed resets to 0 when ALL activities are popped (via clearActivity)", () => {
     const done1 = pushActivity("thinking", "first");
     const done2 = pushActivity("tool", "second");
 
-    // Pop both — stack becomes empty, operationStartedAt cleared
+    // Pop both — stack becomes empty. With the grace period, operationStartedAt
+    // is NOT immediately nulled. Use clearActivity() for immediate clear.
     done2();
     done1();
+    clearActivity();
 
     const snap = getActivitySnapshot();
     expect(snap.current).toBeNull();

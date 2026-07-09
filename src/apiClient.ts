@@ -1566,6 +1566,14 @@ async function chatWithPool(
           const primaryState = createStreamState();
           const hedgeState = createStreamState();
 
+          // BUG FIX (tok/s-aleatorio): fire onStreamStart BEFORE the race
+          // starts, not after. Previously, onStreamStart was called manually
+          // AFTER consumeStream finished (lines ~1618/1628), which set
+          // streamStartTime to AFTER the stream ended → tok/s = tokens/~0 =
+          // absurd values (thousands of tok/s). Now we fire it before the
+          // race so streamStartTime covers the full stream duration.
+          if (onStreamStart) onStreamStart();
+
           // Race: first stream to produce content wins
           // BUG FIX (BUG 6): antes, o `.catch(() => {})` do perdedor era
           // registrado APÓS o `Promise.race` resolver. Se o stream perdedor
@@ -1614,8 +1622,9 @@ async function chatWithPool(
             // Hedge lost — aborta o stream subjacente do hedge
             abortStreamSafe(hedgeRawStream);
             const response = buildChatResponse(primaryState);
-            // But we need to call onStreamStart/onToken with the winner's content
-            if (onStreamStart) onStreamStart();
+            // BUG FIX (tok/s-aleatorio): onStreamStart was already called
+            // before the race started. Don't call it again here — calling it
+            // after the stream finished set streamStartTime to the wrong time.
             if (onToken && response.choices[0]?.message?.content) {
               onToken(response.choices[0].message.content);
             }
@@ -1625,7 +1634,7 @@ async function chatWithPool(
             // Primary lost — aborta o stream subjacente do primary
             abortStreamSafe(rawStream);
             const response = buildChatResponse(hedgeState);
-            if (onStreamStart) onStreamStart();
+            // BUG FIX (tok/s-aleatorio): onStreamStart already called before race.
             if (onToken && response.choices[0]?.message?.content) {
               onToken(response.choices[0].message.content);
             }

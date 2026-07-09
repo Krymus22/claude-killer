@@ -172,6 +172,11 @@ function popActivity(entry: ActivityEntry): void {
       state = { ...state, operationStartedAt: null };
       notify();
     }, OPERATION_GRACE_PERIOD_MS);
+    // BUG FIX (round 2): unref the timer so it doesn't keep the process
+    // alive during shutdown (matching the pattern in heartbeat.ts).
+    if (operationGraceTimer && typeof operationGraceTimer.unref === "function") {
+      operationGraceTimer.unref();
+    }
   }
 
   state = {
@@ -299,6 +304,12 @@ export function withActivitySync<T>(
 
 /** Reset state — used by tests to start from a clean slate. */
 export function _resetActivityForTests(): void {
+  // BUG FIX (round 2): clear the grace timer to prevent flaky tests where
+  // an orphaned timer fires after the reset and corrupts the next test's state.
+  if (operationGraceTimer) {
+    clearTimeout(operationGraceTimer);
+    operationGraceTimer = null;
+  }
   state = { stack: [], operationStartedAt: null };
   listeners.clear();
 }

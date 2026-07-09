@@ -1475,6 +1475,21 @@ export function App() {
 
   // ── Sidequest: messages typed while IA is working ──────────────────────
   const [sidequests, setSidequests] = useState<string[]>([]);
+  // Ref mirror of `sidequests`. The `handleSubmit` finally block reads this
+  // ref instead of the state because `handleSubmit` is memoized via
+  // useCallback WITHOUT `sidequests` in its deps array (intentionally —
+  // adding it would recreate the callback when a sidequest arrives mid-flight,
+  // but the in-flight invocation still holds the OLD closure, so the new
+  // value would never be seen by the running finally block).
+  //
+  // BUG FIX (sidequest-stale-closure): previously the finally block read the
+  // `sidequests` STATE directly. Since `sidequests` was captured at the time
+  // `handleSubmit` was memoized (always `[]` at first render), the
+  // `if (sidequests.length > 0)` check was ALWAYS false — the sidequest
+  // injection NEVER fired. Sidequests were silently dropped (visible as ⚡ in
+  // the chat but never sent to the agent). The ref is read fresh on every
+  // access, so the finally block sees sidequests queued at any point.
+  const sidequestsRef = useRef<string[]>([]);
 
   // ─── Streaming throttle (scroll-steal fix) ─────────────────────────────
   // BUG FIX (scroll-roubo): Without throttling, setMessages was called on
@@ -1942,11 +1957,25 @@ export function App() {
       // ── Sidequest: if IA is processing, queue the message ──
       if (isProcessing.current) {
         if (trimmedValue.startsWith("/")) {
+          // BUG FIX (sidequest-silent-drop): slash commands during processing
+          // were silently dropped with no feedback — the user typed "/help"
+          // and nothing happened, looking like the input was broken. Now we
+          // surface a system message so the user knows it was ignored and
+          // why (and what to do instead).
+          setSystemMessages((prev) => [...prev,
+            `Comando "${trimmedValue}" ignorado — a IA está processando. Aguarde terminar ou reformule sem "/".`,
+          ]);
           setInput("");
           return;
         }
-        setSidequests((prev) => [...prev, trimmedValue]);
-        setMessages((prev) => [...prev, { role: "user", content: trimmedValue, isSidequest: true } as any]);
+        // Update BOTH the ref (source of truth for the finally block) and the
+        // state (for re-render of any component that might display the queue).
+        sidequestsRef.current = [...sidequestsRef.current, trimmedValue];
+        setSidequests(sidequestsRef.current);
+        // NOTE: no `as any` needed — `isSidequest` is a declared field on
+        // ChatMessage (see ChatDisplay.tsx interface). The previous cast
+        // bypassed TypeScript safety for no reason.
+        setMessages((prev) => [...prev, { role: "user", content: trimmedValue, isSidequest: true }]);
         setInput("");
         return;
       }
@@ -2084,19 +2113,46 @@ export function App() {
         setSystemMessages((prev) => [...prev, `Error: ${errMsg}`]);
       } finally {
         // ── Sidequest injection ──
-        if (sidequests.length > 0) {
-          const queued = sidequests.slice();
+        //
+        // BUG FIX (sidequest-stale-closure + race): the original code read
+        // the `sidequests` STATE here, but handleSubmit's closure captured
+        // the value at memoization time (always `[]` on first render) — so
+        // the injection NEVER fired. Even with a fresh read, a single
+        // `if (sidequests.length > 0)` would miss sidequests queued DURING
+        // the inner runStreaming (since isProcessing.current stays true
+        // throughout, the user can keep typing sidequests).
+        //
+        // Fix: read from `sidequestsRef` (always current) and LOOP until the
+        // ref is empty. Each iteration snapshots the ref, clears it, injects
+        // the queued sidequests into the agent history, and re-runs the
+        // agent loop. Sidequests that arrive during the inner runStreaming
+        // are picked up by the next loop iteration.
+        while (sidequestsRef.current.length > 0) {
+          const queued = sidequestsRef.current.slice();
+          sidequestsRef.current = [];
           setSidequests([]);
           for (const sq of queued) {
             history.addUserMessage(sq);
-            setMessages((prev) => [...prev, { role: "user", content: sq }]);
+            // NOTE: the sidequest was already added to `messages` with
+            // isSidequest=true when the user typed it (see the early-return
+            // above). We do NOT re-add it here — that would render the same
+            // text twice (once as ⚡ sidequest, once as a normal "you:"
+            // message), which was the previous behavior.
           }
           try {
+            // BUG FIX (typo): was "SIDEPQUEST" — typo in the agent prompt.
+            // The agent still understood it, but fix the spelling.
             const { response, streamStarted } = await runStreaming(
-              queued.map((sq) => `[USER SIDEPQUEST] ${sq}`).join("\n\n")
+              queued.map((sq) => `[USER SIDEQUEST] ${sq}`).join("\n\n"),
             );
             finalizeMessage(response, streamStarted);
             syncTodos();
+            // BUG FIX (missing-syncPlan): syncPlan was only called at the
+            // end of the finally, so a plan created/updated during the
+            // sidequest runStreaming wouldn't be reflected in the PlanPanel
+            // until after the entire finally completed. Now we sync after
+            // each sidequest batch.
+            syncPlan();
           } catch (err) {
             const errMsg = (err as Error).message ?? String(err);
             setMessages((prev) => {
@@ -2107,6 +2163,15 @@ export function App() {
                 isError: true,
               }];
             });
+            // Stop processing further queued sidequests — if the agent loop
+            // failed (e.g., API error), continuing would just cascade
+            // failures. Clear any sidequests queued during the failed run
+            // so they don't get stuck in the ref forever (visible as ⚡ but
+            // never processed). The user can re-submit them after seeing
+            // the error.
+            sidequestsRef.current = [];
+            setSidequests([]);
+            break;
           }
         }
         isProcessing.current = false;

@@ -69,7 +69,7 @@ import { useTerminalWidth } from "./useTerminal.js";
 import type { AskUserQuestion, AskUserResponse } from "../askUser.js";
 import { getSearxStatus } from "../searxManager.js";
 import { loadConfig as loadDotfileConfig, updateConfig as updateDotfileConfig, saveConfig as saveDotfileConfig } from "../dotfileConfig.js";
-import { listSessions, deleteSession, renameSession, startSession, getLastSession, loadSessionMessages, setActiveSession, getActiveSessionId, updateSessionProjectCwd, updateSessionEffortLevel } from "../session.js";
+import { listSessions, deleteSession, renameSession, startSession, getLastSession, loadSessionMessages, setActiveSession, getActiveSessionId, updateSessionProjectCwd, updateSessionEffortLevel, updateSessionUsage, type SessionUsage } from "../session.js";
 // Static import (no circular dep) — fixes the syncPlan() race condition.
 // Previously syncPlan() used `await import("../planExecutor.js")` which
 // scheduled a microtask that could fire AFTER createPlan() was called in
@@ -101,7 +101,7 @@ const SLASH_COMMANDS: Array<{ cmd: string; desc: string }> = [
   { cmd: "/session", desc: "Save/load/list/delete conversation sessions" },
 ];
 
-type CommandResult = { handled: boolean; message?: string; exit?: boolean; openHub?: boolean; openFolderBrowser?: boolean; resetChat?: boolean; openConfigurator?: boolean; configuratorTool?: string | null; compactDone?: boolean; compactStarted?: boolean; compactInstruction?: string; compactResult?: { removed: number; beforeTokens: number; afterTokens: number; method?: string }; visualMessages?: ChatMessage[] };
+type CommandResult = { handled: boolean; message?: string; exit?: boolean; openHub?: boolean; openFolderBrowser?: boolean; resetChat?: boolean; openConfigurator?: boolean; configuratorTool?: string | null; compactDone?: boolean; compactStarted?: boolean; compactInstruction?: string; compactResult?: { removed: number; beforeTokens: number; afterTokens: number; method?: string }; visualMessages?: ChatMessage[]; restoredUsage?: { lastPromptTokens: number; lastCompletionTokens: number; lastTotalTokens: number; sessionPromptTokens: number; sessionCompletionTokens: number; sessionCost: number } };
 
 
 
@@ -265,6 +265,18 @@ function handleSessionCommand(arg: string | null): CommandResult {
     if (loaded.effortLevel) {
       setEffortLevel(loaded.effortLevel);
     }
+    // BUG FIX (usage-not-restored): return usage data via restoredUsage so
+    // handleSlashCommandFlow (inside the component) can call the setters.
+    // We can't call them here because handleSessionCommand is a top-level
+    // function without access to useState setters.
+    const restoredUsage = loaded.usage ? {
+      lastPromptTokens: loaded.usage.lastPromptTokens,
+      lastCompletionTokens: loaded.usage.lastCompletionTokens,
+      lastTotalTokens: loaded.usage.lastTotalTokens,
+      sessionPromptTokens: loaded.usage.sessionPromptTokens,
+      sessionCompletionTokens: loaded.usage.sessionCompletionTokens,
+      sessionCost: loaded.usage.sessionCost,
+    } : undefined;
     return {
       handled: true,
       resetChat: true,
@@ -272,6 +284,7 @@ function handleSessionCommand(arg: string | null): CommandResult {
       // will use resetChat to clear the visual state, then we need to
       // re-populate it with the loaded session's messages.
       visualMessages: convertSessionToVisualMessages(loaded.messages),
+      restoredUsage,
       message: `[OK] Session loaded: ${id}\n${loaded.messages.length} messages restored${loaded.lastSnapshot ? ` (from ${loaded.lastSnapshot.method} compaction snapshot)` : ""}.${loaded.effortLevel ? `\nEffort restored to: ${loaded.effortLevel.toUpperCase()}` : ""}`,
     };
   }
@@ -1546,6 +1559,29 @@ export function App() {
             console.error(`[SESSION] Restored effort level: ${loaded.effortLevel}`);
           }
 
+          // ── Restore usage/tokens/cost from session header ────────────
+          // BUG FIX (usage-not-restored): the StatusBar showed 0 tokens / 0%
+          // after loading a session until the next IA response arrived.
+          // Now we restore lastUsage + cumulative session totals from the
+          // session header so the context bar and cost display are accurate
+          // immediately. Old sessions without usage field → null → keep 0.
+          if (loaded.usage) {
+            const u = loaded.usage;
+            setLastUsage({
+              prompt_tokens: u.lastPromptTokens,
+              completion_tokens: u.lastCompletionTokens,
+              total_tokens: u.lastTotalTokens,
+            });
+            setSessionPromptTokens(u.sessionPromptTokens);
+            setSessionCompletionTokens(u.sessionCompletionTokens);
+            setSessionCost(u.sessionCost);
+            // Sync refs immediately (don't wait for effect) so onUsage can
+            // read accurate values if the user sends a message right away.
+            sessionPromptTokensRef.current = u.sessionPromptTokens;
+            sessionCompletionTokensRef.current = u.sessionCompletionTokens;
+            console.error(`[SESSION] Restored usage: lastTotal=${u.lastTotalTokens}, sessionPrompt=${u.sessionPromptTokens}, cost=$${u.sessionCost.toFixed(4)}`);
+          }
+
           // ── Visual messages: convert ALL messages for display ──────
           // The user sees the FULL conversation history (including messages
           // that were compacted away from the IA's context). This is
@@ -1669,6 +1705,15 @@ export function App() {
   const [sessionPromptTokens, setSessionPromptTokens] = useState(0);
   const [sessionCompletionTokens, setSessionCompletionTokens] = useState(0);
   const [sessionCost, setSessionCost] = useState(0);
+  // Refs mirroring the cumulative session totals. The onUsage callback reads
+  // these (not the state) because state values are captured at callback
+  // creation time (stale closure). The refs are always current.
+  // Used by updateSessionUsage() to persist accurate cumulative totals.
+  const sessionPromptTokensRef = useRef(0);
+  const sessionCompletionTokensRef = useRef(0);
+  // Keep refs in sync with state via effect
+  useEffect(() => { sessionPromptTokensRef.current = sessionPromptTokens; }, [sessionPromptTokens]);
+  useEffect(() => { sessionCompletionTokensRef.current = sessionCompletionTokens; }, [sessionCompletionTokens]);
   const [effortLabel, setEffortLabel] = useState(getEffortLabel());
   const [systemMessages, setSystemMessages] = useState<string[]>([]);
   const [acIndex, setAcIndex] = useState(0);
@@ -1926,11 +1971,42 @@ export function App() {
         // instead of just the last-turn values.
         setSessionPromptTokens((prev) => prev + usage.prompt_tokens);
         setSessionCompletionTokens((prev) => prev + usage.completion_tokens);
-        setSessionCost((prev) =>
-          prev
-          + (usage.prompt_tokens / 1000) * config.costPerKPrompt
-          + (usage.completion_tokens / 1000) * config.costPerKCompletion
-        );
+        setSessionCost((prev) => {
+          const newCost = prev
+            + (usage.prompt_tokens / 1000) * config.costPerKPrompt
+            + (usage.completion_tokens / 1000) * config.costPerKCompletion;
+          // BUG FIX (usage-not-persisted): persist usage to the session header
+          // so the next session load shows accurate token/cost values
+          // immediately — without waiting for the next IA response.
+          // We do this inside the setSessionCost updater so we have access
+          // to the NEW cumulative cost (not the stale `prev` from closure).
+          // The other cumulative values are computed from the current usage
+          // + the refs below (which we can't use here). Instead, we read
+          // them via functional updates too — but since updateSessionUsage
+          // needs ALL values at once, we compute them here.
+          // sessionPromptTokens/sessionCompletionTokens haven't been updated
+          // yet (React batches), so we add usage to the current values.
+          // This is safe because setSessionCost runs after the other setters
+          // were CALLED (but not yet committed) — we use the pre-update
+          // values + usage to compute the post-update totals.
+          try {
+            updateSessionUsage({
+              lastPromptTokens: usage.prompt_tokens,
+              lastCompletionTokens: usage.completion_tokens,
+              lastTotalTokens: usage.total_tokens,
+              // Note: these cumulative values use the pre-update session
+              // totals + this turn's usage. Since React batches state
+              // updates, the sessionPromptTokens state hasn't been committed
+              // yet when this runs — but we can compute the post-update value
+              // by adding usage to whatever the state was at the start of
+              // this callback. We use a ref to get the latest committed value.
+              sessionPromptTokens: sessionPromptTokensRef.current + usage.prompt_tokens,
+              sessionCompletionTokens: sessionCompletionTokensRef.current + usage.completion_tokens,
+              sessionCost: newCost,
+            });
+          } catch { /* session persistence is best-effort */ }
+          return newCost;
+        });
         // Final tok/s calculation — uses THIS stream's elapsed time
         // (streamStartTime was reset on the last onStreamStart).
         if (streamStartTime > 0 && usage.completion_tokens > 0) {
@@ -2044,6 +2120,23 @@ export function App() {
         // If visualMessages were provided (e.g., from /session load), use
         // them instead of clearing. Otherwise, clear the chat.
         setMessages(result.visualMessages ?? []);
+      }
+      // BUG FIX (usage-not-restored): apply restored usage from /session load
+      // so the StatusBar shows accurate token/cost values immediately.
+      if (result.restoredUsage) {
+        const u = result.restoredUsage;
+        setLastUsage({
+          prompt_tokens: u.lastPromptTokens,
+          completion_tokens: u.lastCompletionTokens,
+          total_tokens: u.lastTotalTokens,
+        });
+        setSessionPromptTokens(u.sessionPromptTokens);
+        setSessionCompletionTokens(u.sessionCompletionTokens);
+        setSessionCost(u.sessionCost);
+        // Sync refs immediately so onUsage (if user sends a message right
+        // away) reads accurate cumulative values.
+        sessionPromptTokensRef.current = u.sessionPromptTokens;
+        sessionCompletionTokensRef.current = u.sessionCompletionTokens;
       }
       // /compact agora é assíncrono (LLM-based). Mostra status "compacting"
       // enquanto a IA gera o resumo. O resultado aparece como system message

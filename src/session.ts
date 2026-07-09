@@ -253,6 +253,89 @@ export function updateSessionEffortLevel(level: EffortLevel): void {
   }
 }
 
+// --- Usage / tokens persistence (mirrors effortLevel pattern) ---------------
+
+/**
+ * Usage data persisted in the session header so the StatusBar can show
+ * accurate token/cost values immediately when a session is loaded —
+ * without waiting for the next IA response.
+ *
+ * - `lastUsage`: the usage object from the last API response (last turn).
+ *   Used for the context bar percentage and "last turn" display.
+ * - `sessionPromptTokens` / `sessionCompletionTokens` / `sessionCost`:
+ *   cumulative totals across ALL turns in the session. Used for the
+ *   "session: Xk" and "$cost" displays.
+ *
+ * All fields default to null/0 for backward compatibility with sessions
+ * created before this feature.
+ */
+export interface SessionUsage {
+  /** Last turn's prompt tokens (from API usage object). */
+  lastPromptTokens: number;
+  /** Last turn's completion tokens. */
+  lastCompletionTokens: number;
+  /** Last turn's total tokens (= prompt + completion). */
+  lastTotalTokens: number;
+  /** Cumulative session-wide prompt tokens (all turns). */
+  sessionPromptTokens: number;
+  /** Cumulative session-wide completion tokens (all turns). */
+  sessionCompletionTokens: number;
+  /** Cumulative session-wide cost in USD (all turns). */
+  sessionCost: number;
+}
+
+/**
+ * Read usage data from a session file's header.
+ * Returns null if the file doesn't exist or has no usage field (old sessions).
+ */
+export function getSessionUsage(sessionPath: string): SessionUsage | null {
+  try {
+    const content = fs.readFileSync(sessionPath, "utf8");
+    const firstLine = content.split("\n")[0];
+    if (!firstLine) return null;
+    const header = JSON.parse(firstLine);
+    if (header.type !== "session-header") return null;
+    const u = header.usage;
+    if (!u || typeof u !== "object") return null;
+    // Defensive: validate all fields are numbers (old/corrupt sessions)
+    const num = (v: unknown) => typeof v === "number" && !Number.isNaN(v) ? v : 0;
+    return {
+      lastPromptTokens: num(u.lastPromptTokens),
+      lastCompletionTokens: num(u.lastCompletionTokens),
+      lastTotalTokens: num(u.lastTotalTokens),
+      sessionPromptTokens: num(u.sessionPromptTokens),
+      sessionCompletionTokens: num(u.sessionCompletionTokens),
+      sessionCost: num(u.sessionCost),
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Update usage data in the active session's header.
+ * Called after each API response (onUsage callback) so the next session
+ * load shows accurate token/cost values immediately.
+ *
+ * No-op if no session is active (lazy init will handle it on first message).
+ * Follows the same read-modify-write pattern as updateSessionEffortLevel().
+ */
+export function updateSessionUsage(usage: SessionUsage): void {
+  if (!activeSessionPath) return;
+  try {
+    const content = fs.readFileSync(activeSessionPath, "utf8");
+    const lines = content.split("\n");
+    if (lines.length === 0) return;
+    const header = JSON.parse(lines[0]!);
+    header.usage = usage;
+    lines[0] = JSON.stringify(header);
+    fs.writeFileSync(activeSessionPath, lines.join("\n"), "utf8");
+    log.debug(`[SESSION] Updated usage: lastTotal=${usage.lastTotalTokens}, sessionPrompt=${usage.sessionPromptTokens}, cost=$${usage.sessionCost.toFixed(4)}`);
+  } catch (err) {
+    log.debug(`[SESSION] Failed to update usage: ${(err as Error).message}`);
+  }
+}
+
 /**
  * Get the last session for the current project directory.
  * Returns null if no sessions exist.
@@ -260,7 +343,7 @@ export function updateSessionEffortLevel(level: EffortLevel): void {
  * (if available) so the caller can restore the working directory and
  * thinking effort.
  */
-export function getLastSession(cwd?: string): { id: string; path: string; projectCwd: string | null; effortLevel: EffortLevel | null } | null {
+export function getLastSession(cwd?: string): { id: string; path: string; projectCwd: string | null; effortLevel: EffortLevel | null; usage: SessionUsage | null } | null {
   const dir = getProjectSessionDir(cwd);
   if (!fs.existsSync(dir)) return null;
 
@@ -275,12 +358,14 @@ export function getLastSession(cwd?: string): { id: string; path: string; projec
   const filePath = path.join(dir, lastFile);
   const projectCwd = getSessionProjectCwd(filePath);
   const effortLevel = getSessionEffortLevel(filePath);
+  const usage = getSessionUsage(filePath);
 
   return {
     id: lastFile.replace(".jsonl", ""),
     path: filePath,
     projectCwd,
     effortLevel,
+    usage,
   };
 }
 
@@ -324,6 +409,17 @@ export interface LoadedSession {
    * to restore the per-session effort level.
    */
   effortLevel: EffortLevel | null;
+  /**
+   * Usage data (tokens/cost) recorded in the session header, or null if
+   * the header doesn't have a usage field (old sessions created before
+   * this feature).
+   *
+   * The caller should call setLastUsage / setSessionPromptTokens /
+   * setSessionCompletionTokens / setSessionCost with these values (when
+   * non-null) to restore the StatusBar display immediately on load —
+   * without waiting for the next IA response.
+   */
+  usage: SessionUsage | null;
 }
 
 /**
@@ -356,7 +452,7 @@ export function loadSessionMessages(sessionId: string, cwd?: string): LoadedSess
       if (fs.existsSync(oldPath)) {
         try {
           const data = JSON.parse(fs.readFileSync(oldPath, "utf8"));
-          return { messages: data.messages ?? [], lastSnapshot: null, postSnapshotMessages: data.messages ?? [], effortLevel: null };
+          return { messages: data.messages ?? [], lastSnapshot: null, postSnapshotMessages: data.messages ?? [], effortLevel: null, usage: null };
         } catch {
           return null;
         }
@@ -412,7 +508,11 @@ export function loadSessionMessages(sessionId: string, cwd?: string): LoadedSess
     // Read the effort level from the session header (for restoration on load).
     // null if the header doesn't have it (old sessions) or has an invalid value.
     const effortLevel = getSessionEffortLevel(filePath);
-    return { messages, lastSnapshot, postSnapshotMessages, effortLevel };
+    // Read usage data (tokens/cost) from the session header so the StatusBar
+    // can show accurate values immediately on load — without waiting for the
+    // next IA response. null for old sessions without this field.
+    const usage = getSessionUsage(filePath);
+    return { messages, lastSnapshot, postSnapshotMessages, effortLevel, usage };
   } catch {
     return null;
   }

@@ -1389,8 +1389,10 @@ export function convertSessionToVisualMessages(sessionMsgs: unknown[]): ChatMess
       // Add text content if present (some assistant messages are ONLY
       // tool_calls with no text, or have content as null for reasoning models)
       const content = m.content;
+      let hasTextContent = false;
       if (typeof content === "string" && content.length > 0) {
         visual.push({ role: "assistant", content });
+        hasTextContent = true;
       } else if (Array.isArray(content)) {
         // Content parts array — extract text
         let textContent = "";
@@ -1401,14 +1403,25 @@ export function convertSessionToVisualMessages(sessionMsgs: unknown[]): ChatMess
         }
         if (textContent.length > 0) {
           visual.push({ role: "assistant", content: textContent });
+          hasTextContent = true;
         }
       }
-      // Explode tool_calls into individual visual tool call messages
+      // BUG FIX (content-null-hidden): For reasoning models (GLM 5.2, DeepSeek),
+      // content is null when the model only produced reasoning_content + tool_calls.
+      // Previously, no assistant bubble was shown — the historical turn disappeared
+      // from the chat. Now we add a placeholder so the user sees the assistant
+      // was active, even if there's no visible text.
       const toolCalls = m.tool_calls as Array<{
         id?: string;
         type?: string;
         function: { name: string; arguments: string };
       }> | undefined;
+      if (!hasTextContent && Array.isArray(toolCalls) && toolCalls.length > 0) {
+        // Assistant only made tool calls (no text) — add a placeholder
+        const toolNames = toolCalls.map(tc => tc.function?.name ?? "tool").join(", ");
+        visual.push({ role: "assistant", content: `*[usando ferramentas: ${toolNames}]*` });
+      }
+      // Explode tool_calls into individual visual tool call messages
       if (Array.isArray(toolCalls)) {
         for (const tc of toolCalls) {
           visual.push({
@@ -1682,7 +1695,17 @@ export function App() {
   // The session was loaded in the useState initializer above; the ref holds
   // the converted visual messages. This effect runs once on mount.
   useEffect(() => {
-    if (loadedVisualMessagesRef.current.length > 0) {
+    // BUG FIX (history-not-loading): always call setMessages when a session
+    // was loaded, even if convertSessionToVisualMessages returned empty.
+    // Previously, the guard `length > 0` skipped setMessages when the visual
+    // array was empty — leaving the chat blank even though the session loaded
+    // successfully. Now we call setMessages whenever a session was loaded
+    // (loadedSessionIdRef is set), regardless of visual array length.
+    if (loadedSessionIdRef.current) {
+      setMessages(loadedVisualMessagesRef.current);
+    } else if (loadedVisualMessagesRef.current.length > 0) {
+      // Fallback: visual messages without session ID (shouldn't happen, but
+      // keeps backward compatibility)
       setMessages(loadedVisualMessagesRef.current);
     }
     // Show FolderBrowser on startup if no session was loaded

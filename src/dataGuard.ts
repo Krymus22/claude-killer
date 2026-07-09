@@ -339,9 +339,44 @@ export async function runDataGuard(
     const staticScan = await quickScanForDataPatterns(filesModified);
     const context = buildDataGuardContext(filesModified, userRequest, agentResponse);
 
+    // BUG FIX (scout-acceleration): if scout is enabled, pre-read ALL modified
+    // files using the fast scout model (1-3s per call, 700+ tok/s) instead of
+    // making the DataGuard's model (slow, 10-30s per call) do ler_arquivo
+    // one by one. The file contents are injected directly into the context,
+    // so the DataGuard model only needs to ANALYZE — not read.
+    let preloadedContent = "";
+    try {
+      const { isScoutEnabled, runScout } = await import("./scoutAgent.js");
+      type ScoutArgs = import("./scoutAgent.js").ScoutArgs;
+      if (isScoutEnabled()) {
+        log.info(`[DATAGUARD] Pre-reading ${filesModified.length} files via scout (fast model)...`);
+        const scoutArgs: ScoutArgs = {
+          objective: `Read ALL the following files and return their complete contents for data protection review. Files: ${filesModified.join(", ")}`,
+          tasks: filesModified.map(f => ({ type: "read_file" as const, description: `read ${f}` })),
+          maxToolCalls: filesModified.length,
+        };
+        const scoutResult = await runScout(scoutArgs);
+        if (scoutResult && scoutResult.completed && scoutResult.toolResults.length > 0) {
+          preloadedContent = scoutResult.toolResults
+            .filter(tr => tr.success)
+            .map(tr => `### File: ${tr.args.caminho ?? tr.args.path ?? "unknown"}\n\`\`\`\n${tr.result}\n\`\`\`\n`)
+            .join("\n");
+          log.info(`[DATAGUARD] Scout pre-loaded ${scoutResult.toolResults.filter(tr => tr.success).length} files (${preloadedContent.length} chars) in ${scoutResult.toolCallCount} calls`);
+        }
+      }
+    } catch (scoutErr) {
+      log.debug(`[DATAGUARD] Scout pre-read failed (falling back to tool calls): ${(scoutErr as Error).message}`);
+    }
+
+    // If scout pre-loaded files, inject contents and tell model to analyze directly.
+    // Otherwise, tell model to read files itself (fallback).
+    const userContent = preloadedContent
+      ? `${context}\n\n${staticScan}\n\n## Pre-loaded File Contents (already read by scout — DO NOT use ler_arquivo)\n\n${preloadedContent}\n\nANALYZE the file contents above for DATA PROTECTION issues. Do NOT call ler_arquivo. Report your findings now.`
+      : `${context}\n\n${staticScan}\n\nREAD each file listed above using ler_arquivo. Then hunt for DATA PROTECTION issues.`;
+
     const messages: any[] = [
       { role: "system", content: systemPrompt },
-      { role: "user", content: `${context}\n\n${staticScan}\n\nREAD each file listed above using ler_arquivo. Then hunt for DATA PROTECTION issues.` },
+      { role: "user", content: userContent },
     ];
 
     log.info(`[DATAGUARD] Starting data protection review of ${filesModified.length} file(s)`);
@@ -356,7 +391,8 @@ export async function runDataGuard(
 
       for (let apiRetry = 0; apiRetry < MAX_RETRIES; apiRetry++) {
         try {
-          const readOnlyTools = buildReadOnlyTools();
+          // Only provide read tools if scout did NOT pre-load (fallback)
+          const readOnlyTools = preloadedContent ? undefined : buildReadOnlyTools();
           response = await chat(messages, undefined, undefined, undefined, readOnlyTools);
           apiSuccess = true;
           break;

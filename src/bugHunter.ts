@@ -294,9 +294,46 @@ export async function runBugHunter(
   const done = pushActivity("bug_hunter", `reviewing ${filesModified.length} file(s)`);
 
   try {
+    // BUG FIX (scout-acceleration): if scout is enabled, pre-read ALL modified
+    // files using the fast scout model (1-3s per call, 700+ tok/s) instead of
+    // making the Bug Hunter's model (slow, 10-30s per call) do ler_arquivo
+    // one by one. The file contents are injected directly into the context,
+    // so the Bug Hunter model only needs to ANALYZE — not read.
+    let preloadedContent = "";
+    try {
+      const { isScoutEnabled, runScout } = await import("./scoutAgent.js");
+      type ScoutArgs = import("./scoutAgent.js").ScoutArgs;
+      if (isScoutEnabled()) {
+        log.info(`[BUG_HUNTER] Pre-reading ${filesModified.length} files via scout (fast model)...`);
+        const scoutArgs: ScoutArgs = {
+          objective: `Read ALL the following files and return their complete contents. Files: ${filesModified.join(", ")}`,
+          tasks: filesModified.map(f => ({ type: "read_file" as const, description: `read ${f}` })),
+          maxToolCalls: filesModified.length,
+        };
+        const scoutResult = await runScout(scoutArgs);
+        if (scoutResult && scoutResult.completed && scoutResult.toolResults.length > 0) {
+          preloadedContent = scoutResult.toolResults
+            .filter(tr => tr.success)
+            .map(tr => `### File: ${tr.args.caminho ?? tr.args.path ?? "unknown"}\n\`\`\`\n${tr.result}\n\`\`\`\n`)
+            .join("\n");
+          log.info(`[BUG_HUNTER] Scout pre-loaded ${scoutResult.toolResults.filter(tr => tr.success).length} files (${preloadedContent.length} chars) in ${scoutResult.toolCallCount} calls`);
+        }
+      }
+    } catch (scoutErr) {
+      log.debug(`[BUG_HUNTER] Scout pre-read failed (falling back to tool calls): ${(scoutErr as Error).message}`);
+    }
+
     const context = buildBugHunterContext(filesModified, userRequest, agentResponse);
     const systemPrompt = buildBugHunterSystemPrompt();
-    const readOnlyTools = buildReadOnlyTools();
+
+    // If scout pre-loaded the files, inject them into the context and tell
+    // the model it doesn't need to read them — just analyze.
+    const contextWithPreload = preloadedContent
+      ? `${context}\n\n## Pre-loaded File Contents (already read by scout — DO NOT use ler_arquivo)\n\n${preloadedContent}\n\n## Your mission\n\nThe file contents above were read by a fast scout model. ANALYZE them directly — do NOT call ler_arquivo. Report your findings now.`
+      : context;
+
+    // Only provide read tools if scout did NOT pre-load (fallback)
+    const readOnlyTools = preloadedContent ? undefined : buildReadOnlyTools();
 
     // BUG FIX: The Bug Hunter needs a MINI AGENT LOOP, not a single chat() call.
     // When tools are provided, the model responds with tool_calls (not content)
@@ -305,7 +342,7 @@ export async function runBugHunter(
     // execute the tool calls, send results back, until model gives final verdict.
     const messages: any[] = [
       { role: "system", content: systemPrompt },
-      { role: "user", content: context },
+      { role: "user", content: contextWithPreload },
     ];
 
     log.info(`[BUG_HUNTER] Starting critical review of ${filesModified.length} file(s)`);

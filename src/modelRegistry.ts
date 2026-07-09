@@ -131,6 +131,18 @@ export const MODEL_REGISTRY: ModelInfo[] = [
     provider: "nvidia",
   },
   {
+    id: "google/diffusiongemma-26b-a4b-it",
+    name: "DiffusionGemma 26B A4B IT",
+    contextWindow: 128_000,
+    maxOutputTokens: 8_192,
+    costPer1MPrompt: 0,
+    costPer1MCompletion: 0,
+    supportsTools: true,
+    supportsParallelTools: true,
+    hasThinking: false,
+    provider: "nvidia",
+  },
+  {
     id: "meta/llama-3.3-70b-instruct",
     name: "Llama 3.3 70B",
     contextWindow: 128_000,

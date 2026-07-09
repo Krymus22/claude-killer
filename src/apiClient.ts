@@ -1297,24 +1297,58 @@ export async function chat(
     // finally block so it's cancelled as soon as we no longer need it.
     // In test environment, skip the hang timeout wrapper — it interferes with
     // vi.useFakeTimers and the internal retry logic is tested separately.
+
+    // BUG FIX (thinking-hang): GLM 5.2 is a reasoning model that thinks for
+    // several minutes BEFORE producing visible content. The old hang timer
+    // fired after 3 min regardless of whether thinking tokens were flowing,
+    // cutting off the model mid-thought and retrying — creating an infinite
+    // loop of 3-min cut-offs that looked like a 9-min hang.
+    //
+    // Fix: reset the hang timer whenever ANY activity is detected (thinking
+    // tokens, content tokens, or stream start). As long as the model is
+    // producing tokens, the timer won't fire. Only fires if the model is
+    // truly silent for 3 min (real hang).
     let hangTimer: ReturnType<typeof setTimeout> | null = null;
-    const timeoutPromise = new Promise<never>((_, reject) => {
-      if (isTest) return; // No timeout in tests
+
+    function resetHangTimer(): void {
+      if (hangTimer) clearTimeout(hangTimer);
       hangTimer = setTimeout(() => {
-        reject(new Error(`__HANG_TIMEOUT__`));
+        // Use a unique error message so the catch block can identify it
+        const err = new Error(`__HANG_TIMEOUT__`);
+        rejectHang(err);
       }, HANG_TIMEOUT_MS);
+    }
+
+    // Create the timeout promise with a stored reject function so resetHangTimer
+    // can re-arm the timer without creating a new promise.
+    let rejectHang: (err: Error) => void;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      rejectHang = reject;
+      if (isTest) return; // No timeout in tests
+      resetHangTimer();
     });
+
+    // Wrap callbacks to reset the hang timer on activity
+    const wrappedOnStreamStart = onStreamStart
+      ? () => { resetHangTimer(); onStreamStart!(); }
+      : undefined;
+    const wrappedOnToken = onToken
+      ? (token: string) => { resetHangTimer(); onToken!(token); }
+      : undefined;
+    const wrappedOnThinking = onThinking
+      ? () => { resetHangTimer(); onThinking!(); }
+      : undefined;
 
     const chatPromise = (async (): Promise<ChatResponse> => {
       const poolActive = getPoolSize() > 0 || initApiKeyPool();
       if (poolActive) {
         try {
-          return await chatWithPool(messages, tools, onStreamStart, onToken, onThinking);
+          return await chatWithPool(messages, tools, wrappedOnStreamStart, wrappedOnToken, wrappedOnThinking);
         } catch (err) {
           log.warn(`[POOL] Falling back to single-key mode: ${(err as Error).message}`);
         }
       }
-      return chatSingleKey(messages, tools, onStreamStart, onToken, onThinking);
+      return chatSingleKey(messages, tools, wrappedOnStreamStart, wrappedOnToken, wrappedOnThinking);
     })();
 
     try {

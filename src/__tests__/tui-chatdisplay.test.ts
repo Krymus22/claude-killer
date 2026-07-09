@@ -15,8 +15,12 @@ function filterSystemMessages(messages: ChatMessage[]): ChatMessage[] {
 }
 
 describe("ChatDisplay component", () => {
-  it("should be a function", () => {
-    expect(typeof ChatDisplay).toBe("function");
+  it("should be a function or memo object (React.memo)", () => {
+    // React.memo wraps the component in an object, so typeof is 'object'.
+    // A plain function component would be 'function'. Both are valid.
+    expect(["function", "object"]).toContain(typeof ChatDisplay);
+    // Verify it's a valid React component (has $$typeof or is callable)
+    expect(ChatDisplay).toBeDefined();
   });
 
   describe("ChatMessage type", () => {

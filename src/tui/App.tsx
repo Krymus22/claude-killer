@@ -1555,6 +1555,17 @@ export function App() {
   const loadedSessionIdRef = useRef<string | null>(null);
   // Flag to show FolderBrowser on startup if no session was loaded
   const needsFolderBrowserRef = useRef(false);
+  // BUG FIX (FIX-TDZ): usage/tokens/cost captured during the useState
+  // initializer below. The setters (setLastUsage, setSessionPromptTokens,
+  // setSessionCompletionTokens, setSessionCost) and refs
+  // (sessionPromptTokensRef, sessionCompletionTokensRef) are declared LATER
+  // in this component, so calling them from the initializer throws a TDZ
+  // ReferenceError — which the outer try/catch silently swallows, ALSO
+  // skipping `loadedVisualMessagesRef.current = ...` (empty chat) and
+  // `process.chdir(last.projectCwd)` (wrong dir). The values are stashed
+  // here and applied in a useEffect after mount (when the const bindings
+  // are live).
+  const pendingUsageRestoreRef = useRef<SessionUsage | null>(null);
 
   useState(() => {
     try {
@@ -1643,20 +1654,21 @@ export function App() {
           // Now we restore lastUsage + cumulative session totals from the
           // session header so the context bar and cost display are accurate
           // immediately. Old sessions without usage field → null → keep 0.
+          //
+          // BUG FIX (FIX-TDZ): the four setters (setLastUsage,
+          // setSessionPromptTokens, setSessionCompletionTokens, setSessionCost)
+          // and the two refs (sessionPromptTokensRef, sessionCompletionTokensRef)
+          // are all declared LATER in this component (after this useState
+          // initializer). `const` bindings are in the Temporal Dead Zone until
+          // their declaration executes, so calling any of them here throws
+          // `ReferenceError: Cannot access '...' before initialization`. The
+          // outer try/catch silently swallows the error — which ALSO skips
+          // `loadedVisualMessagesRef.current = ...` (chat appears EMPTY) and
+          // `process.chdir(last.projectCwd)` (wrong directory). Fix: stash
+          // the usage here, apply setters + refs in a useEffect after mount.
           if (loaded.usage) {
             const u = loaded.usage;
-            setLastUsage({
-              prompt_tokens: u.lastPromptTokens,
-              completion_tokens: u.lastCompletionTokens,
-              total_tokens: u.lastTotalTokens,
-            });
-            setSessionPromptTokens(u.sessionPromptTokens);
-            setSessionCompletionTokens(u.sessionCompletionTokens);
-            setSessionCost(u.sessionCost);
-            // Sync refs immediately (don't wait for effect) so onUsage can
-            // read accurate values if the user sends a message right away.
-            sessionPromptTokensRef.current = u.sessionPromptTokens;
-            sessionCompletionTokensRef.current = u.sessionCompletionTokens;
+            pendingUsageRestoreRef.current = u;
             console.error(`[SESSION] Restored usage: lastTotal=${u.lastTotalTokens}, sessionPrompt=${u.sessionPromptTokens}, cost=$${u.sessionCost.toFixed(4)}`);
           }
 
@@ -1815,6 +1827,33 @@ export function App() {
   // Keep refs in sync with state via effect
   useEffect(() => { sessionPromptTokensRef.current = sessionPromptTokens; }, [sessionPromptTokens]);
   useEffect(() => { sessionCompletionTokensRef.current = sessionCompletionTokens; }, [sessionCompletionTokens]);
+  // BUG FIX (FIX-TDZ): apply the usage/tokens/cost that were captured during
+  // the useState initializer (pendingUsageRestoreRef). The setters + refs
+  // couldn't be called from the initializer because they're declared later in
+  // the component (Temporal Dead Zone). This effect runs once after mount,
+  // when all const bindings are live. The refs are set directly here (in
+  // addition to the state setters above) so onUsage can read accurate values
+  // if the user sends a message right away — without waiting for the
+  // [sessionPromptTokens] / [sessionCompletionTokens] ref-sync effects to
+  // commit after the state update propagates.
+  useEffect(() => {
+    const u = pendingUsageRestoreRef.current;
+    if (u) {
+      setLastUsage({
+        prompt_tokens: u.lastPromptTokens,
+        completion_tokens: u.lastCompletionTokens,
+        total_tokens: u.lastTotalTokens,
+      });
+      setSessionPromptTokens(u.sessionPromptTokens);
+      setSessionCompletionTokens(u.sessionCompletionTokens);
+      setSessionCost(u.sessionCost);
+      // Sync refs immediately so onUsage reads accurate values before the
+      // next React commit flushes the [session*] ref-sync effects above.
+      sessionPromptTokensRef.current = u.sessionPromptTokens;
+      sessionCompletionTokensRef.current = u.sessionCompletionTokens;
+      pendingUsageRestoreRef.current = null;
+    }
+  }, []);
   const [effortLabel, setEffortLabel] = useState(getEffortLabel());
   const [systemMessages, setSystemMessages] = useState<string[]>([]);
   const [acIndex, setAcIndex] = useState(0);

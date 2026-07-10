@@ -649,12 +649,16 @@ export async function applyMode(name: string): Promise<ModeApplyResult> {
     // Build a set of ids that should be enabled
     // Sprint B bug fix: support both new format ('tools'/'skills'/'enableFeatures')
     // and legacy format ('enableTools'/'enableSkills'/'enableFeatures').
-    const modeTools = (mode as any).tools ?? mode.enableTools;
-    const modeSkills = (mode as any).skills ?? mode.enableSkills;
+    // FIX-MODES Bug 1: default to [] when both legacy and new fields are undefined
+    // (e.g. malformed/legacy JSON modes loaded from disk) to avoid `TypeError: X is
+    // not iterable` when spreading into the Set below.
+    const modeTools = (mode as any).tools ?? mode.enableTools ?? [];
+    const modeSkills = (mode as any).skills ?? mode.enableSkills ?? [];
+    const modeFeatures = (mode as any).features ?? mode.enableFeatures ?? [];
     const shouldEnable = new Set<string>([
       ...modeTools,
       ...modeSkills,
-      ...mode.enableFeatures,
+      ...modeFeatures,
     ]);
 
     for (const ext of all) {
@@ -819,9 +823,15 @@ export function suggestMode(req: ModeSuggestionRequest): ModeSuggestion {
   };
 
   // Heuristic: keyword matching
+  // FIX-MODES Bug 2: previously `/\b(roblox|luau|rojo|wally|rbxl|studio)\b/i`
+  // matched the bare word "studio", which caused false Roblox suggestions for
+  // unrelated prompts like "Visual Studio", "studio apartment", etc. Now we
+  // match "studio" only as part of compound Roblox-specific phrases
+  // ("studio mode", "roblox studio") while keeping whole-word matches for the
+  // unambiguous Roblox/Luau ecosystem terms.
   const keywords: Array<{ pattern: RegExp; tools: string[]; skills: string[]; label: string; name: string; reasoning: string }> = [
     {
-      pattern: /\b(roblox|luau|rojo|wally|rbxl|studio)\b/i,
+      pattern: /\b(roblox|luau|rojo|wally|rbxl)\b|roblox\s+studio|studio\s+mode/i,
       tools: ["tool:rojo_build", "tool:rojo_serve", "tool:rojo_sourcemap",
               "tool:wally_install", "tool:wally_search", "tool:wally_publish",
               "tool:lune_run", "tool:selene_lint", "tool:rokit_install",

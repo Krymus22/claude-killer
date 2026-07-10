@@ -17,7 +17,7 @@
 // Windows terminals with legacy code pages.
 import { forceUtf8Environment } from "./utf8Safety.js";
 import { setTuiMode } from "./logger.js";
-import { initApiKeyPool, prewarmPool } from "./apiKeyPool.js";
+import { initApiKeyPool, prewarmPool, loadApiKeys } from "./apiKeyPool.js";
 import { startHeartbeat, stopHeartbeat } from "./heartbeat.js";
 import { getProviderConfig, providerNeedsHeartbeat, providerUsesMultiKeyPool } from "./apiProvider.js";
 import { autoStartSearx, autoStopSearx } from "./searxManager.js";
@@ -137,7 +137,9 @@ async function main(): Promise<void> {
   //   - Without pool: use the single key (only option).
   //   - Interval: 5 minutes (300000ms)
   if (providerNeedsHeartbeat()) {
-    const allKeys = process.env.NVIDIA_API_KEYS?.split(",").map(k => k.trim()).filter(k => k) ?? [];
+    // FIX-INDEX-SKILLS: use loadApiKeys() so file-based config and
+    // nvapi- prefix validation are respected (manual parse missed both).
+    const allKeys = loadApiKeys();
     const poolSize = allKeys.length;
 
     if (poolSize > 0) {

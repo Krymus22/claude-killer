@@ -489,12 +489,15 @@ export function findMatchingSkills(config: MemoryConfig, context: string): Skill
 
   // Sprint C bug fix: skill.trigger e skill.description podem ser undefined.
   // Usar optional chaining + fallback pra string vazia.
+  // FIX-INDEX-SKILLS: matching direction was inverted — the skill's short
+  // trigger/description/name can never CONTAIN a 500-char context string.
+  // Correct direction: check if the context contains the skill's identifier.
   return allSkills
     .filter(
       (skill) =>
-        ((skill as any).trigger ?? "").toLowerCase().includes(contextLower) ||
-        (skill.description ?? "").toLowerCase().includes(contextLower) ||
-        (skill.name ?? "").toLowerCase().includes(contextLower)
+        contextLower.includes(((skill as any).trigger ?? "").toLowerCase()) ||
+        contextLower.includes((skill.description ?? "").toLowerCase()) ||
+        contextLower.includes((skill.name ?? "").toLowerCase())
     )
     .sort((a, b) => ((b as any).usageCount ?? 0) - ((a as any).usageCount ?? 0));
 }

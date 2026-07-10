@@ -327,7 +327,7 @@ describe("Snapshot: thinkTool output", () => {
 import { getLocalizedSlashCommands, setLanguage } from "../i18n.js";
 
 describe("Snapshot: i18n slash commands list", () => {
-  it("PT-BR tem 26 comandos", () => {
+  it("PT-BR tem 27 comandos", () => {
     setLanguage("pt-BR");
     const cmds = getLocalizedSlashCommands().map(c => c.cmd);
     expect(cmds).toMatchInlineSnapshot(`
@@ -358,11 +358,12 @@ describe("Snapshot: i18n slash commands list", () => {
         "/buscar",
         "/organize",
         "/searx",
+        "/orchestrator",
       ]
     `);
   });
 
-  it("EN tem 26 comandos", () => {
+  it("EN tem 27 comandos", () => {
     setLanguage("en");
     const cmds = getLocalizedSlashCommands().map(c => c.cmd);
     expect(cmds).toMatchInlineSnapshot(`
@@ -393,6 +394,7 @@ describe("Snapshot: i18n slash commands list", () => {
         "/buscar",
         "/organize",
         "/searx",
+        "/orchestrator",
       ]
     `);
   });

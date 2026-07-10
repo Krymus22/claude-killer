@@ -87,9 +87,9 @@ describe("i18n — full coverage", () => {
   });
 
   describe("getLocalizedSlashCommands — completa", () => {
-    it("retorna 26 comandos", () => {
+    it("retorna 27 comandos", () => {
       const cmds = getLocalizedSlashCommands();
-      expect(cmds.length).toBe(26);
+      expect(cmds.length).toBe(27);
     });
     it("inclui /help, /mode, /compact, /searx, /exit", () => {
       const cmds = getLocalizedSlashCommands();

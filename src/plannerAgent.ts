@@ -4,7 +4,7 @@
  * Called by the orchestrator via chamar_planejador. Uses GLM 5.2 with a
  * planning-specific system prompt to produce high-quality structured plans.
  *
- * Tools: pensar, buscar_web, ler_url, usar_scout
+ * Tools: pensar, buscar_web, ler_url, usar_scout, pesquisar_api
  * (NO edit tools — planner only PLANS, doesn't code)
  *
  * The plan is returned to the orchestrator RAW (never compacted).
@@ -57,12 +57,13 @@ const PLANNER_SYSTEM_PROMPT = `Você é um ARQUITETO SÊNIOR especializado em pl
 Sua tarefa é criar um PLANO ESTRUTURADO para a tarefa do usuário.
 
 REGRAS:
-1. Use as tools (pensar, buscar_web, ler_url, usar_scout) para coletar contexto.
+1. Use as tools (pensar, buscar_web, ler_url, usar_scout, pesquisar_api) para coletar contexto.
 2. Crie um plano com passos numbered, claros e específicos.
 3. Considere edge cases, dependências e riscos.
 4. O plano deve ser executável por outro agente — seja específico sobre arquivos, funções, e mudanças.
 5. NÃO escreva código — apenas planeje.
 6. NÃO edite arquivos — apenas leia e analise.
+7. Use pesquisar_api para verificar a assinatura atual de APIs (ex: TweenService:Create, React.useState) antes de planejar usá-las — útil para APIs que mudam frequentemente.
 
 FORMATO DO PLANO:
 [PLAN - N steps]
@@ -154,6 +155,22 @@ const PLANNER_TOOLS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
           },
         },
         required: ["objetivo", "tarefas"],
+      },
+    },
+  },
+  {
+    type: "function" as const,
+    function: {
+      name: "pesquisar_api",
+      description: "Pesquisa a documentação de uma API específica (ex: TweenService:Create, React.useState, DataStoreService). Retorna assinatura, exemplos, e melhores práticas. Útil para planejar como usar uma API que você não conhece bem.",
+      parameters: {
+        type: "object",
+        properties: {
+          apiName: { type: "string", description: "Nome da API (ex: 'TweenService:Create', 'FindFirstChild', 'React.useState')" },
+          language: { type: "string", description: "Linguagem/plataforma (ex: 'roblox', 'typescript', 'python')" },
+          context: { type: "string", description: "Contexto: o que você está tentando fazer (opcional)" },
+        },
+        required: ["apiName", "language"],
       },
     },
   },
@@ -277,6 +294,34 @@ async function executePlannerTool(
             process.env.CLAUDE_KILLER_AGENT_ID = savedAgentId;
           }
         }
+      }
+      case "pesquisar_api": {
+        const apiName = String(args.apiName ?? "");
+        const language = String(args.language ?? "");
+        if (!apiName || !language) {
+          return { result: "[ERROR] apiName and language are required", ok: false };
+        }
+        const { researchApi } = await import("./apiResearcher.js");
+        const result = await researchApi({
+          apiName,
+          language,
+          context: typeof args.context === "string" ? args.context : undefined,
+        });
+        if ("error" in result) {
+          return {
+            result: `[ERROR] API research failed: ${result.error}`,
+            ok: false,
+          };
+        }
+        const examples = result.examples ?? [];
+        return {
+          result:
+            `API: ${result.apiName} (${result.language})\n` +
+            `Signature: ${result.signature}\n` +
+            `Summary: ${result.summary}\n\n` +
+            `Examples:\n${examples.join("\n")}`,
+          ok: true,
+        };
       }
       default:
         return { result: `[ERROR] Tool desconhecida: ${toolName}`, ok: false };

@@ -5,7 +5,7 @@
  * coding-specific system prompt to write/edit code.
  *
  * Tools: editar_arquivo, aplicar_diff, editar_multi_arquivos, desfazer_edicao,
- *        usar_scout, pensar, executar_comando (for testing)
+ *        usar_scout, pensar, executar_comando (for testing), pesquisar_api
  *
  * The coder receives the task + optional plan and executes it.
  * Anti-recursion: CLAUDE_KILLER_AGENT_ID = "coder".
@@ -67,6 +67,7 @@ REGRAS:
 6. Seja PRECISO — faça mudanças mínimas e focadas.
 7. NÃO reescreva arquivos inteiros se um diff resolve.
 8. Após editar, verifique se o código compila/testa.
+9. Use pesquisar_api para verificar a assinatura atual de APIs (ex: TweenService:Create, React.useState) ANTES de escrever código que as usa — APIs como as do Roblox mudam toda semana.
 
 Quando terminar, escreva um RESUMO do que fez (arquivos editados, funções criadas, etc).`;
 
@@ -208,6 +209,22 @@ const CODER_TOOLS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
           max_tool_calls: { type: "number", description: "Max tool calls (default 50, max 100)." },
         },
         required: ["objetivo", "tarefas"],
+      },
+    },
+  },
+  {
+    type: "function" as const,
+    function: {
+      name: "pesquisar_api",
+      description: "Pesquisa a documentação de uma API específica (ex: TweenService:Create, React.useState, DataStoreService). Retorna assinatura, exemplos, e melhores práticas. Útil para planejar como usar uma API que você não conhece bem.",
+      parameters: {
+        type: "object",
+        properties: {
+          apiName: { type: "string", description: "Nome da API (ex: 'TweenService:Create', 'FindFirstChild', 'React.useState')" },
+          language: { type: "string", description: "Linguagem/plataforma (ex: 'roblox', 'typescript', 'python')" },
+          context: { type: "string", description: "Contexto: o que você está tentando fazer (opcional)" },
+        },
+        required: ["apiName", "language"],
       },
     },
   },
@@ -419,6 +436,35 @@ async function executeCoderTool(
         return {
           result: typeof result === "string" ? result : String(result),
           ok: !result.startsWith("[ERROR]"),
+        };
+      }
+
+      case "pesquisar_api": {
+        const apiName = String(args.apiName ?? "");
+        const language = String(args.language ?? "");
+        if (!apiName || !language) {
+          return { result: "[ERROR] apiName and language are required", ok: false };
+        }
+        const { researchApi } = await import("./apiResearcher.js");
+        const result = await researchApi({
+          apiName,
+          language,
+          context: typeof args.context === "string" ? args.context : undefined,
+        });
+        if ("error" in result) {
+          return {
+            result: `[ERROR] API research failed: ${result.error}`,
+            ok: false,
+          };
+        }
+        const examples = result.examples ?? [];
+        return {
+          result:
+            `API: ${result.apiName} (${result.language})\n` +
+            `Signature: ${result.signature}\n` +
+            `Summary: ${result.summary}\n\n` +
+            `Examples:\n${examples.join("\n")}`,
+          ok: true,
         };
       }
 

@@ -154,10 +154,10 @@ describe("i18n", () => {
   });
 
   describe("getLocalizedSlashCommands", () => {
-    it("should return all 26 commands", async () => {
+    it("should return all 27 commands", async () => {
       const { getLocalizedSlashCommands } = await import("./../i18n.js");
       const cmds = getLocalizedSlashCommands();
-      expect(cmds.length).toBe(26);
+      expect(cmds.length).toBe(27);
       expect(cmds.some((c) => c.cmd === "/help")).toBe(true);
       expect(cmds.some((c) => c.cmd === "/effort")).toBe(true);
       expect(cmds.some((c) => c.cmd === "/mode")).toBe(true);

@@ -85,9 +85,9 @@ describe("i18n — coverage", () => {
       expect(cmds.some(c => c.cmd === "/searx")).toBe(true);
     });
 
-    it("retorna 26 comandos", () => {
+    it("retorna 27 comandos", () => {
       const cmds = getLocalizedSlashCommands();
-      expect(cmds.length).toBe(26);
+      expect(cmds.length).toBe(27);
     });
   });
 });

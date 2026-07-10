@@ -60,6 +60,8 @@ export interface ResearchResult {
   fromCache: boolean;
   /** Raw content extracted from sources (truncated) */
   rawContent: string;
+  /** Optional code examples extracted from the docs (best-effort). */
+  examples?: string[];
 }
 
 export interface ResearchError {

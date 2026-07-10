@@ -168,7 +168,14 @@ vi.mock("../effortLevels.js", () => ({
   getEffortLabel: vi.fn(() => "MEDIUM"),
 }));
 
-vi.mock("../apiKeyPool.js", () => ({ getPoolSize: vi.fn(() => 1), formatPoolStats: vi.fn(() => "") }));
+vi.mock("../apiKeyPool.js", () => ({ getPoolSize: vi.fn(() => 1), formatPoolStats: vi.fn(() => ""), setPrewarmListener: vi.fn() }));
+// Mock heartbeat (App.tsx registers a listener for TUI display)
+vi.mock("../heartbeat.js", () => ({
+  setHeartbeatListener: vi.fn(),
+  startHeartbeat: vi.fn(),
+  stopHeartbeat: vi.fn(),
+  getHeartbeatStats: vi.fn(() => ({ modelState: "unknown", running: false })),
+}));
 vi.mock("../i18n.js", () => ({ getLocalizedSlashCommands: vi.fn(() => []), getCommandI18n: vi.fn(() => ({})) }));
 vi.mock("../history.js", () => ({
   isPlanMode: vi.fn(() => false), setPlanMode: vi.fn(), resetHistory: vi.fn(),

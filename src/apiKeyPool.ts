@@ -569,10 +569,13 @@ export async function prewarmPool(): Promise<void> {
 
   if (fail === 0) {
     log.success(`[PREWARM] All ${ok} key(s) warm in ${totalMs}ms`);
+    emitPrewarmEvent({ type: "complete", ok, total: results.length, elapsed: totalMs });
   } else if (ok > 0) {
     log.warn(`[PREWARM] ${ok}/${results.length} key(s) warm in ${totalMs}ms (${fail} failed)`);
+    emitPrewarmEvent({ type: "partial", ok, total: results.length, elapsed: totalMs });
   } else {
     log.error(`[PREWARM] All ${fail} key(s) failed in ${totalMs}ms — first real request will be slow`);
+    emitPrewarmEvent({ type: "all_failed", total: results.length, elapsed: totalMs });
   }
 }
 
@@ -581,4 +584,38 @@ export async function prewarmPool(): Promise<void> {
  */
 export function resetPrewarm(): void {
   prewarmed = false;
+}
+
+// --- Prewarm event system (for TUI display) --------------------------------
+// Since commit 50898c8, log.* calls are suppressed in TUI mode. To surface
+// prewarm results to the user without re-introducing scroll-stealing
+// (console.log between Ink frames), we use a callback that the TUI registers.
+
+export type PrewarmEvent =
+  | { type: "complete"; ok: number; total: number; elapsed: number }
+  | { type: "partial"; ok: number; total: number; elapsed: number }
+  | { type: "all_failed"; total: number; elapsed: number };
+
+type PrewarmListener = (event: PrewarmEvent) => void;
+let prewarmListener: PrewarmListener | null = null;
+
+/**
+ * Register a listener for prewarm completion events. The TUI uses this to
+ * surface prewarm results to the user (as systemMessages) without using
+ * console.log (which would re-introduce scroll-stealing in TUI mode).
+ *
+ * Only one listener at a time (the TUI). Pass null to unregister.
+ */
+export function setPrewarmListener(cb: PrewarmListener | null): void {
+  prewarmListener = cb;
+}
+
+function emitPrewarmEvent(event: PrewarmEvent): void {
+  if (prewarmListener) {
+    try {
+      prewarmListener(event);
+    } catch {
+      // listener errors must never crash prewarm
+    }
+  }
 }

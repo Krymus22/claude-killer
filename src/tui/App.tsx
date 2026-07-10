@@ -35,7 +35,8 @@ import { config } from "../config.js";
 import { shutdownMCPServers, getActiveSkills, getActiveMCPServers } from "../extensions.js";
 import { discoverExtensions, getAllExtensions } from "../extensionCenter.js";
 import { setEffortLevel, getEffortLabel } from "../effortLevels.js";
-import { getPoolSize, formatPoolStats } from "../apiKeyPool.js";
+import { getPoolSize, formatPoolStats, setPrewarmListener, type PrewarmEvent } from "../apiKeyPool.js";
+import { setHeartbeatListener, type HeartbeatEvent } from "../heartbeat.js";
 import { getRegistry as getExternalToolRegistry } from "../externalTools.js";
 import {
   getAllModes,
@@ -1789,6 +1790,79 @@ export function App() {
   const [acIndex, setAcIndex] = useState(0);
   const [showHub, setShowHub] = useState(false);
   const [showFolderBrowser, setShowFolderBrowser] = useState(false);
+
+  // ── Heartbeat + Prewarm event listeners ────────────────────────────────
+  // Since commit 50898c8, log.* calls are suppressed in TUI mode (to prevent
+  // scroll-stealing during streaming). Heartbeat and prewarm used log.info/
+  // log.success/log.debug to show their results, so their messages disappeared.
+  // We now register event listeners that push the results as systemMessages
+  // (same mechanism used by /compact, /cd, etc.). This way the user sees the
+  // messages WITHOUT re-introducing scroll-stealing (systemMessages are part
+  // of the Ink render, not console.log).
+  useEffect(() => {
+    const handleHeartbeat = (event: HeartbeatEvent) => {
+      switch (event.type) {
+        case "first_success":
+          setSystemMessages((prev) => [
+            ...prev,
+            `🔥 Heartbeat ativo — modelo aquecido em ${event.elapsed}ms (${event.modelState === "warm" ? "warm" : "cold"})`,
+          ]);
+          break;
+        case "state_change":
+          setSystemMessages((prev) => [
+            ...prev,
+            `🔥 Heartbeat: modelo ${event.from} → ${event.to} (${event.elapsed}ms)`,
+          ]);
+          break;
+        case "failure":
+          // Only show failures from the 3rd consecutive onward (first 2 are likely transient)
+          if (event.consecutiveFailures >= 3) {
+            setSystemMessages((prev) => [
+              ...prev,
+              `⚠️ Heartbeat falhou (${event.consecutiveFailures}x consecutivas): ${event.error.slice(0, 80)}`,
+            ]);
+          }
+          break;
+        case "auto_stopped":
+          setSystemMessages((prev) => [
+            ...prev,
+            `❌ Heartbeat desativado após ${event.consecutiveFailures} falhas consecutivas`,
+          ]);
+          break;
+      }
+    };
+
+    const handlePrewarm = (event: PrewarmEvent) => {
+      switch (event.type) {
+        case "complete":
+          setSystemMessages((prev) => [
+            ...prev,
+            `🔥 Prewarm completo — ${event.ok} key(s) aquecida(s) em ${event.elapsed}ms`,
+          ]);
+          break;
+        case "partial":
+          setSystemMessages((prev) => [
+            ...prev,
+            `⚠️ Prewarm parcial — ${event.ok}/${event.total} key(s) aquecida(s) em ${event.elapsed}ms`,
+          ]);
+          break;
+        case "all_failed":
+          setSystemMessages((prev) => [
+            ...prev,
+            `❌ Prewarm falhou — ${event.total} key(s) não aqueceram em ${event.elapsed}ms (primeira requisição será lenta)`,
+          ]);
+          break;
+      }
+    };
+
+    setHeartbeatListener(handleHeartbeat);
+    setPrewarmListener(handlePrewarm);
+
+    return () => {
+      setHeartbeatListener(null);
+      setPrewarmListener(null);
+    };
+  }, []);
 
   // Sprint 1: AskUser — estado de pergunta pendente
   // Quando a IA chama perguntar_usuario, essa state é setada e o QuestionPrompt

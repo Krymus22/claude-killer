@@ -106,6 +106,15 @@ vi.mock("../effortLevels.js", () => ({
 vi.mock("../apiKeyPool.js", () => ({
   getPoolSize: vi.fn(() => 1),
   formatPoolStats: vi.fn(() => "1 keys, 40 RPM"),
+  setPrewarmListener: vi.fn(),
+}));
+
+// Mock heartbeat (App.tsx registers a listener for TUI display)
+vi.mock("../heartbeat.js", () => ({
+  setHeartbeatListener: vi.fn(),
+  startHeartbeat: vi.fn(),
+  stopHeartbeat: vi.fn(),
+  getHeartbeatStats: vi.fn(() => ({ modelState: "unknown", running: false })),
 }));
 
 // Mock i18n

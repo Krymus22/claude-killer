@@ -125,6 +125,15 @@ const mockedFormatPoolStats = vi.hoisted(() => vi.fn(() => "1 keys, 40 RPM"));
 vi.mock("../apiKeyPool.js", () => ({
   getPoolSize: mockedGetPoolSize,
   formatPoolStats: mockedFormatPoolStats,
+  setPrewarmListener: vi.fn(),
+}));
+
+// Mock heartbeat (App.tsx registers a listener for TUI display)
+vi.mock("../heartbeat.js", () => ({
+  setHeartbeatListener: vi.fn(),
+  startHeartbeat: vi.fn(),
+  stopHeartbeat: vi.fn(),
+  getHeartbeatStats: vi.fn(() => ({ modelState: "unknown", running: false })),
 }));
 
 // Mock i18n — define os slash commands que aparecem em /help e no autocomplete

@@ -48,6 +48,43 @@ let consecutiveFailures = 0;
 let totalHeartbeats = 0;
 let totalSuccess = 0;
 let totalFailures = 0;
+let lastModelState: "warm" | "cold" | "unknown" = "unknown";
+
+// --- Event system (for TUI display) ----------------------------------------
+// Since commit 50898c8, log.* calls are suppressed in TUI mode. To surface
+// heartbeat results to the user without re-introducing scroll-stealing
+// (console.log between Ink frames), we use a callback that the TUI registers.
+// The TUI can then push the event as a systemMessage.
+
+export type HeartbeatEvent =
+  | { type: "first_success"; elapsed: number; modelState: "warm" | "cold" }
+  | { type: "state_change"; from: "warm" | "cold" | "unknown"; to: "warm" | "cold"; elapsed: number }
+  | { type: "failure"; elapsed: number; error: string; consecutiveFailures: number }
+  | { type: "auto_stopped"; consecutiveFailures: number };
+
+type HeartbeatListener = (event: HeartbeatEvent) => void;
+let heartbeatListener: HeartbeatListener | null = null;
+
+/**
+ * Register a listener for heartbeat events. The TUI uses this to surface
+ * heartbeat results to the user (as systemMessages) without using console.log
+ * (which would re-introduce scroll-stealing in TUI mode).
+ *
+ * Only one listener at a time (the TUI). Pass null to unregister.
+ */
+export function setHeartbeatListener(cb: HeartbeatListener | null): void {
+  heartbeatListener = cb;
+}
+
+function emitHeartbeatEvent(event: HeartbeatEvent): void {
+  if (heartbeatListener) {
+    try {
+      heartbeatListener(event);
+    } catch {
+      // listener errors must never crash the heartbeat
+    }
+  }
+}
 
 // --- Types -----------------------------------------------------------------
 
@@ -159,6 +196,7 @@ export function resetHeartbeat(): void {
   totalHeartbeats = 0;
   totalSuccess = 0;
   totalFailures = 0;
+  lastModelState = "unknown";
 }
 
 // --- Internal --------------------------------------------------------------
@@ -193,7 +231,18 @@ async function sendHeartbeat(client: OpenAI): Promise<void> {
     lastHeartbeatOk = true;
     consecutiveFailures = 0;
     totalSuccess++;
-    log.debug(`[HEARTBEAT] OK in ${elapsed}ms (${elapsed < 5000 ? "warm" : elapsed > 10000 ? "cold" : "borderline"})`);
+    const currentState: "warm" | "cold" = elapsed < 5000 ? "warm" : elapsed > 10000 ? "cold" : "warm";
+    log.debug(`[HEARTBEAT] OK in ${elapsed}ms (${currentState === "warm" ? "warm" : "cold"})`);
+
+    // Emit events for TUI display (replaces log.* which is suppressed in TUI mode)
+    if (lastModelState === "unknown") {
+      // First successful heartbeat
+      emitHeartbeatEvent({ type: "first_success", elapsed, modelState: currentState });
+    } else if (lastModelState !== currentState) {
+      // State change (warm→cold or cold→warm)
+      emitHeartbeatEvent({ type: "state_change", from: lastModelState, to: currentState, elapsed });
+    }
+    lastModelState = currentState;
   } catch (err: unknown) {
     const elapsed = Date.now() - start;
     const msg = err instanceof Error ? err.message : String(err);
@@ -201,8 +250,10 @@ async function sendHeartbeat(client: OpenAI): Promise<void> {
     consecutiveFailures++;
     totalFailures++;
     log.warn(`[HEARTBEAT] Failed in ${elapsed}ms: ${msg}`);
+    emitHeartbeatEvent({ type: "failure", elapsed, error: msg, consecutiveFailures });
     if (consecutiveFailures >= 5) {
       log.error(`[HEARTBEAT] ${consecutiveFailures} consecutive failures — stopping heartbeat to avoid wasting requests`);
+      emitHeartbeatEvent({ type: "auto_stopped", consecutiveFailures });
       stopHeartbeat();
       // BUG FIX: reset consecutiveFailures so the heartbeat can be cleanly
       // restarted by a future startHeartbeat() call. Previously, the counter

@@ -59,8 +59,8 @@ import * as nodeFs from "node:fs";
 /** Whether the /small command is enabled. Default: true. */
 const SMALL_TASK_ENABLED = process.env.SMALL_TASK_ENABLED !== "0";
 
-/** Model to use for small tasks. Default: meta/llama-3.1-8b-instruct (fast, 8B, supports tools). */
-const SMALL_TASK_MODEL = process.env.SMALL_TASK_MODEL ?? "meta/llama-3.1-8b-instruct";
+/** Model to use for small tasks. Default: google/gemma-4-31b-it (256k context, 16k output, supports tools). */
+const SMALL_TASK_MODEL = process.env.SMALL_TASK_MODEL ?? "google/gemma-4-31b-it";
 
 /** Max tool calls per small task. Default: 10. */
 const SMALL_TASK_MAX_TOOL_CALLS = Math.min(parseInt(process.env.SMALL_TASK_MAX_TOOL_CALLS ?? "10", 10), 20);

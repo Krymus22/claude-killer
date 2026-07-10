@@ -51,6 +51,7 @@
 | `deepseek-ai/deepseek-v4-pro` | nvidia | **1M** | **32,768** | ✅ | ✅ |
 | `google/diffusiongemma-26b-a4b-it` | nvidia | 256k | 4,096 | ✅ | ✅ |
 | `meta/llama-3.1-8b-instruct` | nvidia | 128k | 4,096 | ✅ | ❌ |
+| `google/gemma-4-31b-it` | nvidia | 256k | 16,384 | ✅ | ❌ |
 | `mistralai/mistral-medium-3.5-128b` | nvidia | 128k | 8,192 | ✅ | ❌ |
 | `thudm/glm-4.5` | nvidia | 128k | 8,192 | ✅ | ❌ |
 | `z-ai/glm-5.2-free` | zenmux | 1M | 16,384 | ✅ | ✅ |
@@ -676,7 +677,7 @@ think → pensar
 | Parâmetro | Env Var | Default | Regra |
 |-----------|---------|---------|-------|
 | `SMALL_TASK_ENABLED` | `SMALL_TASK_ENABLED` | `1` (on) | `0` para desativar |
-| `SMALL_TASK_MODEL` | `SMALL_TASK_MODEL` | `meta/llama-3.1-8b-instruct` | Modelo menor (deve suportar tools) |
+| `SMALL_TASK_MODEL` | `SMALL_TASK_MODEL` | `google/gemma-4-31b-it` | Modelo menor (256k ctx, 16k output, thinking off) |
 | `SMALL_TASK_MAX_TOOL_CALLS` | `SMALL_TASK_MAX_TOOL_CALLS` | `10` | Max tool calls por task (cap 20) |
 | `SMALL_TASK_TIMEOUT_MS` | `SMALL_TASK_TIMEOUT_MS` | `60000` (60s) | Timeout global |
 

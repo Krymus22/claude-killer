@@ -155,6 +155,18 @@ export const MODEL_REGISTRY: ModelInfo[] = [
     provider: "nvidia",
   },
   {
+    id: "google/gemma-4-31b-it",
+    name: "Gemma 4 31B IT",
+    contextWindow: 256_000,
+    maxOutputTokens: 16_384,
+    costPer1MPrompt: 0,
+    costPer1MCompletion: 0,
+    supportsTools: true,
+    supportsParallelTools: false,
+    hasThinking: false, // thinking OFF per user request
+    provider: "nvidia",
+  },
+  {
     id: "meta/llama-3.3-70b-instruct",
     name: "Llama 3.3 70B",
     contextWindow: 128_000,

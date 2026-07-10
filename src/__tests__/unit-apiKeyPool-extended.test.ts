@@ -156,7 +156,10 @@ describe("apiKeyPool: formatPoolStats", () => {
 
 describe("apiKeyPool: round-robin distribution", () => {
   it("distributes calls across keys in round-robin order", async () => {
-    process.env.NVIDIA_API_KEYS = "nvapi-rr1,nvapi-rr2,nvapi-rr3";
+    // BH2 HIGH 4 / §4 / §5.5: the LAST key is reserve for heartbeat and
+    // excluded from round-robin. Use 4 keys (3 non-reserve + 1 reserve)
+    // so 3 sequential acquires can still hit 3 distinct non-reserve keys.
+    process.env.NVIDIA_API_KEYS = "nvapi-rr1,nvapi-rr2,nvapi-rr3,nvapi-rr4";
     initApiKeyPool();
     const usedIndices: number[] = [];
     for (let i = 0; i < 3; i++) {
@@ -164,12 +167,16 @@ describe("apiKeyPool: round-robin distribution", () => {
       usedIndices.push((h.entry as any).index);
       h.release(true, 200, 10);
     }
-    // All 3 keys should have been used (round-robin)
+    // All 3 non-reserve keys should have been used (round-robin)
     expect(new Set(usedIndices).size).toBe(3);
+    // Reserve key (index 3) must NOT be used
+    expect(usedIndices.includes(3)).toBe(false);
   });
 
   it("wraps around to first key when reaching end of pool", async () => {
-    process.env.NVIDIA_API_KEYS = "nvapi-w1,nvapi-w2";
+    // 3-key pool: indices 0, 1 are non-reserve; index 2 is reserve.
+    // Round-robin over non-reserve keys: 0, 1, 0, 1.
+    process.env.NVIDIA_API_KEYS = "nvapi-w1,nvapi-w2,nvapi-w3";
     initApiKeyPool();
     const indices: number[] = [];
     for (let i = 0; i < 4; i++) {
@@ -177,7 +184,7 @@ describe("apiKeyPool: round-robin distribution", () => {
       indices.push((h.entry as any).index);
       h.release(true, 200, 10);
     }
-    // Should use indices 0,1,0,1 (round-robin wraps)
+    // Should use indices 0,1,0,1 (round-robin wraps, reserve never used)
     expect(indices[0]).toBe(0);
     expect(indices[1]).toBe(1);
     expect(indices[2]).toBe(0);

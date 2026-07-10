@@ -204,17 +204,29 @@ export async function smartCompact(maxTokens: number = 50000): Promise<{ compact
   // Now: smartCompact awaits the compaction, the agent PAUSES until it's done.
   let compacted = false;
   let savedTokens = 0;
+  // Track which compaction method produced the final state, so the snapshot
+  // saved to the session file (§6.6) is tagged correctly ("llm" | "mechanical").
+  let method: "llm" | "mechanical" = "mechanical";
 
   // LLM compaction runs as soon as threshold is hit (no * 1.2 multiplier).
   // Only skipped if effortLevel="low" (shouldUseIntelligentCompaction returns false).
   if (shouldUseIntelligentCompaction()) {
     const modelCompacted = await modelBasedCompactionAsync();
-    if (modelCompacted.compacted) {
+    // HIGH 5 fix (BH7 BUG 7): only treat LLM compaction as successful if it
+    // actually SAVED tokens. If the LLM summary was larger than the dropped
+    // toSummarize slice (e.g., a terse conversation + a verbose 10-section
+    // summary), savedTokens is NEGATIVE — falling through to the heuristic/
+    // mechanical fallback below prevents the auto path from INCREASING the
+    // context (which would defeat the purpose of compaction, risk OOM on the
+    // next chat() call, and still inject 50K of re-hydration on top).
+    if (modelCompacted.compacted && modelCompacted.savedTokens > 0) {
       log.success(`[COMPACTION] Model-based compaction saved ${modelCompacted.savedTokens} tokens`);
       compacted = true;
       savedTokens = modelCompacted.savedTokens;
+      method = "llm";
     }
-    // If model-based failed (network, etc.), fall through to heuristics
+    // If model-based failed (network) or made things worse (savedTokens <= 0),
+    // fall through to heuristics.
   }
 
   if (!compacted) {
@@ -240,6 +252,9 @@ export async function smartCompact(maxTokens: number = 50000): Promise<{ compact
         log.success(`[COMPACTION] Aggressive compaction saved ${aggressiveResult.beforeTokens - aggressiveResult.afterTokens} tokens`);
         compacted = true;
         savedTokens = aggressiveResult.beforeTokens - aggressiveResult.afterTokens;
+        // compactHistory() is the mechanical compaction path (history.ts
+        // returns method: "mechanical"); tag the snapshot accordingly.
+        method = "mechanical";
       }
     }
 
@@ -250,6 +265,9 @@ export async function smartCompact(maxTokens: number = 50000): Promise<{ compact
       if (savedTokens > 0) {
         log.success(`[COMPACTION] Heuristic compaction saved ${savedTokens} tokens`);
       }
+      // Heuristic strategies (compactIntelligently) are a lighter form of
+      // mechanical compaction — same snapshot tag.
+      method = "mechanical";
     }
   }
 
@@ -265,6 +283,34 @@ export async function smartCompact(maxTokens: number = 50000): Promise<{ compact
   // Bug fix (Bug Hunter #2b): now smartCompact injects them too.
   if (compacted) {
     injectPostCompactionMessages();
+
+    // ── §6.6: "Compaction snapshot é salvo no session file após compactar." ──
+    // HIGH 3 + HIGH 4 fix (BH7 BUG 3 + BUG 4): both the LLM path and the
+    // heuristic/mechanical fallback path must save a compaction snapshot so
+    // the IA's compacted state is restored on session reload. Previously
+    // only the manual /compact path (compactHistoryAsync in history.ts)
+    // saved one — the auto path (smartCompact → modelBasedCompactionAsync)
+    // skipped it entirely, so on reload the IA got the full un-compacted
+    // history (which might exceed the context window). The snapshot is saved
+    // AFTER injectPostCompactionMessages so it captures the final compacted
+    // state (mirroring compactHistoryAsync's order: rehydrate → skill
+    // re-inject → dangling cleanup → snapshot).
+    //
+    // FIX-COMPACT-2 BUG 3 retry: modelBasedCompactionAsync now saves its OWN
+    // snapshot right after replaceHistory (mirroring compactHistoryAsync's
+    // pattern exactly). Skip the snapshot here when method === "llm" to
+    // avoid writing a second compaction-snapshot line to the session file
+    // (which would bloat the file and could confuse the session loader).
+    // The heuristic/mechanical fallback paths still save here because they
+    // don't go through modelBasedCompactionAsync.
+    if (method !== "llm") {
+      try {
+        const { appendCompactionSnapshot } = await import("./session.js");
+        appendCompactionSnapshot(history.getHistory(), method);
+      } catch (err) {
+        log.debug(`[COMPACTION] Failed to save compaction snapshot: ${(err as Error).message}`);
+      }
+    }
   }
 
   return { compacted, savedTokens };
@@ -395,15 +441,39 @@ async function modelBasedCompactionAsync(): Promise<{ compacted: boolean; savedT
       // "PRESERVE_PREFIXES — TODOS os prefixes acima devem sobreviver compaction."
       // Now we lift them out of toSummarize and re-insert them between systemMsg
       // and the new compaction-summary message (mirroring compactHistoryAsync).
+      //
+      // HIGH 1 + HIGH 2 fix (BH7 BUG 1 + BUG 2): previously this loop deduped
+      // by EXACT content match (`seenContents: Set<string>`). That correctly
+      // prevented identical messages (e.g. [SESSION CONTINUATION], which is a
+      // static string) from accumulating, but it did NOT prevent regenerated
+      // messages whose content CHANGES every compaction from piling up:
+      //   - [CONVERSATION MEMORY]            → buildCompactionSummary produces a new one
+      //   - ## Recently Modified Files        → re-hydration reads CURRENT file content
+      //   - ## Invoked Skills                 → re-injection reads CURRENT skill content
+      // After N LLM compactions there were N stale snapshots permanently in
+      // context (pure bloat ~10-30KB each pass), and the IA also saw multiple
+      // conflicting versions of "what happened" / "what files look like".
+      //
+      // Fix: mirror the compactHistoryAsync fix exactly (history.ts:1014-1025).
+      // Iterate END→START over toSummarize so the LATEST instance per prefix
+      // is encountered first and kept; use `unshift` to preserve chronological
+      // order in the output. §6.4/§6.6 require the PREFIX to survive
+      // compaction — keeping the most recent instance satisfies that without
+      // unbounded growth. For prefixes that are never regenerated (## TASK_STATE,
+      // ## Persistent Memory, [PLAN, [SESSION CONTINUATION) there is only one
+      // instance anyway (addSystemMessage already dedupes them via
+      // REPLACABLE_PREFIXES), so this is a no-op for those.
       const preservedSystem: any[] = [];
-      const seenContents = new Set<string>();
-      for (const m of toSummarize) {
+      const seenPrefixes = new Set<string>();
+      for (let i = toSummarize.length - 1; i >= 0; i--) {
+        const m = toSummarize[i];
         if (m.role !== "system") continue;
         const content = typeof m.content === "string" ? m.content : "";
-        if (!PRESERVE_PREFIXES.some((p) => content.startsWith(p))) continue;
-        if (seenContents.has(content)) continue; // dedupe
-        seenContents.add(content);
-        preservedSystem.push(m);
+        const matchedPrefix = PRESERVE_PREFIXES.find((p) => content.startsWith(p));
+        if (matchedPrefix && !seenPrefixes.has(matchedPrefix)) {
+          seenPrefixes.add(matchedPrefix);
+          preservedSystem.unshift(m); // prepend → chronological order
+        }
       }
 
       // Replace the summarized portion with a single system message containing the summary
@@ -416,9 +486,43 @@ async function modelBasedCompactionAsync(): Promise<{ compacted: boolean; savedT
 
       // Replace history in-place
       history.replaceHistory(compactedHistory as any);
+
+      // ── §6.6: "Compaction snapshot é salvo no session file após compactar." ──
+      // FIX-COMPACT-2 BUG 3 (BH7 BUG 3 retry): previously this function did NOT
+      // call appendCompactionSnapshot — only the manual /compact path
+      // (compactHistoryAsync in history.ts:1159-1164) saved one. The auto path
+      // (smartCompact → modelBasedCompactionAsync) had a snapshot call added in
+      // a prior attempt, but it was in smartCompact's wrapper (POST
+      // injectPostCompactionMessages), which (a) captured a different state
+      // than the LLM-produced compactedHistory and (b) was structurally
+      // inconsistent with compactHistoryAsync, which saves its snapshot INSIDE
+      // the compaction function right after replaceHistory. Now we mirror
+      // compactHistoryAsync exactly: save the snapshot right here, tagged
+      // method="llm". smartCompact skips its own snapshot call when
+      // method === "llm" to avoid double-writing.
+      try {
+        const { appendCompactionSnapshot } = await import("./session.js");
+        appendCompactionSnapshot(history.getHistory(), "llm");
+      } catch (err) {
+        log.debug(`[COMPACTION] Failed to save compaction snapshot: ${(err as Error).message}`);
+      }
+
       const afterTokens = history.estimateTokens();
-      log.debug(`[COMPACTION] Model-based: ${toSummarize.length} msgs -> 1 summary (${beforeTokens - afterTokens} tokens saved)`);
-      return { compacted: true, savedTokens: beforeTokens - afterTokens };
+      const savedTokens = beforeTokens - afterTokens;
+      log.debug(`[COMPACTION] Model-based: ${toSummarize.length} msgs -> 1 summary (${savedTokens} tokens saved)`);
+      // HIGH 5 fix (BH7 BUG 7): only return compacted:true if the LLM summary
+      // actually SAVED tokens. If the summary is LARGER than the dropped
+      // toSummarize slice (savedTokens <= 0), returning compacted:true would
+      // cause smartCompact to (a) skip the heuristic/mechanical fallback and
+      // (b) inject 50K of re-hydration ON TOP of the already-larger context,
+      // INCREASING the token count and risking OOM on the next chat() call.
+      // Returning compacted:false lets smartCompact fall through to the
+      // heuristic/mechanical paths so the context actually shrinks.
+      // NOTE: history.replaceHistory() has already been called with the
+      // larger compacted history — the fallback below will further compact it
+      // (compress tool results, merge tool messages, drop the middle via
+      // compactHistory if needed) to recover the lost space.
+      return { compacted: savedTokens > 0, savedTokens: Math.max(0, savedTokens) };
     } catch (err) {
       log.warn(`[COMPACTION] Model-based call failed: ${(err as Error).message}`);
       return { compacted: false, savedTokens: 0 };

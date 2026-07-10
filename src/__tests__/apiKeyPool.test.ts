@@ -122,7 +122,14 @@ describe("apiKeyPool — key acquisition", () => {
     handle.release(true, 200, 100);
   });
 
-  it("round-robin: 3 sequential acquisitions use 3 different keys", async () => {
+  it("round-robin: 3 sequential acquisitions use 3 different keys (4-key pool, last is reserve)", async () => {
+    // BH2 HIGH 4 / §4 / §5.5: the LAST key in the pool is "reserva" for
+    // heartbeat and is excluded from round-robin unless all non-reserve
+    // keys are busy. Use 4 keys (3 non-reserve + 1 reserve) so 3 sequential
+    // acquires can still hit 3 distinct non-reserve keys.
+    process.env.NVIDIA_API_KEYS = "nvapi-k1,nvapi-k2,nvapi-k3,nvapi-k4";
+    resetPool();
+    initApiKeyPool();
     const handles: any[] = [];
     // Acquire and release sequentially
     const h1 = await acquireKeyForStreaming();
@@ -134,9 +141,37 @@ describe("apiKeyPool — key acquisition", () => {
     const h3 = await acquireKeyForStreaming();
     const idx3 = (h3 as any).entry.index;
     h3.release(true, 200, 50);
-    // Should have used 3 different indices
+    // Should have used 3 different non-reserve indices (0, 1, 2)
     const indices = new Set([idx1, idx2, idx3]);
     expect(indices.size).toBe(3);
+    // Reserve key (last index = 3) must NOT be used in normal round-robin.
+    expect(indices.has(3)).toBe(false);
+  });
+
+  it("reserves the LAST key for heartbeat — pool skips it in round-robin (§4, §5.5)", async () => {
+    // 3-key pool: indices 0, 1 are non-reserve; index 2 is reserve.
+    // 6 sequential acquires should only touch indices 0 and 1.
+    const usedIndices = new Set<number>();
+    for (let n = 0; n < 6; n++) {
+      const h = await acquireKeyForStreaming();
+      usedIndices.add((h as any).entry.index);
+      h.release(true, 200, 5);
+    }
+    expect(usedIndices.has(2)).toBe(false);  // reserve never used in round-robin
+    expect(usedIndices.size).toBe(2);        // only the 2 non-reserve keys
+  });
+
+  it("falls back to reserve key when all non-reserve keys are busy (§4)", async () => {
+    // Lock both non-reserve keys; the 3rd acquire must use the reserve.
+    const h1 = await acquireKeyForStreaming();  // idx 0
+    const h2 = await acquireKeyForStreaming();  // idx 1
+    const h3 = await acquireKeyForStreaming();  // idx 2 (reserve fallback)
+    expect((h1 as any).entry.index).toBe(0);
+    expect((h2 as any).entry.index).toBe(1);
+    expect((h3 as any).entry.index).toBe(2);
+    h1.release(true, 200, 5);
+    h2.release(true, 200, 5);
+    h3.release(true, 200, 5);
   });
 
   it("waits when all keys are busy (mutex enforcement)", async () => {

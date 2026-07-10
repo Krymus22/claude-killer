@@ -36,6 +36,7 @@
  *   - POWERFUL: effort max only (shouldUsePowerfulSubAgents) - costs more
  */
 
+import { AsyncLocalStorage } from "node:async_hooks";
 import { chat, isTransientNetworkErrorPublic, is429ErrorPublic, SUB_AGENT_MAX_CHAT_RETRIES } from "./apiClient.js";
 import { getPoolSize } from "./apiKeyPool.js";
 import { lerArquivo } from "./tools.js";
@@ -46,6 +47,28 @@ import { shouldUseSubAgents, getEffortLevel } from "./effortLevels.js";
 import { getSystemPrompt } from "./history.js";
 import * as log from "./logger.js";
 import { pushActivity } from "./activityTracker.js";
+// FIX-SCOUT (BH9 HIGH 2): share resolveAndCheckPath/validateCwd with the
+// scout agent so sub-agents have the same hard path-traversal boundary.
+import { resolveAndCheckPath, validateCwd } from "./pathSecurity.js";
+
+// FIX-SCOUT (BH9 HIGH 3): anti-recursion tracking via AsyncLocalStorage.
+//
+// Why ALS instead of process.env.CLAUDE_KILLER_AGENT_ID?
+// process.env is process-global. If two sub-agents run in parallel (Promise.all
+// of explorar_subagente calls), they share process.env. A naive guard at the
+// top of runSubAgent that checks `if (process.env.CLAUDE_KILLER_AGENT_ID)`
+// would BLOCK the second sibling (incorrectly), because the first sibling's
+// runSubAgentInner has already set the env var to "sub-1". Parallel execution
+// is a supported feature (§10.1 MAX_CONCURRENT_SUB_AGENTS).
+//
+// ALS gives each async execution chain its own store. Siblings don't share
+// ALS contexts, so they're not blocked. A nested call (sub-agent calls
+// runSubAgent directly) would inherit the parent's ALS context, so the guard
+// correctly blocks it. The dispatcher-level guard in agent.ts
+// (explorar_subagente handler) still uses process.env because it's checked
+// synchronously at the top of the handler — before any runSubAgentInner has
+// set the env var — so it doesn't have the parallel issue.
+const subAgentAls = new AsyncLocalStorage<string | undefined>();
 
 // --- Sub-agent ID counter (for tracking in rollback) ----------------------
 
@@ -242,6 +265,30 @@ interface SubAgentArgs {
  *   - powerful=true: inherits main agent's tools + system prompt, 15 max calls
  */
 export async function runSubAgent(args: SubAgentArgs): Promise<string | null> {
+  // FIX-SCOUT (BH9 HIGH 3): anti-recursion guard (defense-in-depth).
+  //
+  // §10.7 mandates "scout não pode ser chamado de dentro de sub-agentes
+  // (guard via CLAUDE_KILLER_AGENT_ID)." The same principle applies to
+  // explorar_subagente — a powerful sub-agent that calls explorar_subagente
+  // would acquire another sub-agent slot, overwrite CLAUDE_KILLER_AGENT_ID,
+  // and spawn a child sub-agent. With MAX_CONCURRENT_SUB_AGENTS=2, just 2
+  // levels of recursion exhaust the pool — the 3rd level waits forever for
+  // a slot the parent will never release. DEADLOCK.
+  //
+  // The dispatcher-level guard in agent.ts (explorar_subagente handler)
+  // catches the common case (sub-agent calls explorar_subagente via merged
+  // tools). This function-level guard catches DIRECT calls to runSubAgent
+  // from inside a sub-agent context (e.g., dynamicWorkflow, future callers).
+  //
+  // We use AsyncLocalStorage (not process.env) so parallel siblings aren't
+  // blocked — see the subAgentAls comment above for the race-condition
+  // rationale.
+  const parentSubAgentId = subAgentAls.getStore();
+  if (parentSubAgentId !== undefined) {
+    log.warn(`[SUB_AGENT] Anti-recursion: blocked direct runSubAgent call from inside sub-agent ${parentSubAgentId}`);
+    return null;
+  }
+
   const powerful = args.powerful === true;
 
   // Check effort level requirements
@@ -255,7 +302,17 @@ export async function runSubAgent(args: SubAgentArgs): Promise<string | null> {
     return null;
   }
 
-  const cwd = args.cwd ?? process.cwd();
+  // FIX-SCOUT (BH9 HIGH 2): validate args.cwd against process.cwd() to
+  // prevent a prompt-injected model from passing `cwd: "/etc"` and then
+  // reading any file under /etc via relative paths. Same logic as the
+  // scout's cwd validation (scoutAgent.ts:424-440).
+  const cwdValidation = validateCwd(args.cwd, process.cwd());
+  if (!cwdValidation.ok) {
+    log.warn(`[SUB_AGENT] ${cwdValidation.error} — blocking`);
+    return null;
+  }
+  const cwd = cwdValidation.cwd;
+
   const maxCalls = args.maxToolCalls ?? (powerful ? 15 : 8);
   const subAgentId = nextSubAgentId();
   const poolInfo = getPoolSize() > 0 ? ` (pool: ${getPoolSize()} keys)` : " (single key)";
@@ -267,7 +324,10 @@ export async function runSubAgent(args: SubAgentArgs): Promise<string | null> {
   const subActivityDone = pushActivity("subagent", `#${subAgentId}: ${shortQ}`);
 
   try {
-    return await runSubAgentInner(args, powerful, cwd, maxCalls, subAgentId);
+    // Wrap the inner call in subAgentAls.run(...) so any direct nested
+    // call to runSubAgent (from inside the sub-agent context) is detected
+    // by the anti-recursion guard at the top of this function.
+    return await subAgentAls.run(subAgentId, () => runSubAgentInner(args, powerful, cwd, maxCalls, subAgentId));
   } finally {
     subActivityDone();
   }
@@ -413,7 +473,17 @@ async function executeSubAgentTool(name: string, args: any, cwd: string): Promis
   try {
     switch (name) {
       case "ler_arquivo": {
-        const resolved = args.caminho?.startsWith("/") ? args.caminho : `${cwd}/${args.caminho}`;
+        // FIX-SCOUT (BH9 HIGH 2): use resolveAndCheckPath to block path
+        // traversal (../../../etc/passwd, absolute paths outside cwd,
+        // symlinks escaping cwd). Previously the sub-agent used
+        // `args.caminho?.startsWith("/") ? args.caminho : \`${cwd}/${args.caminho}\``
+        // which allowed BOTH absolute paths anywhere on the filesystem
+        // AND `../` escape. A prompt-injected sub-agent could read
+        // /etc/passwd or ~/.ssh/id_rsa. Now it shares the same hard
+        // boundary as the scout (§10.7).
+        const rawPath = String(args.caminho ?? args.path ?? "");
+        if (!rawPath) return "[ERROR] No path provided";
+        const resolved = resolveAndCheckPath(rawPath, cwd);
         return await lerArquivo({ caminho: resolved });
       }
       case "buscar_arquivos": {
@@ -421,7 +491,11 @@ async function executeSubAgentTool(name: string, args: any, cwd: string): Promis
         return results.length > 0 ? results.join("\n") : "No files found.";
       }
       case "buscar_texto": {
-        const searchPath = resolveSearchPath(args.path, cwd);
+        // FIX-SCOUT (BH9 HIGH 2): same resolveAndCheckPath boundary as
+        // ler_arquivo. buscar_texto's `path` arg (formerly resolved via
+        // resolveSearchPath) could previously be any absolute path.
+        const rawPath = String(args.path ?? args.caminho ?? cwd);
+        const searchPath = resolveAndCheckPath(rawPath, cwd);
         const matches = grepSearch({
           pattern: args.pattern,
           path: searchPath,
@@ -430,7 +504,10 @@ async function executeSubAgentTool(name: string, args: any, cwd: string): Promis
         return formatGrepResults(matches);
       }
       case "parse_ast": {
-        const resolved = args.path?.startsWith("/") ? args.path : `${cwd}/${args.path}`;
+        // FIX-SCOUT (BH9 HIGH 2): same resolveAndCheckPath boundary.
+        const rawPath = String(args.path ?? args.caminho ?? "");
+        if (!rawPath) return "[ERROR] No path provided";
+        const resolved = resolveAndCheckPath(rawPath, cwd);
         const result = await parseFile(resolved);
         return [
           `Language: ${result.language}`,
@@ -515,13 +592,10 @@ export function shouldDelegateToSubAgent(userMessage: string): boolean {
   return triggers.some((t) => lower.includes(t));
 }
 
-/** Resolve a possibly-relative path against the sub-agent's cwd. */
-function resolveSearchPath(rawPath: any, cwd: string): string {
-  if (!rawPath) return cwd;
-  if (typeof rawPath !== "string") return cwd;
-  if (rawPath.startsWith("/")) return rawPath;
-  return `${cwd}/${rawPath}`;
-}
+// FIX-SCOUT (BH9 HIGH 2): resolveSearchPath was removed — it allowed absolute
+// paths anywhere on the filesystem AND `../` escape. buscar_texto now uses
+// resolveAndCheckPath from pathSecurity.ts (same boundary as ler_arquivo and
+// parse_ast). See executeSubAgentTool's buscar_texto case.
 
 /**
  * Whether powerful sub-agents should be used.

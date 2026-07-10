@@ -5,6 +5,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { applyEdits, type EditOperation } from "./fileEdit.js";
+import { saveBackup } from "./rollbackStore.js";
 import * as log from "./logger.js";
 
 export interface FileEditRequest {
@@ -24,6 +25,19 @@ interface PreparedEdit {
   resolved: string;
   original: string;
   result: ReturnType<typeof applyEdits>;
+  /** True iff the file existed on disk BEFORE this multi-edit (false for createIfMissing creates). */
+  existedBefore: boolean;
+}
+
+/**
+ * In-memory record used by the failure-rollback path (`rollbackEdits`).
+ * `existedBefore` distinguishes "restore original content" from "delete the
+ * newly-created file" — both are required to preserve atomicity.
+ */
+interface BackupEntry {
+  path: string;
+  original: string;
+  existedBefore: boolean;
 }
 
 function resolveFilePath(filePath: string, createIfMissing: boolean): string | null {
@@ -46,9 +60,13 @@ function prepareEdits(
       continue;
     }
 
-    const content = fs.existsSync(resolved) ? fs.readFileSync(resolved, "utf8") : "";
+    // Capture existence BEFORE reading so we can later distinguish
+    // "restore original" from "delete newly-created file" during rollback.
+    // (BUG FIX HIGH 2.)
+    const existedBefore = fs.existsSync(resolved);
+    const content = existedBefore ? fs.readFileSync(resolved, "utf8") : "";
     const result = applyEdits(content, req.edits);
-    preparedEdits.push({ resolved, original: content, result });
+    preparedEdits.push({ resolved, original: content, result, existedBefore });
 
     if (!result.success) {
       errors.push({ file: req.filePath, error: result.error ?? "Edit failed" });
@@ -72,13 +90,23 @@ function applyAllEdits(preparedEdits: PreparedEdit[]): string[] {
   return edited;
 }
 
-function rollbackEdits(backups: Array<{ path: string; original: string }>): void {
+function rollbackEdits(backups: BackupEntry[]): void {
   for (const backup of backups) {
     try {
-      // SECURITY: mode 0o600 — restrictive perms on restored file (CWE-377).
-      fs.writeFileSync(backup.path, backup.original, { encoding: "utf8", mode: 0o600 });
-    } catch {
-      log.error(`Rollback failed for ${backup.path}`);
+      if (backup.existedBefore) {
+        // File existed before the multi-edit: restore its original content.
+        // SECURITY: mode 0o600 — restrictive perms on restored file (CWE-377).
+        fs.writeFileSync(backup.path, backup.original, { encoding: "utf8", mode: 0o600 });
+      } else {
+        // File was newly created by this multi-edit (createIfMissing:true).
+        // To preserve the atomicity promise ("all changes are rolled back"),
+        // DELETE the file — leaving an empty file behind would still be a
+        // partial write, not a true rollback to the pre-edit state.
+        // (BUG FIX HIGH 2: previously newly-created files were left on disk.)
+        fs.unlinkSync(backup.path);
+      }
+    } catch (err) {
+      log.error(`Rollback failed for ${backup.path}: ${(err as Error).message}`);
     }
   }
 }
@@ -98,7 +126,7 @@ export function multiFileEdit(requests: FileEditRequest[]): MultiEditResult {
     return { success: false, filesEdited: [], errors, rolledBack: false };
   }
 
-  const backups: Array<{ path: string; original: string }> = [];
+  const backups: BackupEntry[] = [];
   try {
     const edited = applyAllEditsWithBackup(preparedEdits, backups);
     log.toolResult("editar_multi_arquivos", true, `${edited.length} files`);
@@ -117,13 +145,38 @@ export function multiFileEdit(requests: FileEditRequest[]): MultiEditResult {
 
 function applyAllEditsWithBackup(
   preparedEdits: PreparedEdit[],
-  backups: Array<{ path: string; original: string }>
+  backups: BackupEntry[]
 ): string[] {
   const edited: string[] = [];
   for (const prepared of preparedEdits) {
-    if (fs.existsSync(prepared.resolved)) {
-      backups.push({ path: prepared.resolved, original: prepared.original });
+    // Track EVERY file we touch (existing OR newly-created) so the
+    // failure-rollback path can either restore the original content OR
+    // delete a new file to preserve the atomicity promise.
+    // (BUG FIX HIGH 2: previously only existing files were tracked, so
+    // newly-created files were left on disk after a rolled-back edit.)
+    backups.push({
+      path: prepared.resolved,
+      original: prepared.original,
+      existedBefore: prepared.existedBefore,
+    });
+
+    // --- Rollback store backup (ALWAYS saved when the file existed) --------
+    // Mirrors the pattern in fileEdit.ts (lines 314-331) and tools.ts
+    // aplicarDiff: snapshot the original content into .rollback/ BEFORE the
+    // write so `desfazer_edicao` can later undo this edit. Newly-created
+    // files have nothing to snapshot (saveBackup also guards internally).
+    // (BUG FIX HIGH 1: previously `editar_multi_arquivos` never saved a
+    // rollback-store backup, so desfazer_edicao couldn't undo multi-edits.)
+    if (prepared.existedBefore) {
+      try {
+        saveBackup(prepared.resolved, prepared.original, "editar_multi_arquivos");
+      } catch (err) {
+        // Don't block the write — but log so the user knows desfazer_edicao
+        // won't be available for this particular file.
+        log.warn(`multiFileEdit: rollback backup failed for ${prepared.resolved}: ${(err as Error).message}`);
+      }
     }
+
     const dir = path.dirname(prepared.resolved);
     // SECURITY: mode 0o700 on parent dir + 0o600 on file (CWE-377).
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 });

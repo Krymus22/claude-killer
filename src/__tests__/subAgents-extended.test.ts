@@ -93,12 +93,17 @@ describe("subAgents — extended", () => {
       mockedChat.mockResolvedValueOnce({
         choices: [{ message: { content: "## Summary\nok" }, finish_reason: "stop" }],
       });
-      await runSubAgent({ question: "explore foo", cwd: "/tmp/project" });
+      // FIX-SCOUT (BH9 HIGH 2): cwd must be within process.cwd() — the
+      // sub-agent now validates args.cwd against the project root (same
+      // boundary as the scout). Use a subdirectory of process.cwd() so
+      // the test still verifies the cwd appears in the user message.
+      const validCwd = process.cwd() + "/src";
+      await runSubAgent({ question: "explore foo", cwd: validCwd });
       const args = mockedChat.mock.calls[0];
       const messages = args[0];
       expect(messages[0].role).toBe("system");
       expect(messages[1].role).toBe("user");
-      expect(messages[1].content).toContain("/tmp/project");
+      expect(messages[1].content).toContain(validCwd);
       expect(messages[1].content).toContain("explore foo");
     });
 

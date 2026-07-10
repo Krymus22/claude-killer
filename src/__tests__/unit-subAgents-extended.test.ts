@@ -326,7 +326,10 @@ describe("subAgents: checkpoint preservation on retry", () => {
   it("history grows when tool calls succeed (no checkpoint restore)", async () => {
     mockedChat
       .mockResolvedValueOnce(mockToolCalls([{
-        id: "tc1", function: { name: "ler_arquivo", arguments: '{"caminho":"/x"}' },
+        // FIX-SCOUT (BH9 HIGH 2): use a relative path within cwd so
+        // resolveAndCheckPath passes — absolute paths like "/x" are now
+        // blocked by the shared path-traversal boundary.
+        id: "tc1", function: { name: "ler_arquivo", arguments: '{"caminho":"x"}' },
       }]))
       .mockResolvedValueOnce(mockFinalSummary("## Summary\ndone"));
     const r = await runSubAgent({ question: "q", maxToolCalls: 3 });
@@ -342,11 +345,14 @@ describe("subAgents: checkpoint preservation on retry", () => {
 
   it("initial history contains system + user with cwd and question", async () => {
     mockedChat.mockResolvedValueOnce(mockFinalSummary("## Summary\nok"));
-    await runSubAgent({ question: "what is here?", cwd: "/tmp/project" });
+    // FIX-SCOUT (BH9 HIGH 2): cwd must be within process.cwd() — the
+    // sub-agent now validates args.cwd against the project root.
+    const validCwd = process.cwd() + "/src";
+    await runSubAgent({ question: "what is here?", cwd: validCwd });
     const initialHistory = mockedChat.mock.calls[0][0];
     expect(initialHistory[0].role).toBe("system");
     expect(initialHistory[1].role).toBe("user");
-    expect(initialHistory[1].content).toContain("/tmp/project");
+    expect(initialHistory[1].content).toContain(validCwd);
     expect(initialHistory[1].content).toContain("what is here?");
   });
 });
@@ -485,11 +491,13 @@ describe("subAgents: read-only tool dispatcher", () => {
   it("executes ler_arquivo tool call and returns file content to model", async () => {
     mockedChat
       .mockResolvedValueOnce(mockToolCalls([{
+        // FIX-SCOUT (BH9 HIGH 2): use a relative path within cwd — absolute
+        // paths like "/tmp/test.txt" are now blocked by resolveAndCheckPath.
         id: "tc1",
-        function: { name: "ler_arquivo", arguments: '{"caminho":"/tmp/test.txt"}' },
+        function: { name: "ler_arquivo", arguments: '{"caminho":"test.txt"}' },
       }]))
       .mockResolvedValueOnce(mockFinalSummary("## Summary\nread the file"));
-    const r = await runSubAgent({ question: "read /tmp/test.txt", maxToolCalls: 2 });
+    const r = await runSubAgent({ question: "read test.txt", maxToolCalls: 2 });
     expect(r).toBe("## Summary\nread the file");
     // After 1st call, the tool result should be in the history of the 2nd call
     const secondCallHistory = mockedChat.mock.calls[1][0];

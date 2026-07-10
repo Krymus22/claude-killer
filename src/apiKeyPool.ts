@@ -238,14 +238,29 @@ function checkRateLimit(entry: PoolEntry): { allowed: boolean; waitMs: number } 
 /**
  * Pick the next available key (round-robin, skipping cooled-down or rate-limited).
  * Returns null if ALL keys are unavailable.
+ *
+ * HIGH FIX (BH2 HIGH 4 / §4 / §5.5): the LAST key in the pool is reserved
+ * for heartbeat ("reserva") so it doesn't compete with user requests for
+ * the 40 RPM per-key budget. The first pass iterates only NON-RESERVE
+ * keys. The reserve is used ONLY as a fallback when no non-reserve key is
+ * available (and it's not in cooldown / mutex-locked / rate-limited).
+ *
+ * For single-key pools (pool.length === 1), the only key is also the
+ * reserve — there's no other option, so it's used directly.
  */
 function pickNextKey(): PoolEntry | null {
   if (pool.length === 0) return null;
   const now = Date.now();
 
-  // Try up to pool.length entries starting from nextIndex
+  // Index of the reserve key (last in the pool). -1 means no reserve
+  // (only relevant for single-key pools where the only key is also the
+  // reserve and there's no other option).
+  const reserveIdx = pool.length > 1 ? pool.length - 1 : -1;
+
+  // First pass: try all NON-RESERVE keys (round-robin from nextIndex).
   for (let i = 0; i < pool.length; i++) {
     const idx = (nextIndex + i) % pool.length;
+    if (idx === reserveIdx) continue;  // skip reserve in first pass
     const entry = pool[idx];
     // Skip if cooling down after 429
     if (entry.stats.cooldownUntil > now) continue;
@@ -258,6 +273,23 @@ function pickNextKey(): PoolEntry | null {
     nextIndex = (idx + 1) % pool.length;
     return entry;
   }
+
+  // Second pass (fallback): if no non-reserve key was available, use the
+  // reserve key — but only if it's free, not in cooldown, and not
+  // rate-limited. This prevents the pool from blocking user requests when
+  // only the reserve is idle, while still preferring non-reserve keys for
+  // normal operation so heartbeat has its own budget.
+  if (reserveIdx >= 0) {
+    const reserve = pool[reserveIdx];
+    if (reserve.stats.cooldownUntil <= now && !reserve.mutex.locked) {
+      const rl = checkRateLimit(reserve);
+      if (rl.allowed) {
+        nextIndex = (reserveIdx + 1) % pool.length;
+        return reserve;
+      }
+    }
+  }
+
   return null;
 }
 
@@ -541,9 +573,37 @@ export async function prewarmPool(): Promise<void> {
   // Prewarm ALL keys in parallel so they're all ready for the first request.
   // max_tokens=1 keeps it cheap (1 token generated, ~10ms on warm model).
   // stream=false so we don't trigger the streaming parser.
+  //
+  // CRITICAL FIX (BH2 CRITICAL 1): each prewarm request must respect the
+  // per-key mutex + rate-limit + stats + 429-cooldown invariants — same as
+  // a real user request. Without this, a user request arriving during the
+  // 5-30s prewarm window could pickNextKey() the SAME entry (mutex still
+  // unlocked) and fire a 2nd in-flight request on that key → 429 (violates
+  // §5.1/§5.5: "1 in-flight por key — NVIDIA free tier não permite mais").
+  // Prewarm 429s also need to set cooldownUntil (§5.3) so the next user
+  // request doesn't immediately re-hit a rate-limited key.
+  //
+  // Prewarm is fire-and-forget and parallel; if a user request is already
+  // in flight on a given key, skip prewarm for that key (don't wait —
+  // prewarm is best-effort, user requests take priority).
   const results = await Promise.allSettled(
     pool.map(async (entry, i) => {
       const t0 = Date.now();
+      // Non-blocking: if a user request holds the mutex, skip this key's
+      // prewarm. The next idle moment will let the real first request
+      // warm the model naturally.
+      if (entry.mutex.locked) {
+        log.debug(`[PREWARM] Key #${i} (${entry.stats.keyPrefix}) busy (mutex locked) — skipping`);
+        return { ok: false, elapsed: 0, index: i, error: "skipped: mutex locked" };
+      }
+      // Synchronous lock — we just verified mutex.locked is false, and JS
+      // is single-threaded so no other coroutine can grab it between the
+      // check and the set. Same pattern as tryAcquireKeyImmediate().
+      entry.mutex.locked = true;
+      entry.callCount++;
+      entry.stats.inFlight++;
+      let httpStatus: number | null = null;
+      let success = false;
       try {
         await entry.client.chat.completions.create({
           model: PREWARM_MODEL,
@@ -551,14 +611,23 @@ export async function prewarmPool(): Promise<void> {
           max_tokens: 1,
           stream: false,
         });
+        success = true;
         const elapsed = Date.now() - t0;
         log.debug(`[PREWARM] Key #${i} (${entry.stats.keyPrefix}) warm in ${elapsed}ms`);
         return { ok: true, elapsed, index: i };
       } catch (err: unknown) {
         const elapsed = Date.now() - t0;
         const msg = err instanceof Error ? err.message : String(err);
+        // Capture HTTP status so releaseKey() can set cooldownUntil on 429.
+        httpStatus = (err as any)?.status ?? (err as any)?.response?.status ?? null;
         log.warn(`[PREWARM] Key #${i} (${entry.stats.keyPrefix}) failed in ${elapsed}ms: ${msg}`);
         return { ok: false, elapsed, index: i, error: msg };
+      } finally {
+        // releaseKey handles: inFlight--, totalCalls++, latency tracking,
+        // 429 cooldown (§5.3), and releaseMutex. Same path as user requests,
+        // so pool stats stay consistent and 429s during prewarm correctly
+        // trigger cooldown for the next user request.
+        releaseKey(entry, success, httpStatus, Date.now() - t0);
       }
     })
   );

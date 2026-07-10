@@ -642,7 +642,7 @@ think → pensar
 | `SCOUT_ENABLED` | `SCOUT_ENABLED` | `0` (off) | `1` ou `true` para ativar |
 | `SCOUT_MODEL` | `SCOUT_MODEL` | `google/diffusiongemma-26b-a4b-it` | Modelo menor (deve suportar tools) |
 | `SCOUT_MAX_DURATION_MS` | `SCOUT_MAX_DURATION_MS` | `120000` (2min) | Timeout global do scout |
-| Max tool calls | — | `12` (clamp `[1, 50]`) | Limite de rounds de tool calls |
+| Max tool calls | — | `50` (clamp `[1, 100]`) | Limite de rounds de tool calls. Default 50 (aumentado de 12 — commit 8803f76); clamp permite até 100 quando a IA precisa deep exploration (ex: navegar hierarquias de UI profundas no Roblox). A IA passa `max_tool_calls: 100` explicitamente quando precisa. |
 | Max tool result bytes | — | `8192` | Truncamento para evitar context overflow |
 
 **Segurança**:

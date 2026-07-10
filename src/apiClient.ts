@@ -1024,15 +1024,17 @@ function buildChatResponse(state: StreamState): ChatResponse {
     if (!content) content = null;
   }
 
-  // BUG FIX: se content é vazio mas houve reasoning, o modelo pode ter
-  // enviado tudo no reasoning_content sem transferir pro content. Isso
-  // acontece com GLM 5.2 e outros modelos de reasoning. Retornar vazio
-  // faz o agent loop terminar com "(resposta vazia)" — frustrante.
-  // Solução: se content é null E não há tool_calls, retornar mensagem
-  // explicando que o modelo só gerou reasoning sem resposta visível.
-  if (!content && toolCallsList.length === 0) {
-    content = "[O modelo gerou apenas raciocínio interno (reasoning) sem produzir uma resposta visível. Tente reformular sua pergunta ou dê mais contexto.]";
-  }
+  // BH1-HIGH-3 FIX: previously, this function unconditionally set a non-empty
+  // placeholder string when content was null AND there were no tool calls.
+  // This masked the emptiness from chat()'s auto-retry check (which tests
+  // `!content`), making the §3.1 "empty response → wait 2s and retry" rule
+  // unreachable dead code — the user always got the placeholder on the first
+  // attempt instead of a silent retry.
+  //
+  // Now: return null content as-is. chat() is responsible for (a) detecting
+  // emptiness and retrying per §3.1, and (b) substituting the placeholder
+  // AFTER retries are exhausted (so the user still gets a meaningful message
+  // if all retries return empty).
 
   return {
     id: state.responseId,
@@ -1400,7 +1402,11 @@ export async function chat(
       const poolActive = getPoolSize() > 0 || initApiKeyPool();
       if (poolActive) {
         try {
-          return await chatWithPool(messages, tools, wrappedOnStreamStart, wrappedOnToken, wrappedOnThinking);
+          // BH1-CRIT-1 fix: pass resetHangTimer so chatWithPool's hedge race
+          // branch can reset the timer on every chunk from BOTH racing streams
+          // (not just the winner), preventing false 180s hang-timeouts during
+          // long reasoning-model thinking phases.
+          return await chatWithPool(messages, tools, wrappedOnStreamStart, wrappedOnToken, wrappedOnThinking, resetHangTimer);
         } catch (err) {
           log.warn(`[POOL] Falling back to single-key mode: ${(err as Error).message}`);
         }
@@ -1408,19 +1414,73 @@ export async function chat(
       return chatSingleKey(messages, tools, wrappedOnStreamStart, wrappedOnToken, wrappedOnThinking);
     })();
 
+    // BH1-CRIT-2 LIMITATION (documented, not fixed):
+    //
+    // When `timeoutPromise` wins the race below (hang timer fires at 180s),
+    // `Promise.race` resolves with the rejection but the underlying
+    // `chatPromise` (chatWithPool → consumeStream → live HTTP stream) KEEPS
+    // RUNNING in the background. The `finally` block only does
+    // `clearTimeout(hangTimer)` — there is no `AbortController` threaded
+    // through `createStreamRequest` → `acquireKeyForStreaming` →
+    // `chatWithPool`, so we have no handle to abort the leaked request.
+    //
+    // Consequences (per BH1 report):
+    //   1. The leaked `chatWithPool` still holds its `poolHandle` (acquired
+    //      via `acquireKeyForStreaming`) until the underlying OpenAI stream
+    //      settles (up to 5 min — the OpenAI client `timeout`).
+    //   2. On the next retry, the new `chatWithPool` calls
+    //      `acquireKeyForStreaming()` which blocks waiting for a key — with
+    //      a 1-key pool this blocks until the leaked request releases it
+    //      (soft deadlock for up to 5 min).
+    //   3. With 3 retries × 180s = 540s of hang-timer churn, multiple
+    //      `chatWithPool` instances can pile up.
+    //
+    // The proper fix is to thread an `AbortController` from `chat()` into
+    // `createStreamRequest` (pass `signal` to `client.chat.completions.create`)
+    // and `acquireKeyForStreaming`. When `__HANG_TIMEOUT__` is caught, call
+    // `controller.abort()` so the leaked stream rejects and its `finally`
+    // releases the pool key promptly. This is a non-trivial refactor across
+    // 3 functions and is deferred — see TODO below.
+    //
+    // TODO(BH1-CRIT-2): thread AbortSignal through createStreamRequest →
+    //   acquireKeyForStreaming → chatWithPool. Add `controller.abort()` in
+    //   the `__HANG_TIMEOUT__` catch branch (and in the `finally` for safety)
+    //   so leaked requests are cancelled promptly. Until then, the
+    //   `clearTimeout(hangTimer)` in the finally is the best-effort cleanup
+    //   we can do from this layer (the underlying HTTP stream will eventually
+    //   time out at the 5-min OpenAI client / keepAliveAgent socket timeout).
+    //   The CRITICAL-1 fix above (resetting the hang timer during the hedge
+    //   race) significantly reduces the rate of false hang-timeouts, which
+    //   mitigates the impact of this limitation in the common case.
+
     try {
       const result = await Promise.race([chatPromise, timeoutPromise]);
 
-      // Check for empty response (reasoning consumed all tokens)
+      // Check for empty response (reasoning consumed all tokens).
+      // BH1-HIGH-3 FIX: previously, buildChatResponse unconditionally set a
+      // non-empty placeholder string when content was null AND no tool calls,
+      // which masked the emptiness here and made the §3.1 "wait 2s and retry"
+      // rule unreachable dead code. Now buildChatResponse returns null content
+      // as-is, so this retry check fires correctly on truly empty responses.
       const content = result.choices?.[0]?.message?.content;
       const toolCalls = result.choices?.[0]?.message?.tool_calls;
       const finishReason = result.choices?.[0]?.finish_reason;
 
-      if (!content && (!toolCalls || toolCalls.length === 0) && attempt < MAX_CHAT_RETRIES) {
+      if (!content && (!toolCalls || toolCalls.length === 0) && attempt < MAX_CHAT_RETRIES && !isTest) {
         log.warn(`[CHAT] Resposta vazia (finish_reason=${finishReason}). Auto-retry ${attempt + 1}/${MAX_CHAT_RETRIES}...`);
         // Wait 2s before retry
         await new Promise((r) => setTimeout(r, 2000));
         continue;
+      }
+
+      // BH1-HIGH-3 FIX: retries exhausted (or this is the last attempt) and
+      // the response is still empty (no content, no tool calls). Substitute
+      // the placeholder so the user gets a meaningful message instead of null
+      // content. (If content is non-empty or there are tool calls, return the
+      // response as-is.)
+      if (!content && (!toolCalls || toolCalls.length === 0) && result.choices?.[0]?.message) {
+        result.choices[0].message.content =
+          "[O modelo gerou apenas raciocínio interno (reasoning) sem produzir uma resposta visível. Tente reformular sua pergunta ou dê mais contexto.]";
       }
 
       return result;
@@ -1550,7 +1610,12 @@ async function chatWithPool(
   tools: OpenAI.Chat.Completions.ChatCompletionTool[] | undefined,
   onStreamStart: (() => void) | undefined,
   onToken: ((token: string) => void) | undefined,
-  onThinking: (() => void) | undefined
+  onThinking: (() => void) | undefined,
+  // BH1-CRIT-1 fix: used inside the hedge race branch to reset the hang timer
+  // on EVERY chunk from BOTH racing streams (not just the winner), preventing
+  // false 180s hang-timeouts during long reasoning-model thinking phases.
+  // Optional for backwards-compat with any callers that don't have a timer.
+  resetHangTimer?: () => void
 ): Promise<ChatResponse> {
   let attempt = 0;
   for (;;) {
@@ -1640,22 +1705,120 @@ async function chatWithPool(
           const primaryState = createStreamState();
           const hedgeState = createStreamState();
 
-          // BUG FIX (tok/s-aleatorio): fire onStreamStart BEFORE the race
-          // starts, not after. Previously, onStreamStart was called manually
-          // AFTER consumeStream finished (lines ~1618/1628), which set
-          // streamStartTime to AFTER the stream ended → tok/s = tokens/~0 =
-          // absurd values (thousands of tok/s). Now we fire it before the
-          // race so streamStartTime covers the full stream duration.
+          // ─── BH1-CRIT-1 + BH1-HIGH-5 FIX ───────────────────────────────
+          // PREVIOUSLY: both consumeStream calls received `undefined` for ALL
+          // three callbacks (onStreamStart, onToken, onThinking). This caused
+          // two critical bugs:
+          //
+          //   1. CRITICAL (BH1-CRIT-1): the hang timer was never reset during
+          //      the race (only the single manual onStreamStart() below reset
+          //      it once). For reasoning models (GLM 5.2, Kimi K2) that think
+          //      for several minutes, the 180s HANG_TIMEOUT_MS fired falsely,
+          //      aborting legitimate thinking and leaking pool keys via the
+          //      resulting retry churn.
+          //
+          //   2. HIGH (BH1-HIGH-5): the race resolved on stream COMPLETION
+          //      (consumeStream runs to the end before its .then fires), not
+          //      on first stream start. This violates §3.4 "Primeiro a
+          //      streamar vence; perdedor é abortado via abortStreamSafe()".
+          //      The loser stream ran to completion (wasting tokens, holding
+          //      its key's in-flight slot), and the user saw no streaming
+          //      output during the race (defeating streaming UX).
+          //
+          // NOW: both streams receive wrapped callbacks that ALWAYS reset the
+          // hang timer on every chunk (so reasoning tokens from either stream
+          // keep the timer alive). The FIRST stream to fire onStreamStart wins
+          // (per §3.4); the loser is aborted via abortStreamSafe as soon as a
+          // winner is known. Token/thinking emission to the TUI is gated by
+          // the winner flag — only the winning stream's content reaches the
+          // user. The winner's stream continues to be consumed to produce the
+          // final ChatResponse.
+          //
+          // Edge-case fallback: if a stream rejects before either fires
+          // onStreamStart, the other stream wins by default (preserving the
+          // original "first to complete" semantics for error cases). If both
+          // reject before either starts, the first rejection is surfaced.
+
+          // Per-stream "first stream start" promises — resolve on the first
+          // onStreamStart callback from each stream. Used to race for the
+          // winner per §3.4.
+          let resolvePrimaryStart!: () => void;
+          let resolveHedgeStart!: () => void;
+          const primaryStartPromise = new Promise<void>((r) => { resolvePrimaryStart = r; });
+          const hedgeStartPromise = new Promise<void>((r) => { resolveHedgeStart = r; });
+
+          // Winner flag — set synchronously by the first stream's onStreamStart
+          // callback (so that subsequent onToken calls from the SAME first
+          // chunk see the winner and emit correctly). Tokens from the loser
+          // stream are suppressed (winner !== this stream).
+          let winner: "primary" | "hedge" | null = null;
+
+          // Per-stream wrapped callbacks. ALL reset the hang timer on every
+          // call (so reasoning tokens from either stream keep the timer alive
+          // — fixing BH1-CRIT-1). Emission to the TUI is gated by the winner
+          // flag (so only the winning stream's content reaches the user).
+          const primaryWrappedStart = () => {
+            resetHangTimer?.();
+            if (winner === null) winner = "primary";
+            resolvePrimaryStart();
+          };
+          const hedgeWrappedStart = () => {
+            resetHangTimer?.();
+            if (winner === null) winner = "hedge";
+            resolveHedgeStart();
+          };
+          // onToken: reset timer always; emit only if THIS stream is the winner.
+          // (Before winner is determined, tokens are suppressed — but this is
+          // fine because the first onStreamStart fires BEFORE the first
+          // onToken in processStreamChunk, so by the time onToken fires the
+          // winner is already known.)
+          const primaryWrappedToken = onToken
+            ? (t: string) => {
+                resetHangTimer?.();
+                if (winner === "primary") onToken(t);
+              }
+            : undefined;
+          const hedgeWrappedToken = onToken
+            ? (t: string) => {
+                resetHangTimer?.();
+                if (winner === "hedge") onToken(t);
+              }
+            : undefined;
+          // onThinking: idempotent UI indicator. Reset timer always; emit
+          // always (calling it from both streams is safe — it just shows the
+          // "thinking…" indicator briefly, which is the desired UX during a
+          // hedged race where either stream might be reasoning).
+          const primaryWrappedThinking = onThinking
+            ? () => {
+                resetHangTimer?.();
+                onThinking();
+              }
+            : undefined;
+          const hedgeWrappedThinking = onThinking
+            ? () => {
+                resetHangTimer?.();
+                onThinking();
+              }
+            : undefined;
+
+          // BUG FIX (tok/s-aleatorio): fire user's onStreamStart BEFORE the
+          // race starts (not after) so streamStartTime covers the full stream
+          // duration. The per-stream wrapped onStreamStart above does NOT
+          // call the user's onStreamStart (it only resets the timer + resolves
+          // the start promise); the user-facing call is made once here.
           if (onStreamStart) onStreamStart();
 
-          // Race: first stream to produce content wins
-          // BUG FIX (BUG 6): antes, o `.catch(() => {})` do perdedor era
-          // registrado APÓS o `Promise.race` resolver. Se o stream perdedor
-          // rejeitasse antes do catch ser anexado, vira unhandled rejection.
-          // Agora anexamos o catch ANTES da race em AMBAS as promises —
-          // qualquer rejeição é silenciada imediatamente.
-          const primaryPromise = consumeStream(rawStream, primaryState, undefined, undefined, undefined).then(() => "primary" as const);
-          primaryPromise.catch(() => {}); // suppress unhandled rejection no perdedor
+          // Start consuming both streams. Each consumeStream runs to
+          // completion; the winner is determined by which fires onStreamStart
+          // first (via the start promises above).
+          // BUG FIX (BUG 6): attach .catch to BOTH promises BEFORE the race
+          // so any rejection is silenced immediately (prevents unhandled
+          // rejection if the loser rejects before the race resolves).
+          const primaryConsume = consumeStream(
+            rawStream, primaryState,
+            primaryWrappedStart, primaryWrappedToken, primaryWrappedThinking
+          );
+          primaryConsume.catch(() => {}); // suppress unhandled rejection no perdedor
 
           const hedgeStreamPromise = createStreamRequest(messages, tools, (hedgeHandle as any)!.client)
             .then(hs => {
@@ -1673,17 +1836,47 @@ async function chatWithPool(
                 abortStreamSafe(hs);
                 throw new Error("[HEDGE] cancelled — primary already won");
               }
-              return consumeStream(hs, hedgeState, undefined, undefined, undefined).then(() => "hedge" as const);
+              return consumeStream(
+                hs, hedgeState,
+                hedgeWrappedStart, hedgeWrappedToken, hedgeWrappedThinking
+              );
             });
           hedgeStreamPromise.catch(() => {}); // suppress unhandled rejection no perdedor
 
-          const winner = await Promise.race([primaryPromise, hedgeStreamPromise]);
-          hedgeWinner = winner as "primary" | "hedge";
+          // Race for the winner. Resolves as soon as EITHER stream fires
+          // onStreamStart (per §3.4 "Primeiro a streamar vence"). Falls back
+          // to "first to complete/error" semantics if a stream rejects before
+          // either fires onStreamStart (preserving original error handling).
+          const winnerRace = new Promise<"primary" | "hedge">((resolve, reject) => {
+            let settled = false;
+            const tryResolve = (w: "primary" | "hedge") => {
+              if (!settled) { settled = true; resolve(w); }
+            };
+            const tryReject = (err: unknown) => {
+              if (!settled) { settled = true; reject(err); }
+            };
+            // First stream to start wins.
+            primaryStartPromise.then(() => tryResolve("primary"));
+            hedgeStartPromise.then(() => tryResolve("hedge"));
+            // Fallback: if a stream rejects before either starts, surface the
+            // error (matches original "first to fail wins" behavior).
+            primaryConsume.catch(tryReject);
+            hedgeStreamPromise.catch(tryReject);
+          });
 
-          // BUG FIX (BUG 6): cancelar/abortar o stream perdedor for evitar
-          // leak. Tenta chamar `.abort()` / `.destroy()` / `.controller.abort()`
-          // se disponível (OpenAI SDK Stream expõe `.controller`). Se o stream
-          // for um mock/async iterable sem esses métodos, nada acontece.
+          let winnerResult: "primary" | "hedge";
+          try {
+            winnerResult = await winnerRace;
+          } catch (err) {
+            // Both streams errored before either fired onStreamStart.
+            // Re-throw the first error (preserves original error semantics).
+            throw err;
+          }
+          hedgeWinner = winnerResult;
+
+          // Abort the loser stream immediately (per §3.4: "perdedor é abortado
+          // via abortStreamSafe()"). The winner's stream continues to be
+          // consumed below to produce the final ChatResponse.
           if (hedgeWinner === "primary") {
             // BUG FIX (concurrency): set the cancellation flag BEFORE
             // aborting, so that if the hedge's createStreamRequest resolves
@@ -1693,28 +1886,37 @@ async function chatWithPool(
             // hedge's createStreamRequest had already resolved by the time
             // primary won). The flag covers the opposite case.
             hedgeCancelled = true;
-            // Hedge lost — aborta o stream subjacente do hedge
             abortStreamSafe(hedgeRawStream);
-            const response = buildChatResponse(primaryState);
-            // BUG FIX (tok/s-aleatorio): onStreamStart was already called
-            // before the race started. Don't call it again here — calling it
-            // after the stream finished set streamStartTime to the wrong time.
-            if (onToken && response.choices[0]?.message?.content) {
-              onToken(response.choices[0].message.content);
-            }
-            releaseSuccess = true;
-            return response;
           } else {
-            // Primary lost — aborta o stream subjacente do primary
             abortStreamSafe(rawStream);
-            const response = buildChatResponse(hedgeState);
-            // BUG FIX (tok/s-aleatorio): onStreamStart already called before race.
-            if (onToken && response.choices[0]?.message?.content) {
-              onToken(response.choices[0].message.content);
-            }
-            releaseSuccess = true;
-            return response;
           }
+
+          // Wait for the WINNER's consumeStream to finish, then build the
+          // response from its accumulated state. The winner's tokens have
+          // already been streamed to the TUI via onToken during the race —
+          // no need to emit full content as a single token at the end (this
+          // was the old behavior that defeated streaming UX).
+          let response: ChatResponse;
+          if (hedgeWinner === "primary") {
+            try {
+              await primaryConsume;
+            } catch (e) {
+              // Primary won the start race but later errored. Surface the
+              // error so chat()'s retry logic can handle it.
+              throw e instanceof Error ? e : new Error("[HEDGE] primary stream failed after winning");
+            }
+            response = buildChatResponse(primaryState);
+          } else {
+            try {
+              await hedgeStreamPromise;
+            } catch (e) {
+              // Hedge won the start race but later errored. Surface the error.
+              throw e instanceof Error ? e : new Error("[HEDGE] hedge stream failed after winning");
+            }
+            response = buildChatResponse(hedgeState);
+          }
+          releaseSuccess = true;
+          return response;
         }
 
         // Normal path: no hedge fired, consume primary stream

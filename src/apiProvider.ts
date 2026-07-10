@@ -23,6 +23,8 @@
  *   - Sub-agents: 10+ parallel (no key contention)
  */
 
+import * as fs from "node:fs";
+
 export type ProviderName = "nvidia" | "zenmux";
 
 export interface ProviderConfig {
@@ -79,20 +81,93 @@ const ZENMUX_CONFIG: Omit<ProviderConfig, "apiKey"> = {
  * Priority:
  *   1. API_PROVIDER env var (explicit choice)
  *   2. ZENMUX_API_KEY set → zenmux
- *   3. NVIDIA_API_KEY or NVIDIA_API_KEYS set → nvidia (default)
+ *   3. NVIDIA_API_KEY, NVIDIA_API_KEYS, or NVIDIA_API_KEYS_FILE set → nvidia (default)
+ *
+ * CRITICAL FIX (BH2 CRITICAL 2): previously, a user with ONLY
+ * NVIDIA_API_KEYS_FILE set (a legitimate config per §5.2) was misrouted
+ * to zenmux because detectProvider() didn't consider the file. Now the
+ * auto-detect zenmux branch requires ALL THREE NVIDIA env vars to be
+ * absent.
  */
 export function detectProvider(): ProviderName {
   const explicit = process.env.API_PROVIDER?.toLowerCase().trim();
   if (explicit === "zenmux") return "zenmux";
   if (explicit === "nvidia") return "nvidia";
 
-  // Auto-detect: if ZENMUX_API_KEY is set and NVIDIA keys are not, use zenmux
-  if (process.env.ZENMUX_API_KEY && !process.env.NVIDIA_API_KEY && !process.env.NVIDIA_API_KEYS) {
+  // Auto-detect: zenmux only if NO NVIDIA key source is configured (§5.2).
+  // Must include NVIDIA_API_KEYS_FILE — otherwise a file-only NVIDIA config
+  // is misrouted to zenmux and the CLI exits with code 1 in getProviderConfig.
+  if (
+    process.env.ZENMUX_API_KEY &&
+    !process.env.NVIDIA_API_KEY &&
+    !process.env.NVIDIA_API_KEYS &&
+    !process.env.NVIDIA_API_KEYS_FILE
+  ) {
     return "zenmux";
   }
 
   // Default: nvidia
   return "nvidia";
+}
+
+/**
+ * Pick the first valid NVIDIA API key from env vars (§5.2 precedence).
+ *
+ *   1. NVIDIA_API_KEY (single, backwards compat) — trim only, no `nvapi-`
+ *      filter (legacy users may have keys without the prefix).
+ *   2. NVIDIA_API_KEYS (comma-separated) — trim + filter `nvapi-` (HIGH 3).
+ *   3. NVIDIA_API_KEYS_FILE (one per line) — same filter (§5.2, CRITICAL 2).
+ *
+ * HIGH 3 (BH2): trim + filter on NVIDIA_API_KEYS so that shell-quoted
+ * whitespace (" nvapi-key1 , nvapi-key2 ") doesn't produce an apiKey
+ * with embedded spaces that NVIDIA rejects as invalid credentials, and
+ * so a malformed first entry (e.g. a ZenMux key pasted by mistake) is
+ * skipped instead of used as-is. This matches loadApiKeys() in
+ * apiKeyPool.ts so the provider config and the pool agree on the
+ * "first key".
+ *
+ * CRITICAL 2 (BH2): also consult NVIDIA_API_KEYS_FILE so a file-only
+ * NVIDIA config doesn't exit(1) before initApiKeyPool() ever runs.
+ */
+function pickFirstNvidiaKey(): string {
+  // 1. NVIDIA_API_KEY (single, backwards compat) — trim only.
+  const single = process.env.NVIDIA_API_KEY?.trim();
+  if (single) return single;
+
+  // 2. NVIDIA_API_KEYS (comma-separated) — trim + filter `nvapi-` (§5.2).
+  const multiKeys = process.env.NVIDIA_API_KEYS?.split(",")
+    .map((k) => k.trim())
+    .filter((k) => k.startsWith("nvapi-"));
+  if (multiKeys && multiKeys.length > 0) return multiKeys[0];
+
+  // 3. NVIDIA_API_KEYS_FILE (one per line) — same filter (§5.2).
+  const fileFirst = readFirstKeyFromFile(process.env.NVIDIA_API_KEYS_FILE);
+  if (fileFirst) return fileFirst;
+
+  return "";
+}
+
+/**
+ * Read the first valid (`nvapi-`-prefixed) key from a file (one per line).
+ * Returns "" if the file is unset, missing, or contains no valid keys.
+ * Mirrors the parsing in apiKeyPool.ts:loadKeysFromFile so the provider
+ * config and the pool agree on what counts as a valid key.
+ */
+function readFirstKeyFromFile(filePath: string | undefined): string {
+  const path = filePath?.trim();
+  if (!path) return "";
+  try {
+    const content = fs.readFileSync(path, "utf8");
+    for (const line of content.split(/\r?\n/)) {
+      const trimmed = line.trim();
+      if (trimmed.startsWith("nvapi-")) return trimmed;
+    }
+    return "";
+  } catch {
+    // File missing or unreadable — let the caller fall through to exit(1)
+    // with a helpful message (same behavior as loadKeysFromFile's warn).
+    return "";
+  }
 }
 
 /**
@@ -113,12 +188,13 @@ export function getProviderConfig(): ProviderConfig {
     return { ...ZENMUX_CONFIG, apiKey };
   }
 
-  // NVIDIA
-  const apiKey = process.env.NVIDIA_API_KEY ?? process.env.NVIDIA_API_KEYS?.split(",")[0] ?? "";
+  // NVIDIA — pick first key from any of the 3 §5.2 sources.
+  const apiKey = pickFirstNvidiaKey();
   if (!apiKey) {
     console.error(
       `[claude-killer] No API key configured.\n` +
-      `  Set NVIDIA_API_KEY or NVIDIA_API_KEYS for NVIDIA NIM,\n` +
+      `  Set NVIDIA_API_KEY or NVIDIA_API_KEYS (comma-separated)\n` +
+      `  or NVIDIA_API_KEYS_FILE (one key per line) for NVIDIA NIM,\n` +
       `  or ZENMUX_API_KEY for ZenMux.\n`
     );
     process.exit(1);

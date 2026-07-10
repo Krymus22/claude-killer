@@ -119,13 +119,35 @@ let sessionStartTime = "";
 let lastCheckpointTokens = 0;
 /** Paths touched by write tools in the current turn - used by the strict quality gate */
 let turnTouchedFiles: Set<string> = new Set();
+/**
+ * Counter of ALL tool calls dispatched in the current turn (read-only + write).
+ * Used by the false-promise detector (§10.5 #1): the detector's own safeguard
+ * short-circuits with `detected: false` when `toolsCalled > 0 || filesTouched > 0`
+ * ("actions were taken this turn"). Without this counter, agent.ts would pass
+ * hardcoded (0, 0) and the detector would false-positive whenever the agent
+ * called read-only tools (ler_arquivo, buscar_texto, etc.) — those don't add
+ * to turnTouchedFiles (which only tracks write-tool touches). Bug Hunter BH4
+ * HIGH 4.
+ */
+let turnToolCallCount = 0;
 /** Counter of stop_reason hits in the current turn (for quality gate loop) */
 let turnStopHits = 0;
 /** Counter of goal verifier blocks this turn (avoids infinite goal-verifier loops) */
 let goalVerifierBlocksThisTurn = 0;
-/** Counter of bug hunter rounds this turn (max 5 rounds per turn) */
-let bugHunterBlocksThisTurn = 0;
-let bugHunterMediumLowRounds = 0;
+/**
+ * Counter of CRITICAL/HIGH bug hunter blocks this turn.
+ * Per §10.1: MAX_BUG_HUNTER_ROUNDS = 10 for critical/high findings.
+ * This counter is the outer gate for the bug hunter loop — incremented ONLY
+ * when the bug hunter reports critical/high findings that block finish.
+ */
+let bugHunterCriticalHighBlocksThisTurn = 0;
+/**
+ * Counter of MEDIUM/LOW bug hunter blocks this turn.
+ * Per §10.1: MAX_MEDIUM_LOW_ROUNDS = 3 for medium/low findings.
+ * Independent from the critical/high counter so medium/low blocks do NOT
+ * consume the 10-round critical/high budget (Bug Hunter BH4 HIGH 2).
+ */
+let bugHunterMediumLowBlocksThisTurn = 0;
 /** Max stops per turn (safety) */
 const MAX_STOPS_PER_TURN = 12;
 
@@ -852,6 +874,36 @@ const toolHandlers: Record<string, ToolHandler> = {
 
   // --- IDEIA 5: Sub-agent for isolated exploration ------------------------
   "explorar_subagente": async (args) => {
+    // FIX-SCOUT (BH9 HIGH 3): anti-recursion guard (mirrors usar_scout).
+    //
+    // §10.7 mandates anti-recursion via CLAUDE_KILLER_AGENT_ID. A POWERFUL
+    // sub-agent (effort=max) inherits ALL main agent tools via
+    // agentMod.getMergedToolsPublic() (subAgents.ts:325), including this
+    // `explorar_subagente` tool. Without this guard, a powerful sub-agent
+    // could call explorar_subagente recursively: each level acquires another
+    // sub-agent slot, overwrites CLAUDE_KILLER_AGENT_ID, and spawns a child.
+    // With MAX_CONCURRENT_SUB_AGENTS=2 (NVIDIA default), 2 levels of
+    // recursion exhaust the pool — the 3rd level waits forever for a slot
+    // the parent will never release (it's blocked waiting for the child).
+    // DEADLOCK.
+    //
+    // This guard is safe for parallel siblings (multiple explorar_subagente
+    // calls from the main agent in the same response) because the env-var
+    // check runs synchronously at the very top of the handler — before any
+    // runSubAgentInner has set the env var. All parallel siblings' checks
+    // see env var as undefined → all pass. Only nested calls from inside a
+    // running sub-agent (where runSubAgentInner has already set the env var
+    // to "sub-N") are blocked.
+    //
+    // The function-level guard in subAgents.ts (using AsyncLocalStorage)
+    // is defense-in-depth for direct callers of runSubAgent.
+    if (process.env.CLAUDE_KILLER_AGENT_ID) {
+      return {
+        resultStr: "[ERROR] explorar_subagente cannot be called from inside a sub-agent (would deadlock via acquireSubAgentSlot). Use ler_arquivo/buscar_texto directly.",
+        usedHeal: false,
+      };
+    }
+
     const question = asString(args.questao ?? args.question);
     if (!question) {
       return { resultStr: "[ERROR] 'questao' (or 'question') is required (the question for the sub-agent to explore).", usedHeal: false };
@@ -1510,6 +1562,13 @@ function isTestFailure(resultStr: string): boolean {
 }
 
 async function processToolCalls(toolCalls: ToolCall[]): Promise<void> {
+  // Bug Hunter BH4 HIGH 4: track the count of tool calls dispatched this turn
+  // so the false-promise detector can use its own "actions were taken"
+  // safeguard. Without this, read-only tool calls (ler_arquivo, buscar_texto,
+  // buscar_web, etc.) would not be counted (they don't add to turnTouchedFiles,
+  // which only tracks write-tool file touches) and the detector would
+  // false-positive whenever the IA investigated via read tools.
+  turnToolCallCount += toolCalls.length;
   const readOnlyCalls = toolCalls.filter((tc) => READ_ONLY_TOOLS.has(tc.function.name));
   const writeCalls = toolCalls.filter((tc) => !READ_ONLY_TOOLS.has(tc.function.name));
 
@@ -1603,23 +1662,23 @@ async function sendAndProcess(
   // It contains writeCheckpoint (file I/O) and chat() calls (API).
   // Any error here would propagate up to runAgentLoop's try/finally (no catch),
   // killing the process via unhandled rejection.
+  //
+  // §10.2 PRE-TURN MAINTENANCE ORDER (Bug Hunter BH4 HIGH 1):
+  //   smartCompact → checkpoint → optimizeContext → pushActivity
+  // ALL checkpointing (both maybeWriteCheckpoint inside runPreTurnMaintenance
+  // AND the checkpointWriter block below) MUST run BEFORE optimizeContext.
+  // Otherwise optimizeContext strips [IMPACT] hints from old tool results, and
+  // the snapshot captured by checkpointWriter is already degraded — losing
+  // context the spec intends to preserve.
   try {
     await runPreTurnMaintenance();
   } catch (err) {
     log.warn(`[PRE_TURN_MAINTENANCE] Failed (non-fatal): ${(err as Error).message}`);
   }
-  try {
-    history.optimizeContext();
-  } catch (err) {
-    log.warn(`[OPTIMIZE_CONTEXT] Failed (non-fatal): ${(err as Error).message}`);
-  }
 
-  // Always send ALL tools — no tool reduction.
-  // Tool reduction was removed because it filtered tools the IA might need.
-  // The IA should always have access to all 18 tools.
-  let toolsForCall = getMergedTools();
-
-  // IDEIA 27+#28: Checkpoint writer - proactive state extraction
+  // IDEIA 27+#28: Checkpoint writer - proactive state extraction.
+  // Runs BEFORE optimizeContext per §10.2 (checkpoint step precedes
+  // optimizeContext in the mandated pre-turn maintenance order).
   try {
     const { shouldCheckpoint, writeCheckpoint, formatCheckpoint } = await import("./checkpointWriter.js");
     // BUG FIX: shouldCheckpoint expects TOKENS (it divides by MAX_CONTEXT_TOKENS
@@ -1651,6 +1710,19 @@ async function sendAndProcess(
       } finally { done(); }
     }
   } catch { /* checkpointWriter not available */ }
+
+  // optimizeContext runs AFTER all checkpointing so checkpoints capture the
+  // un-degraded history (with [IMPACT] hints intact). Per §10.2 step 3.
+  try {
+    history.optimizeContext();
+  } catch (err) {
+    log.warn(`[OPTIMIZE_CONTEXT] Failed (non-fatal): ${(err as Error).message}`);
+  }
+
+  // Always send ALL tools — no tool reduction.
+  // Tool reduction was removed because it filtered tools the IA might need.
+  // The IA should always have access to all 18 tools.
+  let toolsForCall = getMergedTools();
 
   // Activity: waiting for LLM response. Popped when chat() returns.
   const apiActivityDone = pushActivity("api_call", config.model);
@@ -1786,10 +1858,11 @@ async function handleChatResponse(
 
   // Reset turn-level counters for the next user turn
   turnTouchedFiles = new Set();
+  turnToolCallCount = 0;
   turnStopHits = 0;
   goalVerifierBlocksThisTurn = 0;
-  bugHunterBlocksThisTurn = 0;
-  bugHunterMediumLowRounds = 0;
+  bugHunterCriticalHighBlocksThisTurn = 0;
+  bugHunterMediumLowBlocksThisTurn = 0;
 
   // Reset Bug Hunter previous findings for new turn
   try {
@@ -1913,8 +1986,19 @@ async function handleStopReason(message: { content?: string | null }): Promise<b
   // We check this whenever the agent stopped WITHOUT touching any files in
   // this turn — that's the suspicious case. We don't restrict to turnStopHits===1
   // because the agent might promise-and-stop multiple times in a row.
+  //
+  // Bug Hunter BH4 HIGH 4: pass the ACTUAL tool-call count and file-touch
+  // count. detectFalsePromise's own safeguard short-circuits with
+  // `detected: false` when `toolsCalled > 0 || filesTouched > 0`. Previously
+  // we hardcoded (0, 0), which defeated the safeguard — read-only tools
+  // (ler_arquivo, buscar_texto, buscar_web, ...) do NOT add to
+  // turnTouchedFiles, so a turn where the IA investigated via read tools and
+  // then said "vou investigar" would FALSE-POSITIVELY block finish. The
+  // outer guard `turnTouchedFiles.size === 0` still skips the check when
+  // write tools touched files; for read-only turns, the detector's own
+  // `toolsCalled > 0` guard now kicks in.
   if (turnTouchedFiles.size === 0) {
-    const fpResult = shouldBlockForFalsePromise(message.content ?? "", 0, 0);
+    const fpResult = shouldBlockForFalsePromise(message.content ?? "", turnToolCallCount, turnTouchedFiles.size);
     if (fpResult.block && fpResult.rejectionMessage) {
       log.warn(`[FALSE_PROMISE] ${fpResult.reason}`);
       history.addSystemMessage(fpResult.rejectionMessage);
@@ -1994,7 +2078,21 @@ async function handleStopReason(message: { content?: string | null }): Promise<b
     if (turnTouchedFiles.size > 0 &&
         turnStopHits === 1 &&
         goalVerifierBlocksThisTurn < MAX_GOAL_BLOCKS_PER_TURN) {
-      const userRequestRaw = history.getHistory().find((m) => m.role === "user")?.content;
+      // BUG FIX (Bug Hunter BH4 HIGH 3): use the MOST RECENT user message,
+      // not the first. Array.find returns the first match — in a multi-turn
+      // conversation, history accumulates [user:"create X", ..., user:"edit Y"]
+      // and find() would return "create X" (turn 1's request) instead of
+      // "edit Y" (the current turn's request). Per §10.5 #6, the goal
+      // verifier must evaluate the CURRENT task. findLast is ES2023+ — the
+      // project targets ES2022, so we iterate backward to stay portable.
+      const histForGoal = history.getHistory();
+      let userRequestRaw: string | undefined;
+      for (let i = histForGoal.length - 1; i >= 0; i--) {
+        if (histForGoal[i].role === "user") {
+          userRequestRaw = histForGoal[i].content as string | undefined;
+          break;
+        }
+      }
       const userRequest = typeof userRequestRaw === "string" ? userRequestRaw : "";
 
       // Skip verification for simple questions (not tasks)
@@ -2037,8 +2135,24 @@ async function handleStopReason(message: { content?: string | null }): Promise<b
   try {
     const MAX_BUG_HUNTER_ROUNDS = 10;
     const MAX_MEDIUM_LOW_ROUNDS = 3;
-    if (turnTouchedFiles.size > 0 && bugHunterBlocksThisTurn < MAX_BUG_HUNTER_ROUNDS) {
-      const userRequestRaw = history.getHistory().find((m) => m.role === "user")?.content;
+    // Bug Hunter BH4 HIGH 2: the outer gate uses the CRITICAL/HIGH counter
+    // only. Per §10.1, MAX_BUG_HUNTER_ROUNDS=10 is the cap for critical/high
+    // findings; medium/low has its own cap (MAX_MEDIUM_LOW_ROUNDS=3) tracked
+    // separately below. Previously a single combined counter conflated both,
+    // so 3 medium/low blocks consumed 3 of the 10-round critical/high budget.
+    if (turnTouchedFiles.size > 0 && bugHunterCriticalHighBlocksThisTurn < MAX_BUG_HUNTER_ROUNDS) {
+      // Bug Hunter BH4 HIGH 3: use the MOST RECENT user message (the one for
+      // the current turn), not the first user message in history. Per §10.5
+      // #7, the bug hunter must review against the CURRENT request. See the
+      // goal verifier block above for the same fix and rationale.
+      const histForBH = history.getHistory();
+      let userRequestRaw: string | undefined;
+      for (let i = histForBH.length - 1; i >= 0; i--) {
+        if (histForBH[i].role === "user") {
+          userRequestRaw = histForBH[i].content as string | undefined;
+          break;
+        }
+      }
       const userRequest = typeof userRequestRaw === "string" ? userRequestRaw : "";
       const filesArr = [...turnTouchedFiles];
       const agentResponse = message.content ?? "";
@@ -2094,14 +2208,18 @@ async function handleStopReason(message: { content?: string | null }): Promise<b
         const hasCriticalHigh = bhResult.findings.some(f => f.severity === "critical" || f.severity === "high");
         const hasMediumLow = bhResult.findings.some(f => f.severity === "medium" || f.severity === "low");
         if (hasCriticalHigh) {
-          bugHunterBlocksThisTurn++;
-          console.log(`[BUG_HUNTER] ACTION: blocking finish for critical/high (round ${bugHunterBlocksThisTurn}/${MAX_BUG_HUNTER_ROUNDS})`);
+          // Bug Hunter BH4 HIGH 2: increment ONLY the critical/high counter.
+          // Medium/low blocks must not consume the critical/high budget.
+          bugHunterCriticalHighBlocksThisTurn++;
+          console.log(`[BUG_HUNTER] ACTION: blocking finish for critical/high (round ${bugHunterCriticalHighBlocksThisTurn}/${MAX_BUG_HUNTER_ROUNDS})`);
           history.addSystemMessage(bhResult.message);
           bhBlocked = true;
-        } else if (hasMediumLow && bugHunterMediumLowRounds < MAX_MEDIUM_LOW_ROUNDS) {
-          bugHunterBlocksThisTurn++;
-          bugHunterMediumLowRounds++;
-          console.log(`[BUG_HUNTER] ACTION: blocking finish for medium/low (round ${bugHunterMediumLowRounds}/${MAX_MEDIUM_LOW_ROUNDS})`);
+        } else if (hasMediumLow && bugHunterMediumLowBlocksThisTurn < MAX_MEDIUM_LOW_ROUNDS) {
+          // Bug Hunter BH4 HIGH 2: medium/low has its OWN counter (cap 3),
+          // independent of the critical/high counter (cap 10). Do NOT touch
+          // bugHunterCriticalHighBlocksThisTurn here.
+          bugHunterMediumLowBlocksThisTurn++;
+          console.log(`[BUG_HUNTER] ACTION: blocking finish for medium/low (round ${bugHunterMediumLowBlocksThisTurn}/${MAX_MEDIUM_LOW_ROUNDS})`);
           history.addSystemMessage(bhResult.message);
           bhBlocked = true;
         } else {
@@ -2110,8 +2228,8 @@ async function handleStopReason(message: { content?: string | null }): Promise<b
         }
       } else if (bhResult.completed && bhResult.findings.length === 0) {
         console.log(`[BUG_HUNTER] ACTION: clean pass — no bugs found`);
-        if (bugHunterBlocksThisTurn > 0) {
-          history.addSystemMessage(`[BUG_HUNTER] ✓ All previously identified bugs have been fixed. Code passed critical review on round ${bugHunterBlocksThisTurn + 1}.`);
+        if (bugHunterCriticalHighBlocksThisTurn > 0) {
+          history.addSystemMessage(`[BUG_HUNTER] ✓ All previously identified bugs have been fixed. Code passed critical review on round ${bugHunterCriticalHighBlocksThisTurn + 1}.`);
         }
       }
 
@@ -2138,9 +2256,9 @@ async function handleStopReason(message: { content?: string | null }): Promise<b
       if (bhBlocked || dgBlocked) {
         return true;
       }
-    } else if (bugHunterBlocksThisTurn >= MAX_BUG_HUNTER_ROUNDS) {
-      console.log(`[BUG_HUNTER] Max rounds (${MAX_BUG_HUNTER_ROUNDS}) reached — allowing finish despite potential bugs`);
-      history.addSystemMessage(`[BUG_HUNTER] Max review rounds (${MAX_BUG_HUNTER_ROUNDS}) reached. The code may still have issues — please review manually.`);
+    } else if (bugHunterCriticalHighBlocksThisTurn >= MAX_BUG_HUNTER_ROUNDS) {
+      console.log(`[BUG_HUNTER] Max critical/high rounds (${MAX_BUG_HUNTER_ROUNDS}) reached — allowing finish despite potential bugs`);
+      history.addSystemMessage(`[BUG_HUNTER] Max critical/high review rounds (${MAX_BUG_HUNTER_ROUNDS}) reached. The code may still have issues — please review manually.`);
     }
   } catch (err) {
     console.log(`[BUG_HUNTER+DATAGUARD] Skipped (error in handler): ${(err as Error).message}`);
@@ -2239,6 +2357,7 @@ export async function runAgentLoop(
   sessionToolsUsed = [];
   lastCheckpointTokens = 0;
   turnTouchedFiles = new Set();
+  turnToolCallCount = 0;
   turnStopHits = 0;
   // BUG FIX: these per-turn counters were previously only reset at the END of
   // a successful turn (inside handleChatResponse). If the previous turn ended
@@ -2247,8 +2366,8 @@ export async function runAgentLoop(
   // be reached prematurely or blocking finish on stale state. Reset them at
   // the START of each turn too, so a fresh user message always starts clean.
   goalVerifierBlocksThisTurn = 0;
-  bugHunterBlocksThisTurn = 0;
-  bugHunterMediumLowRounds = 0;
+  bugHunterCriticalHighBlocksThisTurn = 0;
+  bugHunterMediumLowBlocksThisTurn = 0;
   resetGateState();
   resetContextInjection();
   resetSelfValidation();

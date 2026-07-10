@@ -31,10 +31,12 @@
  */
 
 import * as nodePath from "node:path";
-import * as nodeFs from "node:fs";
 import { getModelInfo, modelSupportsTools } from "./modelRegistry.js";
 import * as log from "./logger.js";
 import { pushActivity } from "./activityTracker.js";
+// FIX-SCOUT (BH9 HIGH 2): extract resolveAndCheckPath into a shared utility
+// so subAgents.ts and smallTaskAgent.ts use the same hard boundary.
+import { resolveAndCheckPath, validateCwd } from "./pathSecurity.js";
 
 // --- Types ------------------------------------------------------------------
 
@@ -196,45 +198,13 @@ const SCOUT_TOOLS = [
 
 // --- Tool executor (read-only, inline) --------------------------------------
 
-/**
- * Resolve a path relative to cwd and enforce a boundary check so the scout
- * cannot read files outside the project directory (defense-in-depth against
- * path traversal: ../../../etc/passwd, absolute paths, symlinks, etc).
- *
- * BUG FIX (round 3 - symlink escape): use fs.realpathSync() to resolve
- * symlinks BEFORE checking the boundary. Without this, a symlink inside the
- * project pointing to /etc/passwd would bypass the lexical check.
- *
- * Returns the resolved real path, or throws if the path escapes cwd.
- */
-function resolveAndCheckPath(rawPath: string, cwd: string): string {
-  const resolved = nodePath.resolve(cwd, rawPath);
-  const normalizedCwd = nodePath.resolve(cwd);
-  // Use path.relative to robustly check if resolved is within cwd.
-  const relative = nodePath.relative(normalizedCwd, resolved);
-  if (relative.startsWith("..") || nodePath.isAbsolute(relative)) {
-    throw new Error(`Path traversal blocked: "${rawPath}" resolves outside project directory (${resolved})`);
-  }
-  // BUG FIX (symlink-escape): resolve symlinks with realpath and re-check.
-  // A symlink inside the project could point to /etc/passwd — realpath
-  // follows it and we verify the REAL target is still within cwd.
-  try {
-    const realPath = nodeFs.realpathSync(resolved);
-    const realRelative = nodePath.relative(normalizedCwd, realPath);
-    if (realRelative.startsWith("..") || nodePath.isAbsolute(realRelative)) {
-      throw new Error(`Symlink escape blocked: "${rawPath}" resolves to "${realPath}" (outside project)`);
-    }
-    return realPath;
-  } catch (err) {
-    // If realpath fails (file doesn't exist), re-throw path traversal errors
-    // but let other errors (ENOENT) pass through to the tool executor.
-    if (err instanceof Error && err.message.includes("blocked")) {
-      throw err;
-    }
-    // File doesn't exist yet — return the resolved path (tool will handle ENOENT)
-    return resolved;
-  }
-}
+// FIX-SCOUT (BH9 HIGH 2): resolveAndCheckPath has been extracted to
+// src/pathSecurity.ts so subAgents.ts and smallTaskAgent.ts can share the
+// same canonical implementation. See pathSecurity.ts for the algorithm
+// (path.relative() + fs.realpathSync() with symlink-escape defense).
+//
+// Re-export for any external caller that imported it from this module.
+export { resolveAndCheckPath } from "./pathSecurity.js";
 
 /** Max bytes for a single tool result before truncation (prevents context overflow). */
 const MAX_TOOL_RESULT_BYTES = 8192;
@@ -421,25 +391,28 @@ export async function runScout(args: ScoutArgs): Promise<ScoutResult | null> {
   // BUG FIX (cwd-bypass): validate that cwd is within the project directory.
   // Without this, a prompt-injected model could pass cwd: "/etc" and the
   // boundary check would allow reading any file in /etc.
+  //
+  // FIX-SCOUT (BH9 HIGH 2): use the shared `validateCwd` utility from
+  // pathSecurity.ts so the scout and sub-agent share the same boundary logic.
   const projectRoot = process.cwd();
-  const rawCwd = args.cwd ?? projectRoot;
-  // Resolve and validate cwd is within projectRoot
-  const resolvedCwd = nodePath.resolve(rawCwd);
-  const cwdRelative = nodePath.relative(projectRoot, resolvedCwd);
-  if (cwdRelative.startsWith("..") || nodePath.isAbsolute(cwdRelative)) {
-    log.warn(`[SCOUT] cwd "${rawCwd}" is outside project directory — blocking`);
+  const cwdValidation = validateCwd(args.cwd, projectRoot);
+  if (!cwdValidation.ok) {
+    log.warn(`[SCOUT] ${cwdValidation.error} — blocking`);
     return {
       toolResults: [],
       filesInspected: [],
       completed: false,
       modelUsed: getScoutModel(),
       toolCallCount: 0,
-      error: `cwd "${rawCwd}" is outside project directory`,
+      error: cwdValidation.error,
     };
   }
-  const cwd = resolvedCwd;
-  // BUG FIX (maxToolCalls-clamp): clamp maxToolCalls to [1, 50] to prevent
+  const cwd = cwdValidation.cwd;
+  // BUG FIX (maxToolCalls-clamp): clamp maxToolCalls to [1, 100] to prevent
   // DoS via prompt injection (model could pass maxToolCalls: 1000000).
+  // Default is 50 (was 12 originally — bumped via commit 8803f76 so the
+  // IA can request up to 100 calls for deep UI navigation in Roblox).
+  // See BUSINESS_RULES.md §10.7 (FIX-SCOUT HIGH 1).
   const rawMaxCalls = args.maxToolCalls ?? 50;
   const maxCalls = Math.max(1, Math.min(100, typeof rawMaxCalls === "number" && !Number.isNaN(rawMaxCalls) ? rawMaxCalls : 50));
   const scoutModel = getScoutModel();

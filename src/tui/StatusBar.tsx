@@ -2,11 +2,12 @@
  * StatusBar.tsx — Context window usage bar + session cost + effort level + tok/s.
  * Compact single-line format, right-aligned inside its parent container.
  *
- * Layout: [ACTIVITY] [tokens] [bar] [%] [tok/s] [effort] [$sessionCost] [turnCost] [MCPs:N] [Skills:N] [PLAN]
+ * Layout (§8.3): [ACTIVITY] [tokens] [bar] [%] [tok/s] [effort] [$sessionCost] [turnCost] [ses:tok] [MCPs:N] [Skills:N] [PLAN]
  *
  * Activity indicator (leftmost, like a play/stop button):
  *   - ■ (square, color = secondary) when the AI/CLI is running (thinking/
- *     streaming/compacting) — visually analogous to a "stop" button.
+ *     streaming) — visually analogous to a "stop" button.
+ *   - ■ (square, color = warning) when compacting — signals a special state.
  *   - ▶ (triangle, color = success) when idle — visually analogous to a
  *     "play" button, signaling the CLI is ready for input.
  *
@@ -37,9 +38,9 @@ interface StatusBarProps {
   totalTokens: number;
   /** Model's context window size in tokens. */
   contextWindow: number;
-  /** Threshold (0-1) of context window that triggers auto-compact. */
-  warnThreshold: number;
   /** Threshold (0-1) of context window that triggers warning color. */
+  warnThreshold: number;
+  /** Threshold (0-1) of context window that triggers auto-compact. */
   compactThreshold: number;
   /** Cost per 1k prompt tokens (USD). */
   costPerKPrompt: number;

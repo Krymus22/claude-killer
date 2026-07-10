@@ -837,6 +837,14 @@ export function createCheckpoint(
     fileChanges: fileChanges.slice(-10),
     activeTools,
     contextSummary: summary,
+    // TODO(BH27 LOW 1): this is hardcoded to "" — the checkpoint never
+    // actually captures a snapshot of the project memory (memory.md /
+    // auto-memory.md), so a session restored from this checkpoint loses
+    // the project-memory state at checkpoint time. A proper fix would
+    // call readProjectMemory() (or similar) and embed the (size-capped)
+    // snapshot here. Skipped for now because it requires deciding on a
+    // size budget and a memory module to read from without introducing
+    // a circular import.
     projectMemorySnapshot: "",
   };
 }

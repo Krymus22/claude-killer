@@ -318,6 +318,28 @@ function formatWriteBlockMessage(toolName: string, args: Record<string, unknown>
     ].join("\n");
   }
 
+  // BH11 LOW 1: playtest_subagent is NOT a code-edit tool — telling the IA to
+  // "use aplicar_diff instead" is misleading because aplicar_diff edits a
+  // source file, not a sub-agent. playtest_subagent spawns a sub-agent INSIDE
+  // Roblox Studio that can execute code and modify the game WITHOUT going
+  // through our safety pipeline. This is a backdoor that bypasses ALL safety
+  // checks — there is NO safe alternative via our tools, so we explain that
+  // it's intentionally blocked (not redirect to aplicar_diff).
+  if (toolName === "playtest_subagent") {
+    return [
+      `[MCP_GUARD] BLOCKED: "${toolName}" spawns a sub-agent inside Roblox Studio.`,
+      `This is intentionally blocked — it is NOT a code-edit tool, so`,
+      `"aplicar_diff" is not a substitute. The sub-agent can execute Luau`,
+      `and modify the game WITHOUT going through Bug Hunter, DataGuard,`,
+      `read-before-write, or rollback — a backdoor around every safety check.`,
+      ``,
+      `INSTEAD: Write the test code as a normal Luau script via "aplicar_diff"`,
+      `(which goes through the full safety pipeline), then use the allowed`,
+      `playtest controls (start_stop_play, keyboard_input, etc.) to drive the`,
+      `test from outside Studio. Verify results with script_read (read-only).`,
+    ].join("\n");
+  }
+
   return [
     `[MCP_GUARD] BLOCKED: "${toolName}" is a write operation that bypasses safety.`,
     `Use aplicar_diff instead for code edits (goes through Bug Hunter + DataGuard).`,

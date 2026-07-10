@@ -30,6 +30,7 @@ import { existsSync, openSync, closeSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { platform } from "node:os";
+import { fileURLToPath } from "node:url";
 
 const SEARX_DIR = path.join(os.homedir(), ".claude-killer", "searxng");
 // Windows venv puts python at .venv/Scripts/python.exe
@@ -277,7 +278,16 @@ function isSearxProcessRunning(): boolean {
         shell: false,
       });
       if (result.status !== 0 || !result.stdout) return false;
-      return result.stdout.includes(`:${SEARX_PORT}`);
+      // BH28 LOW 4: `result.stdout.includes(":8888")` matched false positives
+      // like ":88880", ":8888," in arbitrary columns, or a port that contains
+      // 8888 as a substring of a longer number. On Windows netstat output,
+      // listening ports appear as `0.0.0.0:8888` or `[::]:8888` followed by
+      // whitespace. Use a regex with word boundaries to match the EXACT port.
+      // The (?::|\]) before the port handles both IPv4 (`:`) and IPv6 (`]`)
+      // bracketed addresses. \b after the port ensures we don't match longer
+      // numbers like 88880.
+      const portRegex = new RegExp(`(?::|\\]):${SEARX_PORT}\\b`);
+      return portRegex.test(result.stdout);
     } else {
       const lsofResult = spawnSync("lsof", ["-i", `:${SEARX_PORT}`, "-t"], {
         encoding: "utf8",
@@ -342,7 +352,24 @@ export async function isSearxRunning(): Promise<boolean> {
  * Returns null if the script doesn't exist.
  */
 function getDockerSetupScriptPath(): string | null {
-  const projectRoot = process.cwd();
+  // BH28 LOW 2: previously used `process.cwd()` as the project root. If the
+  // user ran the CLI from anywhere other than the project root (e.g., from
+  // their home dir, or a different repo), the script wouldn't be found and
+  // autoStartSearx silently fell back to a manual Docker start. Resolve
+  // relative to THIS module instead — when running from src/ the script is
+  // at ../scripts/, when running from dist/ it's at ../scripts/ (same shape).
+  // Fall back to process.cwd() for dev/test scenarios where the module is
+  // imported from an unexpected location.
+  let projectRoot: string;
+  try {
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    // src/searxManager.ts  -> ../scripts/
+    // dist/searxManager.js -> ../scripts/
+    projectRoot = path.resolve(here, "..");
+  } catch {
+    projectRoot = process.cwd();
+  }
+
   if (platform() === "win32") {
     const ps1 = path.join(projectRoot, "scripts", "setup-searx-docker.ps1");
     return existsSync(ps1) ? ps1 : null;

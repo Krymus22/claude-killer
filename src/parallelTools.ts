@@ -67,7 +67,17 @@ async function executeOne(tool: ParallelToolCall): Promise<ParallelResult> {
 }
 
 export function groupIndependentTools(toolCalls: Array<{ name: string; args: Record<string, unknown> }>): ParallelToolCall[][] {
-  // Group tools that can run in parallel (different tools or different files)
+  // BH20 LOW 5: §10.6 of BUSINESS_RULES.md says same-name+same-file writes
+  // MUST be SEQUENTIAL (not parallel) — they're dependent operations on the
+  // same file (e.g., two edits to file.ts must run in order, or the second
+  // edit could clobber the first). The old code INVERTED this: when it saw
+  // two consecutive same-name+same-file calls, it `continue`d without
+  // flushing the current group — accumulating them in the SAME group, which
+  // executeParallelTools runs concurrently. Now we flush the group whenever
+  // the NEXT call is same-name+same-file, so each dependent write lands in
+  // its own group (groups run sequentially; items inside a group run in
+  // parallel). Different-name or different-file calls are independent and
+  // can share a group.
   const groups: ParallelToolCall[][] = [];
   let currentGroup: ParallelToolCall[] = [];
 
@@ -80,12 +90,28 @@ export function groupIndependentTools(toolCalls: Array<{ name: string; args: Rec
       execute: async () => "", // placeholder
     });
 
-    // If next tool is the same type on same file, keep in same group (sequential)
+    // Look ahead: if the NEXT call is same-name+same-file (a dependent write
+    // on the same file), flush the current group NOW so this call runs in
+    // its own sequential group — do NOT batch it with the next one.
     const next = toolCalls[i + 1];
-    if (next?.name === tc.name && next?.args?.caminho === tc.args?.caminho) {
+    const nextIsDependent =
+      next?.name === tc.name &&
+      next?.args?.caminho === tc.args?.caminho;
+
+    if (nextIsDependent) {
+      // Flush: this call must run BEFORE the next one (same target file).
+      // Pushing them into separate groups guarantees sequential execution.
+      groups.push(currentGroup);
+      currentGroup = [];
       continue;
     }
 
+    // Otherwise, the current group is complete (next is independent or
+    // this is the last call). Flush so the next iteration starts a fresh
+    // group — every independent call lands in its own group of size 1,
+    // which the caller can then choose to re-batch. (Existing tests rely
+    // on this 1-call-per-group shape for different-name / different-file
+    // inputs.)
     if (currentGroup.length > 0) {
       groups.push(currentGroup);
       currentGroup = [];

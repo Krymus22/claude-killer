@@ -39,24 +39,16 @@ function optionalFloat(key: string, fallback: number): number {
 // --- Detect API provider (NVIDIA NIM or ZenMux) -----------------------------
 
 const _provider = detectProvider();
+// Note: getProviderConfig() ALREADY validates that an API key is configured
+// (NVIDIA_API_KEY / NVIDIA_API_KEYS / NVIDIA_API_KEYS_FILE / ZENMUX_API_KEY)
+// and calls process.exit(1) with a helpful message listing ALL allowed env
+// vars if none is set. The redundant `if (!hasNvidiaKey && !hasZenmuxKey)`
+// block that used to live here was dead code (it could only run when
+// getProviderConfig had already exited) AND had a stale error message that
+// omitted NVIDIA_API_KEYS_FILE. Both issues (BH14 LOW 1 + LOW 2) are fixed
+// simply by removing the dead block — getProviderConfig's message is the
+// single source of truth. See apiProvider.ts:getProviderConfig.
 const _providerConfig = getProviderConfig();
-
-// --- Validate: at least one key source must be set -------------------------
-
-const hasNvidiaKey = process.env.NVIDIA_API_KEY?.trim() || process.env.NVIDIA_API_KEYS?.trim() || process.env.NVIDIA_API_KEYS_FILE?.trim();
-const hasZenmuxKey = process.env.ZENMUX_API_KEY?.trim();
-
-if (!hasNvidiaKey && !hasZenmuxKey) {
-  console.error(
-    `\nX  Missing API key configuration.\n` +
-    `   Set ONE of:\n` +
-    `     NVIDIA_API_KEY=nvapi-xxx        (NVIDIA NIM, single key)\n` +
-    `     NVIDIA_API_KEYS=nvapi-x1,...     (NVIDIA NIM, multi-key pool)\n` +
-    `     ZENMUX_API_KEY=sk-ai-v1-xxx     (ZenMux, single key)\n` +
-    `   Optional: API_PROVIDER=nvidia|zenmux (auto-detected if not set)\n`
-  );
-  process.exit(1);
-}
 
 // --- Exported Config --------------------------------------------------------
 
@@ -85,8 +77,17 @@ export const config = {
   /** Base URL for the API endpoint (provider-specific). */
   nvidiaBaseUrl: _providerConfig.baseUrl,
 
-  /** Model identifier for the model on NVIDIA NIM. */
-  model: process.env.MODEL ?? "moonshotai/kimi-k2.6",
+  /**
+   * Model identifier for the model on NVIDIA NIM.
+   *
+   * FIX-LOW-1 (BH14 LOW 5): use `?.trim() || default` so that an explicitly
+   * empty or whitespace-only MODEL env var (e.g. `MODEL=""` or `MODEL=" "`)
+   * falls back to the default instead of producing a broken `config.model`
+   * (empty string) that would later cause API 400 errors and break
+   * modelRegistry lookups. The bare `??` operator only catches `undefined`/
+   * `null`, NOT empty strings, so `MODEL=""` slipped through.
+   */
+  model: process.env.MODEL?.trim() || "moonshotai/kimi-k2.6",
 
   /** Temperature for sampling (0.0-2.0). Default: 1.0 (NVIDIA recommended). */
   temperature: optionalFloat("TEMPERATURE", 1.0),
@@ -97,20 +98,22 @@ export const config = {
   /**
    * Max tokens per response.
    *
-   * BUG FIX: previously hardcoded to 16384, which capped reasoning models
-   * (deepseek-r1, glm-5.2) at 16k even though they support 32k. Reasoning
-   * content is generated BEFORE visible content, so a 16k cap left no room
-   * for the actual response after reasoning ate the budget. Now we default
-   * to the active model's maxOutputTokens from the registry (capped at the
-   * model limit by apiClient via Math.min).
+   * FIX-LOW-1 (BH14 LOW 3) — updated JSDoc to match actual behavior:
+   *   - Default: 131072 (128k). This is intentionally higher than any
+   *     model's maxOutputTokens in the registry so the registry is the
+   *     real cap, NOT this config value.
+   *   - The ACTUAL limit sent to the API is enforced by apiClient.ts via
+   *     `Math.min(config.maxTokens, getModelMaxOutputTokens(config.model))`,
+   *     so if you use kimi-k2.6 (8k max) it sends 8k; if you use GLM 5.2
+   *     (32k max) it sends 32k.
+   *   - Historically this was hardcoded to 16384, which capped reasoning
+   *     models at 16k even though they support 32k (reasoning eats the
+   *     budget before visible content is produced). Bug Hunter rodada 2
+   *     changed it to `getModelMaxOutputTokens(defaultModel)` = 8192, but
+   *     that capped GLM 5.2 at 8k via the Math.min. The 131072 default
+   *     fixes both regressions.
+   *   - Override via the MAX_TOKENS env var (rarely needed).
    */
-  // Default: very high (128k). The ACTUAL limit is enforced by apiClient.ts:
-  //   max_tokens: Math.min(config.maxTokens, getModelMaxOutputTokens(config.model))
-  // So if you use kimi-k2.6 (8k max), it sends 8k. If you use GLM 5.2 (32k max),
-  // it sends 32k. The config default just needs to be high enough to NOT cap
-  // models that support more.
-  // Bug hunter rodada 2 mudou pra getModelMaxOutputTokens(defaultModel) = 8192,
-  // mas isso cortava GLM 5.2 em 8k (Math.min(8192, 32768) = 8192). Corrigido.
   maxTokens: optionalInt(
     "MAX_TOKENS",
     131072, // 128k — higher than any model's maxOutputTokens, so the registry is the real cap
@@ -148,9 +151,11 @@ export const config = {
   // BUG FIX: previously hardcoded to 128000. Now we look up the actual
   // context window for the active model from MODEL_REGISTRY. The user can
   // still override via CONTEXT_WINDOW_TOKENS env var.
+  // FIX-LOW-1 (BH14 LOW 5): apply the same `?.trim() || default` defensive
+  // fallback as `config.model` so MODEL="" doesn't break the registry lookup.
   contextWindowTokens: optionalInt(
     "CONTEXT_WINDOW_TOKENS",
-    getModelContextWindow(process.env.MODEL ?? "moonshotai/kimi-k2.6"),
+    getModelContextWindow(process.env.MODEL?.trim() || "moonshotai/kimi-k2.6"),
   ),
 
   /** Threshold (0.0-1.0) of context window that triggers auto-compact.
@@ -166,15 +171,19 @@ export const config = {
   /** Approximate USD cost per 1k prompt tokens (estimate only). */
   // BUG FIX: previously defaulted to 0. Now we look up the actual cost
   // for the active model from MODEL_REGISTRY. The user can still override.
+  // FIX-LOW-1 (BH14 LOW 5): same defensive `?.trim() || default` as
+  // `config.model` so MODEL="" doesn't break the cost lookup.
   costPerKPrompt: optionalFloat(
     "COST_PER_K_PROMPT",
-    getModelCost(process.env.MODEL ?? "moonshotai/kimi-k2.6").prompt / 1000,
+    getModelCost(process.env.MODEL?.trim() || "moonshotai/kimi-k2.6").prompt / 1000,
   ),
 
     /** Approximate USD cost per 1k completion tokens. */
+  // FIX-LOW-1 (BH14 LOW 5): same defensive `?.trim() || default` as
+  // `config.model` so MODEL="" doesn't break the cost lookup.
   costPerKCompletion: optionalFloat(
     "COST_PER_K_COMPLETION",
-    getModelCost(process.env.MODEL ?? "moonshotai/kimi-k2.6").completion / 1000,
+    getModelCost(process.env.MODEL?.trim() || "moonshotai/kimi-k2.6").completion / 1000,
   ),
 
   /** When true, shows a diff preview and asks for user confirmation before applying file changes. */

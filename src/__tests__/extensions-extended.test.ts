@@ -277,7 +277,12 @@ describe("extensions (extended) - getActiveMCPServers", () => {
 });
 
 describe("extensions (extended) - shutdownMCPServers", () => {
-  it("chama kill() em todos os child processes e envia notificação cancelled", async () => {
+  it("chama kill() em todos os child processes e NÃO envia notificação cancelled (BH11 LOW 2)", async () => {
+    // BH11 LOW 2: shutdownMCPServers used to send a malformed
+    // `notifications/cancelled` JSON-RPC frame (missing required params,
+    // wrong method type). The fix removed that frame — shutdown now just
+    // kills the process. This test asserts kill() is called AND no
+    // cancelled frame is written.
     writeMcpPlugin(globalPluginsDir, "p", "srv", "echo");
     const child = withAutoReply(fakeChild());
     spawnMock.mockImplementation(() => child);
@@ -287,10 +292,10 @@ describe("extensions (extended) - shutdownMCPServers", () => {
     shutdownMCPServers();
     // kill() foi chamado
     expect(child.kill).toHaveBeenCalled();
-    // notificação cancelled foi escrita no stdin
+    // BH11 LOW 2: nenhuma notificação cancelled deve ser escrita no stdin.
     const writes = (child.stdin.write as any).mock.calls.map((c: any) => c[0]);
     const cancelledWrite = writes.find((w: string) => w.includes("notifications/cancelled"));
-    expect(cancelledWrite).toBeDefined();
+    expect(cancelledWrite).toBeUndefined();
   });
 
   it("é idempotente: múltiplos shutdowns não lançam erro", async () => {

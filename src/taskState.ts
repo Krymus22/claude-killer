@@ -124,6 +124,14 @@ export function updateTaskState(patch: Partial<TaskState>): TaskState {
 /**
  * Append a single item to a specific section. Useful for incremental
  * updates like "I just finished X" or "Found a bug in foo.ts:42".
+ *
+ * BH15 LOW 2 LIMITATION: the duplicate check below uses exact-string
+ * equality (`list.includes(item)`). This means slightly-different
+ * phrasings of the same item (e.g. "Fix bug in foo.ts:42" vs
+ * "Fix bug in foo.ts:42 (re-opened)") will both be stored, and
+ * callers that want stricter semantic dedup must do it themselves
+ * before calling. A fuzzy/normalized dedup is out of scope for a LOW
+ * bug — the exact-string check is preserved here for predictability.
  */
 export function appendTaskStateItem(
   section: "done" | "todo" | "decisions" | "bugs" | "dependencies",
@@ -139,10 +147,33 @@ export function appendTaskStateItem(
 
 /**
  * Move an item from the pending list to `done`. Best-effort: matches by substring.
+ *
+ * BH15 LOW 1 FIX: previously, when no TASK_STATE.md existed, this called
+ * `updateTaskState({})` which would silently create a brand-new (empty)
+ * TASK_STATE.md file. That was surprising: the user asked to mark an
+ * item done, and the side-effect was a new state file appearing on disk.
+ * Now we guard: if no state file exists, we return a default (in-memory)
+ * TaskState without writing anything to disk.
  */
 export function markTaskItemDone(itemSubstring: string): TaskState {
   const current = readTaskState();
-  if (!current) return updateTaskState({});
+  if (!current) {
+    // No state file exists — return a default in-memory state without
+    // creating one. The caller can still inspect the returned object,
+    // but no file is written to disk.
+    const now = new Date().toISOString();
+    return {
+      title: DEFAULT_TASK_TITLE,
+      updatedAt: now,
+      startedAt: now,
+      done: [],
+      todo: [],
+      decisions: [],
+      bugs: [],
+      dependencies: [],
+      notes: "",
+    };
+  }
   const todo = [...(current.todo ?? [])];
   const done = [...(current.done ?? [])];
   const idx = todo.findIndex((t) => t.toLowerCase().includes(itemSubstring.toLowerCase()));
@@ -233,8 +264,17 @@ function parseTaskStateMarkdown(raw: string): TaskState | null {
 
 function extractListSection(raw: string, header: string): string[] {
   const items: string[] = [];
-  // Match the section header, then capture everything until the next ## header
-  const sectionRegex = new RegExp(`${escapeRegex(header)}\\s*\\n([\\s\\S]*?)(?=\\n## |$)`);
+  // Match the section header, then capture everything until the next ## header.
+  //
+  // BH15 LOW 3 FIX: anchor the header to the start of a line with
+  // `(?:^|\n)` so that a `## Done` substring appearing in the middle of
+  // a Notes paragraph (or inside a code block) is NOT mistaken for the
+  // real section header. The previous unanchored regex matched the
+  // header anywhere in the string, which could yield false-positive
+  // section bodies. We avoid the JS `m` flag here because it would also
+  // change the meaning of `$` in the trailing lookahead `(?=\n## |$)`,
+  // causing the lazy body capture to stop at every line end.
+  const sectionRegex = new RegExp(`(?:^|\\n)${escapeRegex(header)}\\s*\\n([\\s\\S]*?)(?=\\n## |$)`);
   const match = sectionRegex.exec(raw);
   if (!match) return items;
   const body = match[1];

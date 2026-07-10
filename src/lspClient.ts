@@ -27,6 +27,7 @@
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import * as url from "node:url";
 import * as log from "./logger.js";
 
 // --- Types -------------------------------------------------------------------
@@ -77,6 +78,7 @@ function envInt(key: string, fallback: number): number {
 }
 
 const LANG_TYPESCRIPT = "typescript";
+const LANG_TYPESCRIPT_REACT = "typescriptreact";
 const LANG_JAVASCRIPT = "javascript";
 
 function detectTsserverPath(): string | null {
@@ -160,7 +162,10 @@ function startLspServer(language: string): ServerEntry | null {
 
 /** Resolve language -> { command, args }, or null if language is unsupported / server missing. */
 function resolveLspCommand(cfg: LspServerConfig, language: string): { command: string; args: string[] } | null {
-  if (language === LANG_TYPESCRIPT || language === LANG_JAVASCRIPT) {
+  // BH19 LOW 2: .tsx files use the same typescript-language-server but require
+  // the "typescriptreact" languageId in didOpen. We route them through the
+  // tsserver command (the server handles both TS and TSX).
+  if (language === LANG_TYPESCRIPT || language === LANG_TYPESCRIPT_REACT || language === LANG_JAVASCRIPT) {
     if (!cfg.tsserverPath) return null;
     return { command: "npx", args: ["--yes", "typescript-language-server", "--stdio"] };
   }
@@ -379,7 +384,13 @@ export async function analyzeFileWithLsp(filePath: string): Promise<LspAnalysisR
 }
 
 function detectLanguageFromExt(ext: string): string | null {
-  if (ext === ".ts" || ext === ".tsx") return LANG_TYPESCRIPT;
+  // BH19 LOW 2: .tsx must map to "typescriptreact" (the LSP languageId for
+  // TSX), not "typescript". typescript-language-server uses the languageId
+  // in textDocument/didOpen to select the correct internal parser (TS vs TSX).
+  // Sending "typescript" for a .tsx file makes the server treat JSX syntax as
+  // parse errors.
+  if (ext === ".ts") return LANG_TYPESCRIPT;
+  if (ext === ".tsx") return LANG_TYPESCRIPT_REACT;
   if (ext === ".js" || ext === ".jsx" || ext === ".mjs" || ext === ".cjs") return "javascript";
   if (ext === ".py") return "python";
   return null;
@@ -418,9 +429,15 @@ async function waitForServerInit(entry: ServerEntry): Promise<void> {
 function notifyDidOpen(entry: ServerEntry, language: string, filePath: string): void {
   const absPath = path.resolve(filePath);
   const content = fs.readFileSync(absPath, "utf8");
+  // BH19 LOW 3: `file://${absPath}` is invalid on Windows (produces
+  // "file://C:\Users\..." with a drive letter after the authority — LSP
+  // servers reject this and never send diagnostics for the file). Use
+  // url.pathToFileURL() which produces the spec-correct "file:///C:/Users/..."
+  // form on Windows and "file:///tmp/..." on POSIX.
+  const uri = url.pathToFileURL(absPath).toString();
   sendLspNotification(entry, "textDocument/didOpen", {
     textDocument: {
-      uri: `file://${absPath}`,
+      uri,
       languageId: language,
       version: 1,
       text: content,
@@ -450,7 +467,9 @@ export async function shutdownLspServers(): Promise<void> {
 export function isLspAvailable(language: string): boolean {
   const cfg = getLspConfig();
   if (!cfg.enabled) return false;
-  if (language === LANG_TYPESCRIPT || language === "javascript") return cfg.tsserverPath !== null;
+  // BH19 LOW 2: "typescriptreact" (used for .tsx) is served by the same
+  // tsserver binary as "typescript"/"javascript".
+  if (language === LANG_TYPESCRIPT || language === LANG_TYPESCRIPT_REACT || language === "javascript") return cfg.tsserverPath !== null;
   if (language === "python") return cfg.pylspPath !== null;
   return false;
 }

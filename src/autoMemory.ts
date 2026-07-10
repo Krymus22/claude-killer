@@ -36,11 +36,19 @@ const MAX_BYTES = 25 * 1024; // 25KB
 
 /**
  * Ensure the auto-memory file exists (creates with header if not).
+ *
+ * BH27 LOW 2 FIX: the file and its parent directory are created with
+ * restrictive permissions (0o600 for the file, 0o700 for the dir) so
+ * that other users on the system cannot read the user's auto-memory
+ * notes (which may contain project-specific or personal context).
+ * Without this, writeFileSync/mkdirSync would use the process umask,
+ * which on many systems defaults to 0o022 — producing world-readable
+ * files (0o644 / 0o755).
  */
 export function ensureAutoMemoryFile(): void {
   const dir = path.dirname(AUTO_MEMORY_FILE);
   if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   }
   if (!fs.existsSync(AUTO_MEMORY_FILE)) {
     const header = `# Auto Memory — Notas da IA\n\n` +
@@ -48,7 +56,7 @@ export function ensureAutoMemoryFile(): void {
       `com correções do usuário ou descobre padrões do projeto.\n\n` +
       `Carregado no início de cada sessão (primeiras ${MAX_LINES} linhas).\n\n` +
       `---\n\n`;
-    fs.writeFileSync(AUTO_MEMORY_FILE, header, "utf8");
+    fs.writeFileSync(AUTO_MEMORY_FILE, header, { encoding: "utf8", mode: 0o600 });
   }
 }
 
@@ -76,13 +84,19 @@ export function readAutoMemory(): string {
 /**
  * Append a learning to the auto-memory file.
  * Called when the IA detects it should remember something.
+ *
+ * BH27 LOW 2 FIX: the append uses mode 0o600 so the file stays
+ * owner-read/write-only. (appendFileSync does NOT change the mode of
+ * an existing file, but if the file does not yet exist it is created
+ * with the given mode. ensureAutoMemoryFile() above also creates with
+ * 0o600, so the two paths are consistent.)
  */
 export function appendAutoMemory(entry: string): void {
   try {
     ensureAutoMemoryFile();
     const timestamp = new Date().toISOString().split("T")[0];
     const entryWithDate = `\n## ${timestamp}\n\n${entry.trim()}\n`;
-    fs.appendFileSync(AUTO_MEMORY_FILE, entryWithDate, "utf8");
+    fs.appendFileSync(AUTO_MEMORY_FILE, entryWithDate, { encoding: "utf8", mode: 0o600 });
   } catch (err) {
     console.error(`[AUTO_MEMORY] Failed to write: ${(err as Error).message}`);
   }

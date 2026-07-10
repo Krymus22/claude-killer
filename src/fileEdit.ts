@@ -318,8 +318,12 @@ export async function editFile(
   // can't restore the file if the write fails (disk full, permissions, etc.).
   // BUG FIX: previously this was missing — only the conditional .bak above was
   // saved (and only when options.backup was set, which the agent never sets).
+  // BH8 LOW 2: previously used `original.length > 0` which skipped empty files
+  // (0 bytes) — they existed on disk but got no rollback backup, so
+  // desfazer_edicao couldn't restore them. Use fs.existsSync so empty-but-
+  // existing files still get a backup.
   let savedRollbackBackup = false;
-  if (original.length > 0) {
+  if (fs.existsSync(resolved)) {
     try {
       const backup = saveBackup(resolved, original, "editar_arquivo");
       savedRollbackBackup = !!backup;
@@ -386,7 +390,9 @@ export async function editFile(
 
     // Try to restore the original content from the rollbackStore backup
     // so the file is NOT left in a truncated/corrupted state.
-    if (savedRollbackBackup && original.length > 0) {
+    // BH8 LOW 2: use fs.existsSync (rather than `original.length > 0`) so
+    // empty files that existed before the write also get restored on failure.
+    if (savedRollbackBackup && fs.existsSync(resolved)) {
       try {
         // restoreBackup reads the latest snapshot from .rollback/ and writes
         // it back to the original path — exactly what we need here.
@@ -403,9 +409,10 @@ export async function editFile(
           log.error(`fileEdit: FAILED to restore original after write failure: ${(restoreErr as Error).message}`);
         }
       }
-    } else if (original.length > 0) {
-      // No rollback backup was saved, but we still have the original in memory
-      // — try to restore it directly so the file isn't left truncated.
+    } else if (fs.existsSync(resolved)) {
+      // No rollback backup was saved, but the file still exists on disk —
+      // try to restore the in-memory original so the file isn't left
+      // truncated. (BH8 LOW 2: also covers empty files that existed before.)
       try {
         // SECURITY: mode 0o600 — restrictive perms on restored file (CWE-377).
         await fs.promises.writeFile(resolved, original, { encoding: "utf8", mode: 0o600 });

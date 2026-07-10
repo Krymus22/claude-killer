@@ -119,7 +119,13 @@ async function getLanguage(grammarName: string): Promise<any> {
 
 function detectLanguage(filePath: string): string {
   const ext = path.extname(filePath).toLowerCase();
-  return EXT_TO_GRAMMAR[ext] ?? "tree-sitter-typescript";
+  // BH19 LOW 1: previously defaulted unknown extensions to
+  // "tree-sitter-typescript", which silently parsed .xyz / .md / .txt / etc.
+  // as TypeScript and reported bogus symbols. Return "unknown" so callers
+  // can decide (parseSource falls through to the regex-based fallback, which
+  // uses TypeScript patterns by default for backward-compat symbol extraction
+  // but records language="unknown" in the result).
+  return EXT_TO_GRAMMAR[ext] ?? "unknown";
 }
 
 // --- Symbol Extraction ------------------------------------------------------
@@ -490,7 +496,20 @@ async function parseDirectory(dirPath: string): Promise<ParseResult> {
   const allImports: ImportInfo[] = [];
   const allExports: string[] = [];
 
-  for (const file of files.slice(0, 50)) {
+  // BH19 LOW 4: previously silently truncated to 50 files with no warning —
+  // a directory with 200 files would parse only the first 50 and the user
+  // would never know. Log a warning so the truncation is visible. Also
+  // dedup the file list via Set as a defensive measure (readdirSync shouldn't
+  // return duplicates, but case-insensitive filesystems + symlinks could).
+  const uniqueFiles = [...new Set(files)];
+  const MAX_FILES = 50;
+  if (uniqueFiles.length > MAX_FILES) {
+    log.warn(
+      `[lspAst] parseDirectory: ${uniqueFiles.length} files in "${dirPath}" — only the first ${MAX_FILES} will be parsed (truncating).`
+    );
+  }
+
+  for (const file of uniqueFiles.slice(0, MAX_FILES)) {
     const result = await parseFile(path.join(dirPath, file));
     allSymbols.push(...result.symbols.map((s) => ({ ...s, docstring: `${file}:${s.line}` })));
     allImports.push(...result.imports);

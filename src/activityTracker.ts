@@ -249,7 +249,7 @@ function formatShortLabel(entry: ActivityEntry): string {
   switch (entry.category) {
     case "thinking":     return "pensando";
     case "streaming":    return "streaming";
-    case "tool":         return entry.label.split(" ")[0] ?? "tool";
+    case "tool":         return entry.label.split(" ")[0] || "tool";
     case "subagent":     return "sub-agente";
     case "quality_gate": return "quality gate";
     case "compacting":   return "compactando";

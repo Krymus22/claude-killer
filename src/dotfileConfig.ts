@@ -63,8 +63,23 @@ export interface TelemetryConfig {
 
 let cachedConfig: DotfileConfig | null = null;
 
+/**
+ * Deep-clone a DotfileConfig so callers can't mutate the cache by accident.
+ *
+ * BH28 LOW 1: previously `loadConfig()` returned `cachedConfig` BY REFERENCE.
+ * A caller doing `const cfg = loadConfig(); cfg.theme!.primary = "red";`
+ * would mutate the cached object — every subsequent loadConfig() returned the
+ * mutated state, even though the file on disk still had the old value. This
+ * silently corrupted the cache for the rest of the process. We now return a
+ * deep copy on every call. JSON round-trip is the simplest deep-clone for
+ * our plain-data config shape (no functions, no Dates, no class instances).
+ */
+function deepCloneConfig(config: DotfileConfig): DotfileConfig {
+  return JSON.parse(JSON.stringify(config)) as DotfileConfig;
+}
+
 export function loadConfig(): DotfileConfig {
-  if (cachedConfig) return cachedConfig;
+  if (cachedConfig) return deepCloneConfig(cachedConfig);
 
   try {
     if (fs.existsSync(CONFIG_FILE)) {
@@ -78,12 +93,12 @@ export function loadConfig(): DotfileConfig {
       // file.
       cachedConfig = JSON.parse(raw) as DotfileConfig;
       log.debug(`Loaded config from ${CONFIG_FILE}`);
-      return cachedConfig;
+      return deepCloneConfig(cachedConfig);
     }
     // File doesn't exist — cache the empty object. Cache invalidation here
     // is handled by saveConfig()/updateConfig() writing through the cache.
     cachedConfig = {};
-    return cachedConfig;
+    return deepCloneConfig(cachedConfig);
   } catch (err) {
     log.error(`Failed to load config: ${(err as Error).message}`);
     // Don't cache — let the next call retry.

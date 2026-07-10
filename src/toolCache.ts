@@ -162,6 +162,18 @@ export function shouldCacheResult(toolName: string): boolean {
   return cacheableTools.includes(toolName);
 }
 
+/**
+ * Cache-or-execute helper.
+ *
+ * BH20 LOW 1 NOTE: this helper is intended for SYNCHRONOUS, test-only usage.
+ * It does NOT support async functions: when `fn` is async, `fn()` returns a
+ * Promise which is stored as a string and re-cast on retrieval — the underlying
+ * work has already started and cannot be cancelled, and the cached "value" is
+ * not the resolved result but the Promise object itself. For async callers,
+ * call `cache.get`/`cache.set` directly and `await` the work. Fixing this
+ * generically (e.g. by detecting thenables) is complex and out of scope for a
+ * LOW bug; this helper is retained only for the small synchronous test path.
+ */
 export function getCachedOrExecute<T>(
   cache: ToolCache,
   toolName: string,

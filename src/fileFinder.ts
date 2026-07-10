@@ -371,9 +371,15 @@ export function copyToModeTools(sourcePath: string, modeName: string): string | 
 
   // Defense-in-depth: verify the resolved toolsDir didn't escape the
   // modes/ root (e.g. via a future bypass of isSafeModeName).
+  // BH18 LOW 2: the previous `&& resolvedTools !== modesRoot` clause was
+  // unreachable dead code — `toolsDir` is always
+  // `.../modes/<modeName>/tools`, and `isSafeModeName` rejects empty
+  // modeName, so `resolvedTools` can never equal `modesRoot`
+  // (`.../modes`). The clause only weakened the check; removing it makes
+  // the guard strictly stricter.
   const modesRoot = path.join(home, ".claude-killer", "modes");
   const resolvedTools = path.resolve(toolsDir);
-  if (!resolvedTools.startsWith(modesRoot + path.sep) && resolvedTools !== modesRoot) {
+  if (!resolvedTools.startsWith(modesRoot + path.sep)) {
     log.error(`[FILE_FINDER] copyToModeTools: resolved toolsDir "${resolvedTools}" escapes modes root`);
     return null;
   }

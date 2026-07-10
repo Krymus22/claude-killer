@@ -1985,7 +1985,13 @@ export function App() {
   }, [input, showAutocomplete, trimmed, hasSpace]);
 
   // -- Discover extensions on mount ------------------------------------
-  useMemo(() => {
+  // BH21 LOW 4: this is a SIDE EFFECT (async import + discoverExtensions
+  // mutation), so it MUST run inside useEffect, not useMemo. useMemo is for
+  // pure computation with a return value; using it for side effects is a
+  // React anti-pattern (the body may run more than once in StrictMode/
+  // concurrent rendering, and React may drop the result without running
+  // cleanup). useEffect with [] deps runs exactly once after mount.
+  useEffect(() => {
     // Initialize external tools registry BEFORE discovering extensions
     // so the Hub can see all available tools (Roblox, Python, etc.)
     import("../externalTools.js").then((mod) => {
@@ -2105,6 +2111,15 @@ export function App() {
         // Update tok/s every 10 tokens — based on THIS stream's token count
         // and THIS stream's elapsed time only (both reset on onStreamStart).
         if (tokenCount % 10 === 0 && streamStartTime > 0) {
+          // BH21 LOW 5: skip the tok/s update entirely on empty keep-alive
+          // tokens. Without this guard, setTokensPerSecond fires on every
+          // multiple-of-10 boundary even when the incoming token is empty
+          // (e.g. when tokenCount is already 0, % 10 === 0 is true and
+          // setTokensPerSecond(0) runs on every keep-alive chunk — an
+          // unthrottled state update that triggers Ink re-renders for no
+          // reason). Returning here is safe: empty tokens don't add content,
+          // so the throttled-flush logic below has nothing to flush.
+          if (token.length === 0) return;
           const elapsed = (Date.now() - streamStartTime) / 1000;
           if (elapsed > 0) setTokensPerSecond(Math.round(tokenCount / elapsed * 10) / 10);
         }
@@ -2753,6 +2768,21 @@ export function App() {
         syncPlan();
       }
     },
+    // BH21 LOW 6: deps array is intentionally minimal. handleSubmit reads many
+    // refs and state setters (setMessages, setStatus, setLastUsage, …), the
+    // isProcessing ref, history/planExecutor singletons, config, syncPlan,
+    // syncTodos, drainSidequests, etc. Listing every value would make the
+    // callback recreate on every render — defeating the purpose of useCallback
+    // (stable identity for the TextInput's onSubmit prop, which otherwise
+    // re-subscribes on every render and steals focus during streaming).
+    //
+    // The listed deps are values whose STALE closure would cause a USER-VISIBLE
+    // bug (autocomplete navigation needs the latest acMatches/acIndex/hasSpace;
+    // exit needs to be the latest bound function). All other reads use either
+    // refs (always-current .current) or state SETTER functions (React
+    // guarantees stable identity). ESLint's exhaustive-deps rule is disabled
+    // for this line — see eslint-disable comment below.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [exit, syncTodos, showAutocomplete, acMatches, acIndex, hasSpace, drainSidequests]
   );
 

@@ -39,21 +39,42 @@ export function detectLanguage(): Language {
     return cachedLang;
   }
 
-  // 2. Check LANG/LC_ALL/LANGUAGE env vars (Unix + our Windows setup)
-  const candidates = [
-    process.env.LANG,
-    process.env.LC_ALL,
-    process.env.LC_MESSAGES,
-    process.env.LANGUAGE,
-  ].filter(Boolean) as string[];
+  // 2. Check LANG/LC_ALL/LANGUAGE env vars (Unix + our Windows setup).
+  //
+  // BH20 LOW 4 FIX: LANGUAGE on Linux/POSIX systems is a colon-separated
+  // priority list (e.g. "pt_BR:pt:en" means "prefer Brazilian Portuguese,
+  // then Portuguese, then English"). The previous code used String.includes
+  // on the WHOLE candidate string, so "fr_FR:pt_BR:en" would match pt-BR
+  // via includes("pt_br") even though "fr_FR" should win as the first
+  // priority — and "en_US:pt-BR" would match pt-BR even though the user
+  // explicitly listed en first. We now expand LANGUAGE into its constituent
+  // parts (each treated as its own candidate, in priority order) AND match
+  // each locale by its prefix only (after stripping the optional ".ENCODING"
+  // suffix), so the first part of the highest-priority env var decides.
+  const candidates: string[] = [];
+  if (process.env.LANG) candidates.push(process.env.LANG);
+  if (process.env.LC_ALL) candidates.push(process.env.LC_ALL);
+  if (process.env.LC_MESSAGES) candidates.push(process.env.LC_MESSAGES);
+  if (process.env.LANGUAGE) {
+    // LANGUAGE may be a `:`-separated priority list (per POSIX gettext);
+    // expand each non-empty part as its own candidate so we honor the order.
+    for (const part of process.env.LANGUAGE.split(":")) {
+      if (part) candidates.push(part);
+    }
+  }
 
   for (const c of candidates) {
     const lower = c.toLowerCase();
-    if (lower.includes("pt_br") || lower.includes("pt-br") || lower.startsWith("pt")) {
+    // Strip the optional ".encoding" suffix (e.g. "pt_BR.UTF-8" → "pt_br")
+    // and the optional "@modifier" suffix (e.g. "pt_BR@euro" → "pt_br") so
+    // the prefix checks are not fooled by substrings that appear only in
+    // the encoding/modifier portion.
+    const localePart = lower.split(".")[0]!.split("@")[0]!;
+    if (localePart.startsWith("pt")) {
       cachedLang = "pt-BR";
       return cachedLang;
     }
-    if (lower.startsWith("en")) {
+    if (localePart.startsWith("en")) {
       cachedLang = "en";
       return cachedLang;
     }
@@ -162,12 +183,16 @@ export const TRANSLATIONS: Record<string, Record<Language, string>> = {
     en: "[OK] Command completed with no output.",
   },
   "tool.command_timeout": {
-    "pt-BR": (ms: number, out: string) => `[ERROR] Comando excedeu timeout de ${ms}ms e foi morto.\n${out}`,
-    en: (ms: number, out: string) => `[ERROR] Command exceeded timeout of ${ms}ms and was killed.\n${out}`,
+    // BH8 LOW 3 / §14.4: contract format `[TIMEOUT after Xms]` (machine-parseable,
+    // identical across languages — used by the agent to recognize timeout errors).
+    "pt-BR": (ms: number, out: string) => `[TIMEOUT after ${ms}ms]\n${out}`,
+    en: (ms: number, out: string) => `[TIMEOUT after ${ms}ms]\n${out}`,
   } as any,
   "tool.command_failed": {
-    "pt-BR": (code: number, out: string) => `[ERROR] Comando falhou (exit=${code}):\n${out}`,
-    en: (code: number, out: string) => `[ERROR] Command failed (exit=${code}):\n${out}`,
+    // BH8 LOW 3 / §14.4: contract format `[ERROR] Command failed with code N`
+    // (machine-parseable, identical across languages).
+    "pt-BR": (code: number, out: string) => `[ERROR] Command failed with code ${code}\n${out}`,
+    en: (code: number, out: string) => `[ERROR] Command failed with code ${code}\n${out}`,
   } as any,
   "tool.command_start_failed": {
     "pt-BR": (e: string) => `[ERROR] Falha ao iniciar comando: ${e}`,

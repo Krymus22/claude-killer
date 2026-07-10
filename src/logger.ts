@@ -272,9 +272,12 @@ function parseBlockquote(lines: string[], startIdx: number): { body: string; nex
 
 function applyInlineFormatting(text: string): string {
   let output = text;
+  // BH24 LOW 3: process inline code BEFORE bold/italic so backticked content
+  // takes precedence per §8.6 (code spans should not have their interior
+  // re-interpreted as bold/italic markdown).
+  output = output.replaceAll(/`([^`\n]+)`/g, (_, c) => chalk.hex("#0EA5E9").bgHex("#1F2937")(` ${c} `));
   output = output.replaceAll(/\*\*(.+?)\*\*/g, (_, c) => chalk.bold(c));
   output = output.replaceAll(/(?<!\*)\*(?!\s)([^*\n]+?)\*(?!\*)/g, (_, c) => chalk.italic(c));
-  output = output.replaceAll(/`([^`\n]+)`/g, (_, c) => chalk.hex("#0EA5E9").bgHex("#1F2937")(` ${c} `));
   output = output.replaceAll(/\[([^\]]+)\]\(([^)]+)\)/g, (_, txt, url) =>
     chalk.hex("#0EA5E9").underline(txt) + chalk.hex("#6B7280")(` (${url})`)
   );
@@ -448,11 +451,14 @@ export function statusBar(input: StatusBarInput): void {
   } = input;
 
   const pct = contextWindow > 0 ? totalTokens / contextWindow : 0;
-  // BUG FIX: clamp fillCount/emptyCount to [0,40] — when totalTokens exceeds
+  // BH24 LOW 1: §8.3 / §17.2.8 mandate a 10-segment bar (each segment = 10%
+  // of the context window). The previous implementation used 40 segments,
+  // which diverged from the spec and from the TUI StatusBar (10 segments).
+  // BUG FIX: clamp fillCount/emptyCount to [0,10] — when totalTokens exceeds
   // contextWindow (pct > 1) the unclamped emptyCount becomes negative and
   // String.prototype.repeat(-N) throws RangeError, crashing the status bar.
-  const fillCount = Math.min(40, Math.max(0, Math.round(pct * 40)));
-  const emptyCount = Math.max(0, 40 - fillCount);
+  const fillCount = Math.min(10, Math.max(0, Math.round(pct * 10)));
+  const emptyCount = Math.max(0, 10 - fillCount);
 
   let color = "#34D399"; // green
   if (pct >= compactThreshold) color = "#F87171";      // red
@@ -488,9 +494,9 @@ export function statusBar(input: StatusBarInput): void {
     ` . ${chalk.hex("#6B7280")(ioDisplay)}` +
     costStr;
 
-  const line2 = `  +${"-".repeat(40)}+\n` +
+  const line2 = `  +${"-".repeat(10)}+\n` +
     `  |${bar}|\n` +
-    `  +${"-".repeat(40)}+`;
+    `  +${"-".repeat(10)}+`;
 
   if (pct >= compactThreshold) {
     console.log(c.warning(`!  Context ${Math.round(pct * 100)}% cheio - compactação recomendada.`));

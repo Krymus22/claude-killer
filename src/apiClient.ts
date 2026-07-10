@@ -539,6 +539,13 @@ interface StreamState {
   /** Repetition detection: tracks recent chunks to detect loops */
   recentChunks: string[];
   repetitionDetected: boolean;
+  /** Last totalContent.length when repetition was checked. Used by the
+   * accumulation-based trigger (FIX-LOW-1 / BH1 LOW 10) so we check every
+   * ~500 chars regardless of chunk size. The old `totalContent.length % 500`
+   * modulo check was flaky for small chunks (it could skip a boundary when
+   * the delta straddled a 500-char mark without landing inside it) and was
+   * always-true for chunks ≥500 chars. */
+  lastRepetitionCheckLength: number;
   /**
    * <think> tag filtering (real-time).
    * Some models (Kimi K2.6) embed reasoning as <think>...</think> tags
@@ -562,6 +569,7 @@ function createStreamState(): StreamState {
     completionTokens: 0,
     recentChunks: [],
     repetitionDetected: false,
+    lastRepetitionCheckLength: 0,
     inThinkBlock: false,
     pendingTagBuffer: "",
   };
@@ -589,7 +597,12 @@ function detectRepetition(state: StreamState): boolean {
 
   // Check the last 3000 chars for repetition
   const recent = content.slice(-3000);
-
+  // TODO(BH1 LOW 11): sparse sampling with `start += Math.max(1, len)` can miss
+  // non-aligned phrases (a phrase that begins between two sampled offsets is
+  // never inspected). A more robust detector would use a suffix-array or rolling
+  // hash approach to consider ALL candidate phrases. For now we accept the
+  // false-negative risk — the existing threshold (25–100 chars, 8+ reps) is
+  // conservative and the sparse sampling still catches the common loops.
   // Try to find a phrase (25-100 chars) that repeats 8+ times.
   // Start at 25 chars — shorter phrases are too often markdown fragments.
   for (let len = 25; len <= 100; len += 5) {
@@ -834,14 +847,27 @@ function processContentChunk(
     onThinking?.();
   }
 
-  // REPETITION DETECTION: check every ~500 chars if the model is looping
-  if (state.totalContent.length > 200 && state.totalContent.length % 500 < content.length) {
+  // REPETITION DETECTION: check every ~500 chars if the model is looping.
+  // FIX-LOW-1 (BH1 LOW 10): the old modulo check `totalContent.length % 500 <
+  // content.length` was flaky — for small chunks (e.g. 5-char deltas) the
+  // modulo could skip a 500-char boundary (because the next chunk's start
+  // jumped over the straddled range), and for large chunks (≥500 chars) it was
+  // always-true (running detectRepetition on every chunk). Now we use a simple
+  // accumulation counter: we run detectRepetition when at least 500 chars have
+  // been added since the last check, with a 200-char minimum total threshold to
+  // avoid running on the first chunk.
+  if (
+    state.totalContent.length > 200 &&
+    state.totalContent.length - state.lastRepetitionCheckLength >= 500
+  ) {
+    state.lastRepetitionCheckLength = state.totalContent.length;
     if (detectRepetition(state)) {
       state.repetitionDetected = true;
       state.finishReason = "repetition_detected";
-      // Truncate repeated garbage
+      // Truncate repeated garbage. Per §3.5 the abort message MUST be exactly
+      // "[GERAÇÃO INTERROMPIDA: repetição detectada]" (FIX-LOW-1 / BH1 LOW 12).
       state.totalContent = state.totalContent.slice(0, -500) +
-        "\n\n[GERAÇÃO INTERROMPIDA: repetição detectada. Tente reformular sua pergunta.]";
+        "\n\n[GERAÇÃO INTERROMPIDA: repetição detectada]";
       // BUG FIX (scroll-steal): was console.log — use log.info (suppressed in TUI mode).
       log.info("[REPETITION] Generation aborted — returning partial content");
     }

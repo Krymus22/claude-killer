@@ -64,12 +64,20 @@ export function loadProjectMemoryFiles(): MemoryFile[] {
   let dir: string | null = start;
   let safety = 10;
   while (dir && safety-- > 0) {
+    // FIX-LOW-1 (BH6 LOW 1): iterate ALL memory filenames per directory. The
+    // previous `break` after the first match loaded only ONE file per dir,
+    // so a project with both CLAUDE.md and AGENTS.md at the same level lost
+    // the second one (and a project with CLAUDE.md + .claude-killer/AGENTS.md
+    // at the same logical level also lost the second). Per §9.5.1 the system
+    // prompt must include "CLAUDE.md + AGENTS.md + .claude-killer/AGENTS.md".
+    // (The .claude-killer/AGENTS.md entry is naturally scoped to a child
+    // directory because the MEMORY_FILENAMES entry has a path separator, so
+    // it can only match when `dir` is the project root.)
     for (const file of MEMORY_FILENAMES) {
       const abs = path.join(dir, file);
       try {
         if (fs.existsSync(abs) && fs.statSync(abs).isFile()) {
           parts.push({ file: abs, absDir: dir });
-          break; // one per dir to avoid duplicate chains like ./CLAUDE.md + ./.claude-killer/AGENTS.md
         }
       } catch {
         // File disappeared between existsSync and statSync (race condition)
@@ -715,7 +723,7 @@ export function loadHistoryDirect(messages: Message[]): void {
  * 3. Hallucination (IA might reference outdated state from turn 3)
  *
  * Now: if the new message starts with a known prefix (## TASK_STATE, ## Persistent
- * Memory, ## SELF-VALIDATION, [PLAN], [GOAL, [HONESTY), any previous system
+ * Memory, ## SELF-VALIDATION, [PLAN, [GOAL, [HONESTY), any previous system
  * message with the same prefix is REPLACED instead of duplicated.
  */
 export function addSystemMessage(content: string): void {

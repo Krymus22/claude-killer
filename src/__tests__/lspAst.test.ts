@@ -319,18 +319,25 @@ describe("parseDirectory", () => {
 });
 
 describe("extensionless files", () => {
-  it("should handle extensionless file as typescript", async () => {
+  it("should handle extensionless file (BH19 LOW 1: language='unknown')", async () => {
     const extPath = path.join(TEST_DIR, "Makefile");
     fs.writeFileSync(extPath, "function build() {}\n", "utf8");
     const result = await parseFile(extPath);
+    // BH19 LOW 1: unknown extensions now return language="unknown" instead
+    // of defaulting to "tree-sitter-typescript". Fallback regex (TS patterns)
+    // still extracts symbols, so lineCount > 0 and the symbol is found.
     expect(result.lineCount).toBeGreaterThan(0);
   });
 
-  it("should handle unknown extension as typescript", async () => {
+  it("should return language='unknown' for unknown extension (BH19 LOW 1)", async () => {
     const weirdPath = path.join(TEST_DIR, "config.xyz");
     fs.writeFileSync(weirdPath, "function hello() {}\n", "utf8");
     const result = await parseFile(weirdPath);
-    expect(result.language).toBe("tree-sitter-typescript");
+    // BH19 LOW 1: previously returned "tree-sitter-typescript" — silently
+    // treating unknown extensions as TypeScript. Now returns "unknown".
+    expect(result.language).toBe("unknown");
+    // Fallback parser uses TS patterns by default, so the symbol is still
+    // extracted (backward-compat for symbol-extraction consumers).
     expect(result.symbols.some((s) => s.name === "hello")).toBe(true);
   });
 });

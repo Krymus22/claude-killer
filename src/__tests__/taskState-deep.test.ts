@@ -87,15 +87,27 @@ describe("taskState — deep coverage", () => {
 
   describe("markTaskItemDone", () => {
     it("marca item como feito", () => {
+      // Use a valid TaskState shape so writeTaskState actually writes the
+      // file (the previous test passed an object with `status`/`items`
+      // instead of `done`/`todo`, which made writeTaskState silently
+      // fail and then relied on markTaskItemDone's OLD side effect of
+      // creating an empty state file. The BH15 LOW 1 fix removed that
+      // side effect, so we now pass a proper TaskState.)
       writeTaskState({
         title: "Test",
-        status: "in_progress",
-        items: [{ text: "do something", done: false }],
+        updatedAt: new Date().toISOString(),
+        startedAt: new Date().toISOString(),
+        done: [],
+        todo: ["do something"],
+        decisions: [],
+        bugs: [],
+        dependencies: [],
         notes: "",
       });
       markTaskItemDone("do something");
       const state = readTaskState();
       expect(state).toBeTruthy();
+      expect(state!.done).toContain("do something");
     });
 
     it("não lança exceção quando item não existe", () => {

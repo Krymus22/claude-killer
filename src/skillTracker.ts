@@ -81,6 +81,13 @@ export function buildSkillReInjectionMessage(): string | null {
         : content;
 
       const tokens = Math.min(Math.ceil(truncated.length / 4), MAX_TOKENS_PER_SKILL);
+      // BH27 LOW 3 FIX: check the PROJECTED total BEFORE pushing. The
+      // previous code only checked `totalTokens >= MAX_TOTAL_TOKENS` at
+      // the top of the loop, so a single skill of up to MAX_TOKENS_PER_SKILL
+      // (5K) could push the total well past 25K (e.g. 24K + 5K = 29K).
+      // Now we stop adding skills as soon as the next one would exceed
+      // the budget, so the re-injection never goes over 25K tokens.
+      if (totalTokens + tokens > MAX_TOTAL_TOKENS) break;
       skills.push({ path: skillPath, content: truncated, tokens });
       totalTokens += tokens;
     } catch {

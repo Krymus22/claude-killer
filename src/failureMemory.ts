@@ -56,9 +56,23 @@ const failures: FailureEntry[] = [];
 /**
  * Record a failure. Only keeps the last MAX_FAILURES entries.
  * Error is truncated to MAX_ERROR_LENGTH chars to avoid context bloat.
+ *
+ * BH15 LOW 4 FIX: defensive guards — if `tool` or `error` is null/undefined,
+ * the call is a no-op. Callers that pass `null` from a `try/catch` whose
+ * `catch` clause typed the error as `unknown` would previously coerce it
+ * to the string "null" / "undefined" and store that as the error message,
+ * polluting the failure memory with useless entries. We deliberately
+ * ALLOW empty-string errors (they are valid — a tool can fail without a
+ * message) and we coerce non-string errors (e.g. Error objects passed by
+ * accident) to a string via `String(error)` so the caller doesn't have to.
  */
 export function recordFailure(tool: string, error: string, filePath?: string): void {
-  const truncatedError = error.slice(0, MAX_ERROR_LENGTH);
+  // BH15 LOW 4: input validation — bail out ONLY on null/undefined.
+  // Empty strings are allowed (a tool may fail with no message).
+  if (tool == null || tool === "") return;
+  if (error == null) return;
+  const errorStr = typeof error === "string" ? error : String(error);
+  const truncatedError = errorStr.slice(0, MAX_ERROR_LENGTH);
   failures.push({
     tool,
     filePath: filePath ?? undefined,

@@ -1553,7 +1553,15 @@ const READ_ONLY_TOOLS = new Set([
   "ler_estado",
   // Listing project memory files is read-only (just returns the cached list).
   "listar_memoria",
-  // Background process management is read-only (checking status, listing)
+  // FIX-LOW-1 (BH4 LOW 9): verificar_comando is NOT in §10.6's closed list of
+  // read-only tools, but it is intentionally included here because its purpose
+  // is to check background-process output (status, listing, output tail) — it
+  // never writes to the filesystem or mutates process state when called
+  // without an `id`. Treating it as read-only lets it run in parallel with
+  // other read-only tools (ler_arquivo, buscar_texto, etc.) for faster
+  // investigation turns. (When called WITH an `id` + `kill:true`, the tool
+  // kills a process — but that's not a filesystem write, so the
+  // read-before-write / strict-quality-gate invariants are unaffected.)
   "verificar_comando",
 ]);
 

@@ -33,10 +33,19 @@ describe("loadConfig", () => {
     expect(typeof config).toBe("object");
   });
 
-  it("should cache loaded config", () => {
+  it("should return deep copies (BH28 LOW 1) — mutations don't poison the cache", () => {
+    // BH28 LOW 1: loadConfig() used to return cachedConfig BY REFERENCE.
+    // Mutating the returned object mutated the cache. Now it returns a deep
+    // copy on every call — identity (`===`) is false, but contents are equal,
+    // and mutations to one returned object don't affect subsequent calls.
     const c1 = loadConfig();
     const c2 = loadConfig();
-    expect(c1).toBe(c2);
+    expect(c1).not.toBe(c2); // different objects (deep-copied)
+    expect(c1).toEqual(c2);  // same contents
+
+    // Mutating c1 must NOT affect c2.
+    (c1 as any).poisoned = true;
+    expect((c2 as any).poisoned).toBeUndefined();
   });
 
   it("should handle invalid JSON in config file gracefully", async () => {

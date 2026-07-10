@@ -898,11 +898,16 @@ export async function loadModeMCPs(modeName: string): Promise<void> {
  */
 export function shutdownMCPServers() {
   for (const [, server] of activeMCPServers.entries()) {
-    try {
-      // Send shutdown notification before killing (NDJSON framing per MCP spec)
-      const notification = JSON.stringify({ jsonrpc: "2.0", method: "notifications/cancelled" });
-      server.process.stdin!.write(notification + "\n");
-    } catch { /* ignore */ }
+    // BH11 LOW 2: previously this sent a malformed `notifications/cancelled`
+    // JSON-RPC message (missing required params, wrong method type — the
+    // `notifications/cancelled` method per MCP/JSON-RPC spec REQUIRES a
+    // params object with requestId+reason, and is for cancelling in-flight
+    // REQUESTS, not for shutting down a server). Sending a malformed frame
+    // on shutdown can corrupt the server's NDJSON parser state and cause
+    // it to hang instead of exiting. Just kill the process — the OS will
+    // reclaim its resources. The MCP "shutdown" + "exit" handshake is for
+    // graceful shutdown during normal operation, not for process teardown
+    // at exit time.
     try {
       // BUG FIX: with shell: true, server.process is the wrapper shell, not
       // the actual MCP server. Calling server.process.kill() only kills the

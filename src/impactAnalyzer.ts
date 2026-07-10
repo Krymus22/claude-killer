@@ -191,7 +191,16 @@ async function detectLanguageAsync(filePath: string): Promise<string> {
   return "unknown";
 }
 
-/** Check if ripgrep is available. */
+/** Check if ripgrep is available.
+ *
+ * BH28 LOW 3: `rgAvailable` is cached for the entire process lifetime and
+ * never invalidated. This is intentional for a CLI session — `rg` won't
+ * appear or disappear while the process runs, and re-checking on every call
+ * would add a non-trivial spawn cost (we'd shell out on every impact
+ * analysis). If a future caller needs to invalidate (e.g., a long-running
+ * daemon that detects PATH changes), expose a `resetRgCache()` helper. Skip
+ * for now — not worth the API surface for a session-scoped CLI.
+ */
 let rgAvailable: boolean | null = null;
 async function isRgAvailable(): Promise<boolean> {
   if (rgAvailable !== null) return rgAvailable;

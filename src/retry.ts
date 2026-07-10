@@ -99,6 +99,17 @@ export async function retryWithTimeout<T>(
   timeoutMs: number,
   opts?: RetryOptions
 ): Promise<T> {
+  // BH20 LOW 3 LIMITATION: when the per-attempt timeout fires before `fn()`
+  // settles, the underlying `fn()` promise is NOT cancelled — JS promises
+  // cannot be aborted from the outside. The `fn()` work continues to run
+  // (consuming CPU/network/tokens) until it settles, and if it rejects
+  // after the timeout, that rejection becomes an unhandled rejection. A
+  // proper fix would require `fn` to accept an AbortSignal and propagate
+  // cancellation into the work it starts (HTTP requests, file I/O, etc.),
+  // which is a much larger refactor. For now we accept the leak: callers
+  // should ensure `fn` is idempotent and reasonably short, and the outer
+  // withRetry() caps the number of attempts so we don't accumulate
+  // unbounded leaked promises.
   return withRetry(
     async () => {
       // BUG FIX: the setTimeout used for the per-attempt timeout was never

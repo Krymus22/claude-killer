@@ -730,7 +730,11 @@ describe("MCP server lifecycle", () => {
       expect(getActiveMCPServers()).toHaveLength(0);
     });
 
-    it("should send notifications/cancelled notification before killing", async () => {
+    it("should NOT send malformed notifications/cancelled on shutdown (BH11 LOW 2)", async () => {
+      // BH11 LOW 2: previously shutdownMCPServers sent a malformed
+      // `notifications/cancelled` JSON-RPC frame (missing required params,
+      // wrong method type). This test asserts the buggy frame is GONE —
+      // shutdown now just kills the process without writing to stdin.
       const child = withAutoReply(fakeChild());
       const written: string[] = [];
       child.stdin.write = vi.fn((data: string) => {
@@ -752,8 +756,11 @@ describe("MCP server lifecycle", () => {
       await loadAllExtensions();
       written.length = 0; // Clear init writes
       shutdownMCPServers();
+      // No `notifications/cancelled` frame should be sent on shutdown.
       const cancelNotif = written.find((w) => w.includes("notifications/cancelled"));
-      expect(cancelNotif).toBeDefined();
+      expect(cancelNotif).toBeUndefined();
+      // The process should still be killed.
+      expect(child.kill).toHaveBeenCalled();
     });
   });
 

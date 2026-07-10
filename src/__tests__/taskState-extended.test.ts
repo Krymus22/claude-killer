@@ -220,12 +220,15 @@ describe("taskState (extended)", () => {
   });
 
   describe("markTaskItemDone — edge case", () => {
-    it("retorna estado vazio quando não há estado prévio", () => {
+    it("retorna estado vazio quando não há estado prévio (BH15 LOW 1 fix: não cria arquivo)", () => {
       const result = markTaskItemDone("qualquer coisa");
       expect(result.todo).toEqual([]);
       expect(result.done).toEqual([]);
-      // Como não havia estado, um novo foi criado
-      expect(readTaskState()).not.toBeNull();
+      // BH15 LOW 1 fix: previously, calling markTaskItemDone with no
+      // existing state file would CREATE a new (empty) state file as a
+      // side effect. The fix returns a default in-memory state WITHOUT
+      // writing to disk — so readTaskState() should still be null.
+      expect(readTaskState()).toBeNull();
     });
 
     it("remove apenas o primeiro item que casa com a substring", () => {

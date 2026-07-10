@@ -18,7 +18,7 @@ import os from "node:os";
 
 // ─── i18n.ts ────────────────────────────────────────────────────────────────
 
-describe("mutation-killers / i18n.ts — L52 locale detection OR chain", () => {
+describe("mutation-killers / i18n.ts — LANGUAGE priority-order detection", () => {
   let prevLang: string | undefined;
   let prevLcAll: string | undefined;
   let prevLcMessages: string | undefined;
@@ -54,55 +54,52 @@ describe("mutation-killers / i18n.ts — L52 locale detection OR chain", () => {
   });
 
   /**
-   * Mutations on L52:
-   *   `if (lower.includes("pt_br") || lower.includes("pt-br") || lower.startsWith("pt"))`
+   * BH20 LOW 4 fix changed detectLanguage to split LANGUAGE by ":" and
+   * iterate each part in priority order (first match wins), instead of
+   * the old `String.includes` on the whole string. The old mutation test
+   * asserted LANGUAGE="en_US:pt-BR" → "pt-BR" (matching the includes
+   * branch), which contradicts the new priority-order semantics.
    *
-   *   - `("pt_br") ||` → `&&`: becomes
-   *     `(lower.includes("pt_br") && lower.includes("pt-br")) || lower.startsWith("pt")`
-   *   - `("pt-br") ||` → `&&`: becomes
-   *     `lower.includes("pt_br") || (lower.includes("pt-br") && lower.startsWith("pt"))`
-   *
-   * Survived because typical locale strings like "pt_BR.UTF-8" or "pt-BR"
-   * also `startsWith("pt")`, so the third operand catches them and the
-   * mutated ANDs are masked.
-   *
-   * Killing strategy: use a locale string that contains "pt_br" but
-   * does NOT start with "pt". A realistic example: "fr_FR:pt_BR:pt_PT"
-   * (LANGUAGE env var on Linux supports `:`-separated fallback list).
-   *   - "fr_fr:pt_br:pt_pt".toLowerCase() = "fr_fr:pt_br:pt_pt"
-   *   - includes("pt_br") = true
-   *   - includes("pt-br") = false
-   *   - startsWith("pt") = false
-   *   - Original: true || false || false = true → returns "pt-BR".
-   *   - Mutation 1 (`("pt_br") ||` → `&&`): (true && false) || false = false
-   *     → falls through to "en" check (also false) → returns default "pt-BR".
-   *     Hmm, that's the same result.
-   *
-   * Wait, the default at L63 is "pt-BR" too! So if all checks fail, it
-   * returns "pt-BR" anyway. The mutation is not killable via the result
-   * alone for a "pt_br"-containing string.
-   *
-   * Better strategy: use a locale string that contains "pt-br" but not
-   * "pt_br" and doesn't start with "pt". e.g., "en_US:pt-BR".
-   *   - toLowerCase = "en_us:pt-br"
-   *   - includes("pt_br") = false
-   *   - includes("pt-br") = true
-   *   - startsWith("pt") = false
-   *   - Original: false || true || false = true → returns "pt-BR".
-   *   - Mutation 2 (`("pt-br") ||` → `&&`): false || (true && false) = false
-   *     → falls through to "en" check (startsWith("en")? "en_us:pt-br" — yes!)
-   *     → returns "en".
-   *
-   *   That's different! Test asserts "pt-BR" → mutation returns "en" → fails.
+   * New mutation killers:
+   *   - If the LANGUAGE split is removed/mutated (e.g. split("") → chars),
+   *     LANGUAGE="pt_BR:en" would no longer detect pt-BR → test fails.
+   *   - If the iteration order is reversed, LANGUAGE="en:pt_BR" would
+   *     return pt-BR instead of en → test fails.
+   *   - If the code regressed to includes() on the whole string,
+   *     LANGUAGE="en:pt_BR" would return pt-BR (includes("pt_br") true)
+   *     instead of en → test fails.
    */
-  it("LANGUAGE='en_US:pt-BR' detects pt-BR via the includes('pt-br') branch (kills `|| → &&` on L52 second operator)", async () => {
+  it("LANGUAGE='pt_BR:en' detects pt-BR (first part wins — kills removal of LANGUAGE split)", async () => {
+    const { detectLanguage, resetAllLanguageState } = await import("./../i18n.js");
+    resetAllLanguageState();
+    process.env.LANGUAGE = "pt_BR:en";
+    // First part "pt_BR" → startsWith("pt") → returns "pt-BR".
+    // Mutation: if split is removed/changed (e.g. not splitting at all),
+    // the whole "pt_br:en" string doesn't startsWith("pt") → falls to
+    // default "pt-BR" anyway. So we also assert the priority-order test
+    // below to catch the includes regression.
+    expect(detectLanguage()).toBe("pt-BR");
+  });
+
+  it("LANGUAGE='en:pt_BR' detects en (priority order — kills includes regression)", async () => {
+    const { detectLanguage, resetAllLanguageState } = await import("./../i18n.js");
+    resetAllLanguageState();
+    process.env.LANGUAGE = "en:pt_BR";
+    // First part "en" → startsWith("en") → returns "en".
+    // OLD includes-based behavior would have returned "pt-BR" because
+    // includes("pt_br") was true on the whole "en:pt_br" string.
+    // This test kills the includes regression and order-reversal mutations.
+    expect(detectLanguage()).toBe("en");
+  });
+
+  it("LANGUAGE='en_US:pt-BR' detects en (priority order — supersedes old includes test)", async () => {
     const { detectLanguage, resetAllLanguageState } = await import("./../i18n.js");
     resetAllLanguageState();
     process.env.LANGUAGE = "en_US:pt-BR";
-    // Without mutation: includes("pt-br") is true → returns "pt-BR".
-    // With mutation `("pt-br") ||` → `&&`: needs (includes("pt-br") && startsWith("pt"))
-    //   = (true && false) = false. Then checks startsWith("en") = true → returns "en".
-    expect(detectLanguage()).toBe("pt-BR");
+    // The OLD test asserted this returns "pt-BR" via the includes("pt-br")
+    // branch. With the BH20 LOW 4 fix, priority order wins: "en_US" is
+    // first → returns "en".
+    expect(detectLanguage()).toBe("en");
   });
 });
 

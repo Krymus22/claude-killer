@@ -174,6 +174,13 @@ function checkSingleFileRead(args: Record<string, unknown>, toolName: string): {
 }
 
 export function clearReadPaths(): void {
+  // BH8 LOW 5: INTENTIONAL no-op while the agent loop is running.
+  // The agent loop manages its own readPaths lifecycle (it resets the set at
+  // the start of each turn in runAgentLoop), so a mid-turn clear from a
+  // programmatic caller (test, /reset, /session new) would race with the
+  // loop's read-then-write sequence. The next turn starts with a fresh set
+  // anyway, so skipping a mid-turn clear does NOT leak stale state across
+  // turns. See Concurrency Audit Part 2 below for the full rationale.
   // Concurrency Audit Part 2 — Race #2 / #3:
   // Refuse to clear while the agent loop is running. The loop relies on
   // readPaths being stable for the duration of a turn. The next turn will

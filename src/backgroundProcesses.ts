@@ -9,6 +9,7 @@
  */
 
 import { spawn, type ChildProcess } from "node:child_process";
+import { StringDecoder } from "node:string_decoder";
 import * as log from "./logger.js";
 
 export interface BackgroundProcess {
@@ -23,6 +24,17 @@ export interface BackgroundProcess {
   exitCode: number | null;
   /** Max buffer size per stream (default 256KB) */
   maxBuffer: number;
+  /**
+   * Per-stream UTF-8 StringDecoder. BH20 LOW 2 fix: previously each stdout/
+   * stderr `data` chunk was decoded with `Buffer.toString("utf8")` in
+   * isolation, which corrupts multi-byte UTF-8 characters when a chunk
+   * boundary lands in the middle of a codepoint (e.g. emoji or accented
+   * Latin-1 chars from `npm`/compiler output). StringDecoder buffers the
+   * trailing incomplete bytes and only flushes whole codepoints, preserving
+   * the character across chunk boundaries.
+   */
+  stdoutDecoder: StringDecoder;
+  stderrDecoder: StringDecoder;
 }
 
 const MAX_PROCESSES = 10;
@@ -69,17 +81,32 @@ export function startBackgroundProcess(
     exited: false,
     exitCode: null,
     maxBuffer: MAX_BUFFER,
+    stdoutDecoder: new StringDecoder("utf8"),
+    stderrDecoder: new StringDecoder("utf8"),
   };
 
   child.stdout?.on("data", (chunk: Buffer) => {
-    if (bgProc.stdout.length < bgProc.maxBuffer) {
-      bgProc.stdout += chunk.toString("utf8").slice(0, bgProc.maxBuffer - bgProc.stdout.length);
+    if (bgProc.stdout.length >= bgProc.maxBuffer) return;
+    // BH20 LOW 2: use StringDecoder so multi-byte UTF-8 sequences split
+    // across chunk boundaries are reassembled instead of being corrupted
+    // by an isolated Buffer.toString("utf8") call.
+    const decoded = bgProc.stdoutDecoder.write(chunk);
+    const remaining = bgProc.maxBuffer - bgProc.stdout.length;
+    if (decoded.length <= remaining) {
+      bgProc.stdout += decoded;
+    } else {
+      bgProc.stdout += decoded.slice(0, remaining);
     }
   });
 
   child.stderr?.on("data", (chunk: Buffer) => {
-    if (bgProc.stderr.length < bgProc.maxBuffer) {
-      bgProc.stderr += chunk.toString("utf8").slice(0, bgProc.maxBuffer - bgProc.stderr.length);
+    if (bgProc.stderr.length >= bgProc.maxBuffer) return;
+    const decoded = bgProc.stderrDecoder.write(chunk);
+    const remaining = bgProc.maxBuffer - bgProc.stderr.length;
+    if (decoded.length <= remaining) {
+      bgProc.stderr += decoded;
+    } else {
+      bgProc.stderr += decoded.slice(0, remaining);
     }
   });
 

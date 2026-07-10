@@ -302,9 +302,13 @@ export async function aplicarDiff(
   const contentToWrite = preWriteResult.modifiedContent ?? newContent;
 
   // -- Step 6: Write to disk -----------------------------------------------
-  // Save rollback backup BEFORE writing (only if file already exists)
+  // Save rollback backup BEFORE writing (only if file already exists).
+  // BH8 LOW 2: previously used `originalContent.length > 0` which skipped
+  // empty files (0 bytes) — they existed on disk but got no backup, so
+  // desfazer_edicao couldn't restore them and restore-on-failure was a no-op.
+  // Use fs.existsSync so empty-but-existing files still get a backup.
   let backupId: string | null = null;
-  if (originalContent.length > 0) {
+  if (fs.existsSync(resolved)) {
     const backup = saveBackup(resolved, originalContent, "aplicar_diff");
     if (backup) backupId = backup.id;
   }
@@ -328,7 +332,10 @@ export async function aplicarDiff(
     // state. Best-effort — if restore also fails (e.g., disk still full),
     // we log the secondary failure but still report the primary write error.
     let restored = false;
-    if (originalContent.length > 0) {
+    // BH8 LOW 2: use fs.existsSync so empty files that existed before the
+    // write attempt also get restored on failure (previously skipped because
+    // originalContent.length === 0 for empty files).
+    if (fs.existsSync(resolved)) {
       try {
         // SECURITY: mode 0o600 — restrictive perms on restored file (CWE-377).
         fs.writeFileSync(resolved, originalContent, { encoding: "utf8", mode: 0o600 });
@@ -338,7 +345,7 @@ export async function aplicarDiff(
         log.error(`[APLICAR_DIFF] Write failed AND restore failed for ${resolved}: ${(restoreErr as Error).message}. Backup still available via desfazer_edicao (id=${backupId ?? "n/a"}).`);
       }
     }
-    const rollbackNote = originalContent.length > 0
+    const rollbackNote = fs.existsSync(resolved)
       ? (restored
         ? `\n[ROLLBACK] Original content was restored to disk. Backup id: ${backupId ?? "n/a"}.`
         : `\n[ROLLBACK] Restore failed — backup id ${backupId ?? "n/a"} still available via desfazer_edicao.`)
@@ -362,10 +369,16 @@ export async function aplicarDiff(
       `The file HAS BEEN SAVED to disk. Analyze the errors above in the real project context ` +
       `and decide whether to apply a fix diff or whether the error can be ignored as a false positive.`;
 
+    // BH8 LOW 4: the write actually succeeded (file IS on disk). The
+    // post-write validation failure is advisory, not a write failure, so
+    // log as OK (with the validation detail) rather than as FAIL. The
+    // previous `false` made the tool-result line show "[FAIL]" even for
+    // successful writes that only had an advisory validation warning,
+    // which misled the agent into retrying the write.
     log.toolResult(
       "aplicar_diff",
-      false,
-      `post-write validation: ${validation.errorMessage?.slice(0, 80)}`
+      true,
+      `post-write validation advisory: ${validation.errorMessage?.slice(0, 80)}`
     );
     // written = true because the file IS on disk; toolMessage carries the advisory warning
     return { written: true, toolMessage: warnMsg };
@@ -522,22 +535,37 @@ export async function executarComando(
     });
 
     let stdout = "";
+    let stdoutBytes = 0;
     let stderr = "";
+    let stderrBytes = 0;
     let killed = false;
     const timer = setTimeout(() => {
       killed = true;
       try { child.kill("SIGKILL"); } catch { /* ignore */ }
     }, timeoutMs);
 
+    // BH8 LOW 1: MAX_OUTPUT_BYTES is a BYTE cap, but `stdout.length` counts
+    // UTF-16 code units (1 per BMP char, 2 per astral char). For output
+    // containing multi-byte UTF-8 sequences (emojis, CJK, accented Latin),
+    // this could allow up to ~3x the intended byte budget before slicing
+    // kicked in. Track actual bytes seen via `chunk.length` (Buffer length
+    // is always in bytes) and slice the Buffer with `subarray` before
+    // decoding to UTF-8, so the cap is enforced on real bytes.
     child.stdout?.on("data", (chunk: Buffer) => {
-      if (stdout.length < MAX_OUTPUT_BYTES) {
-        stdout += chunk.toString("utf8").slice(0, MAX_OUTPUT_BYTES - stdout.length);
+      if (stdoutBytes < MAX_OUTPUT_BYTES) {
+        const remaining = MAX_OUTPUT_BYTES - stdoutBytes;
+        const slice = chunk.subarray(0, remaining);
+        stdout += slice.toString("utf8");
+        stdoutBytes += slice.length;
       }
     });
 
     child.stderr?.on("data", (chunk: Buffer) => {
-      if (stderr.length < MAX_OUTPUT_BYTES) {
-        stderr += chunk.toString("utf8").slice(0, MAX_OUTPUT_BYTES - stderr.length);
+      if (stderrBytes < MAX_OUTPUT_BYTES) {
+        const remaining = MAX_OUTPUT_BYTES - stderrBytes;
+        const slice = chunk.subarray(0, remaining);
+        stderr += slice.toString("utf8");
+        stderrBytes += slice.length;
       }
     });
 

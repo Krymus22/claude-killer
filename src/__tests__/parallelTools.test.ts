@@ -219,15 +219,23 @@ describe("executeParallelTools edge cases", () => {
 });
 
 describe("groupIndependentTools", () => {
-  it("should group same-name same-file tools together", () => {
+  // BH20 LOW 5: same-name+same-file writes MUST be SEQUENTIAL (separate
+  // groups) per §10.6 — they're dependent operations on the same file.
+  // The old behavior grouped them together (parallel), which could clobber
+  // earlier writes. The tests below assert the corrected behavior.
+
+  it("should separate same-name same-file tools into SEQUENTIAL groups (BH20 LOW 5)", () => {
     const toolCalls = [
       { name: "edit", args: { caminho: "file.ts" } },
       { name: "edit", args: { caminho: "file.ts" } },
     ];
     const groups = groupIndependentTools(toolCalls);
-    expect(groups.length).toBe(1);
-    expect(groups[0].length).toBe(2);
-    expect(groups[0].every((t) => t.name === "edit")).toBe(true);
+    // Each dependent write lands in its own group → groups run sequentially.
+    expect(groups.length).toBe(2);
+    expect(groups[0].length).toBe(1);
+    expect(groups[1].length).toBe(1);
+    expect(groups[0][0].name).toBe("edit");
+    expect(groups[1][0].name).toBe("edit");
   });
 
   it("should separate different tools into different groups", () => {
@@ -253,7 +261,7 @@ describe("groupIndependentTools", () => {
     expect(groups.length).toBe(2);
   });
 
-  it("should group consecutive same-name same-file and separate others", () => {
+  it("should separate consecutive same-name same-file (SEQUENTIAL) and group others (BH20 LOW 5)", () => {
     const toolCalls = [
       { name: "edit", args: { caminho: "a.ts" } },
       { name: "edit", args: { caminho: "a.ts" } },
@@ -261,10 +269,18 @@ describe("groupIndependentTools", () => {
       { name: "read", args: { caminho: "c.ts" } },
     ];
     const groups = groupIndependentTools(toolCalls);
-    expect(groups.length).toBe(3);
-    expect(groups[0].length).toBe(2);
+    // First two are dependent writes on a.ts → MUST be in separate groups.
+    // Then edit/b.ts and read/c.ts are independent → each in its own group.
+    // Total: 4 groups, each of size 1.
+    expect(groups.length).toBe(4);
+    expect(groups[0].length).toBe(1);
     expect(groups[1].length).toBe(1);
     expect(groups[2].length).toBe(1);
+    expect(groups[3].length).toBe(1);
+    expect(groups[0][0].args.caminho).toBe("a.ts");
+    expect(groups[1][0].args.caminho).toBe("a.ts");
+    expect(groups[2][0].args.caminho).toBe("b.ts");
+    expect(groups[3][0].name).toBe("read");
   });
 
   it("should create placeholder execute functions", () => {

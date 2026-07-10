@@ -227,23 +227,34 @@ const SCOUT_TOOLS = [
  * explicitly listed, it's rejected. This prevents the scout from running
  * destructive commands even if the model is prompt-injected.
  */
+// FIX-ORCH-CRIT (CRITICAL 1): Removed echo (write when used with `>`), find
+// (has -delete / -exec), env / printenv (dump API keys), and ps / top / lsof
+// (leak process info). The allowlist now contains ONLY safe read-only commands.
 const READONLY_COMMAND_PREFIXES = [
-  "ls", "ll", "dir", "cat", "head", "tail", "wc", "find", "grep", "rg",
+  "ls", "ll", "dir", "cat", "head", "tail", "wc", "grep", "rg",
   "git status", "git log", "git diff", "git branch", "git show", "git blame",
   "git remote", "git rev-parse", "git ls-files", "git stash list",
-  "pwd", "echo", "which", "where", "whereis", "file", "stat", "du", "df",
+  "pwd", "which", "where", "whereis", "file", "stat", "du", "df",
   "npm ls", "npm list", "npm view", "npm info",
   "node --version", "npm --version", "npx --version",
   "rojo --version", "selene --version", "stylua --version",
   "wally --version", "tarmac --version",
-  "env", "printenv", "hostname", "uname", "date", "cal",
-  "ps", "top", "lsof",
+  "hostname", "uname", "date", "cal",
 ];
 
 function isReadOnlyCommand(comando: string): boolean {
   const trimmed = comando.trim().toLowerCase();
   // Remove leading "sudo" if present (we don't want to allow sudo anything)
   const withoutSudo = trimmed.replace(/^sudo\s+/, "");
+
+  // FIX-ORCH-CRIT (CRITICAL 1): REJECT shell metacharacters to prevent
+  // injection. The previous prefix-only check passed `ls; rm -rf /`,
+  // `cat foo > file`, `echo x > ~/.bashrc`, etc. Block any of:
+  // ; & | ` $ < > && || $( ${ \n \r
+  if (/[;&|`$<>]|&&|\|\||\$\(|\$\{|\n|\r/.test(withoutSudo)) {
+    return false;
+  }
+
   return READONLY_COMMAND_PREFIXES.some(prefix =>
     withoutSudo.startsWith(prefix + " ") || withoutSudo === prefix
   );
@@ -382,6 +393,17 @@ async function executeScoutTool(toolName: string, args: Record<string, unknown>,
         // delegate to callMCPTool — the actual tool execution happens in the
         // MCP server process (e.g. the Roblox Studio plugin).
         if (toolName.includes("__")) {
+          // FIX-ORCH-CRIT (CRITICAL 2): Re-classify MCP tool — only "read"
+          // tools are allowed in the scout. getMCPReadTools() filters the tool
+          // LIST shown to the model, but the model can still HALLUCINATE a
+          // write/execute tool name (e.g. "Roblox_Studio__multi_edit"). Without
+          // this re-check, callMCPTool would happily execute the write tool,
+          // bypassing the read-only restriction entirely. Re-run the classifier
+          // and reject anything that is not strictly "read".
+          const classification = classifyMcpTool(extractToolName(toolName));
+          if (classification !== "read") {
+            return `[ERROR] MCP tool ${toolName} is classified as "${classification}" — only read-only MCP tools are allowed in scout.`;
+          }
           try {
             const result = await callMCPTool(toolName, args);
             rawResult = typeof result === "string" ? result : JSON.stringify(result);

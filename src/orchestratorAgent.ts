@@ -31,11 +31,23 @@ import { chatWithModel, clearModelOverride } from "./apiClient.js";
 import type { Message } from "./apiClient.js";
 import * as history from "./history.js";
 import * as log from "./logger.js";
-import { pushActivity } from "./activityTracker.js";
+import { pushActivity, clearActivity } from "./activityTracker.js";
 import type { AskUserCallback, AskUserQuestion, AskUserResponse } from "./askUser.js";
 import { isScoutEnabled, runScout, formatScoutResult, type ScoutArgs, type ScoutTask } from "./scoutAgent.js";
 import { runPlanner } from "./plannerAgent.js";
 import { runCoder } from "./coderAgent.js";
+// FIX-ORCH-CRIT (HIGH 4): per-turn state cleanup. runPlanner/runCoder delegate
+// to the heavy model's loop, which mutates module-level state in
+// strictQualityGate, contextInjector, selfValidation, autoTestGenerator,
+// promiseDetector, and activityTracker. runAgentLoop resets these at the start
+// of each turn; runOrchestratorLoop must do the same to prevent stale state
+// from leaking across orchestrator turns (e.g. a previous coder turn's gate
+// blocks blocking the next turn, or stale activity entries persisting).
+import { resetGateState } from "./strictQualityGate.js";
+import { resetContextInjection } from "./contextInjector.js";
+import { resetSelfValidation } from "./selfValidation.js";
+import { resetAutoTestSuggestions } from "./autoTestGenerator.js";
+import { resetFalsePromiseCounter } from "./promiseDetector.js";
 
 // --- Config (env vars) -----------------------------------------------------
 
@@ -46,12 +58,18 @@ export function isOrchestratorMode(): boolean {
 
 /** Get the orchestrator model ID (default: google/gemma-4-31b-it). */
 export function getOrchestratorModel(): string {
-  return process.env.ORCHESTRATOR_MODEL ?? "google/gemma-4-31b-it";
+  // FIX-ORCH-CRIT (HIGH 5): use `||` (not `??`) so empty-string env vars fall
+  // back to the default — ORCHESTRATOR_MODEL="" should not silently produce
+  // an empty model ID. Mirrors config.ts's optionalString pattern.
+  return process.env.ORCHESTRATOR_MODEL?.trim() || "google/gemma-4-31b-it";
 }
 
 /** Get the heavy model ID used by planner and coder (default: z-ai/glm-5.2). */
 export function getHeavyModel(): string {
-  return process.env.HEAVY_MODEL ?? "z-ai/glm-5.2";
+  // FIX-ORCH-CRIT (HIGH 5): use `||` (not `??`) so empty-string env vars fall
+  // back to the default — HEAVY_MODEL="" should not silently produce an empty
+  // model ID. Mirrors config.ts's optionalString pattern.
+  return process.env.HEAVY_MODEL?.trim() || "z-ai/glm-5.2";
 }
 
 // --- Anti-recursion ---------------------------------------------------------
@@ -60,22 +78,34 @@ const ORCHESTRATOR_AGENT_ID = "orchestrator";
 
 // --- Read-only command allowlist (mirrors scout) ----------------------------
 
+// FIX-ORCH-CRIT (CRITICAL 1): Removed echo (write when used with `>`), find
+// (has -delete / -exec), env / printenv (dump API keys), and ps / top / lsof
+// (leak process info). The allowlist now contains ONLY safe read-only commands.
 const READONLY_COMMAND_PREFIXES = [
-  "ls", "ll", "dir", "cat", "head", "tail", "wc", "find", "grep", "rg",
+  "ls", "ll", "dir", "cat", "head", "tail", "wc", "grep", "rg",
   "git status", "git log", "git diff", "git branch", "git show", "git blame",
   "git remote", "git rev-parse", "git ls-files", "git stash list",
-  "pwd", "echo", "which", "where", "whereis", "file", "stat", "du", "df",
+  "pwd", "which", "where", "whereis", "file", "stat", "du", "df",
   "npm ls", "npm list", "npm view", "npm info",
   "node --version", "npm --version", "npx --version",
   "rojo --version", "selene --version", "stylua --version",
   "wally --version", "tarmac --version",
-  "env", "printenv", "hostname", "uname", "date", "cal",
-  "ps", "top", "lsof",
+  "hostname", "uname", "date", "cal",
 ];
 
 function isReadOnlyCommand(comando: string): boolean {
   const trimmed = comando.trim().toLowerCase();
+  // Remove leading "sudo" if present
   const withoutSudo = trimmed.replace(/^sudo\s+/, "");
+
+  // FIX-ORCH-CRIT (CRITICAL 1): REJECT shell metacharacters to prevent
+  // injection. The previous prefix-only check passed `ls; rm -rf /`,
+  // `cat foo > file`, `echo x > ~/.bashrc`, etc. Block any of:
+  // ; & | ` $ < > && || $( ${ \n \r
+  if (/[;&|`$<>]|&&|\|\||\$\(|\$\{|\n|\r/.test(withoutSudo)) {
+    return false;
+  }
+
   return READONLY_COMMAND_PREFIXES.some(prefix =>
     withoutSudo.startsWith(prefix + " ") || withoutSudo === prefix,
   );
@@ -416,7 +446,13 @@ async function executeOrchestratorTool(
         // The model may pass the plan via the `plano` arg, OR we use the
         // stored plan from a previous chamar_planejador call.
         const planoArg = typeof args.plano === "string" && args.plano.length > 0 ? args.plano : null;
-        const plan = planoArg ?? planStore.plan;
+        // FIX-ORCH-CRIT (HIGH 3): Stored plan takes priority over the model-
+        // supplied plan. The raw plan from chamar_planejador is the canonical
+        // source — the model may paraphrase, truncate, or "improve" it, which
+        // violates rule 76 ("O PLANO nunca deve ser modificado"). Only fall
+        // back to planoArg when no stored plan exists (e.g. the model called
+        // chamar_programador without a prior chamar_planejador).
+        const plan = planStore.plan ?? planoArg;
         log.info(`[ORCH] chamar_programador: ${tarefa.slice(0, 80)} (plan: ${plan ? "yes" : "no"})`);
         callbacks?.onToolCall?.("chamar_programador", args);
 
@@ -653,6 +689,29 @@ export async function runOrchestratorLoop(
     throw new Error("userInput must be a non-empty string");
   }
 
+  // FIX-ORCH-CRIT (HIGH 4): Per-turn state cleanup — mirrors the reset block
+  // at the top of runAgentLoop in agent.ts (~line 2512). runPlanner/runCoder
+  // delegate to the heavy model's loop, which mutates module-level state in
+  // strictQualityGate, contextInjector, selfValidation, autoTestGenerator,
+  // promiseDetector, and activityTracker. Without this reset, stale state
+  // from a previous orchestrator turn (or a previous coder/planner run)
+  // leaks into the new turn — e.g. quality-gate blocks from turn N block
+  // finishing in turn N+1, or stale "Executando tool" activity entries
+  // persist in the TUI. Each user message must start from a clean slate.
+  try {
+    resetGateState();
+    resetContextInjection();
+    resetSelfValidation();
+    resetAutoTestSuggestions();
+    resetFalsePromiseCounter();
+    clearActivity();
+  } catch (cleanupErr) {
+    // Defensive: a failure in any reset must NOT abort the orchestrator turn.
+    log.warn(`[ORCH] state cleanup failed (continuing): ${
+      cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr)
+    }`);
+  }
+
   const orchestratorModel = getOrchestratorModel();
   const cwd = process.cwd();
 
@@ -799,7 +858,12 @@ export async function runOrchestratorLoop(
 
           log.info(`[ORCH] Tool: ${toolName}(${JSON.stringify(parsedArgs).slice(0, 80)})`);
 
-          const { result, ok } = await executeOrchestratorTool(
+          // FIX-ORCH-CRIT (HIGH 6): `ok` is intentionally unused here — the
+          // onToolResult callback (which used to receive it) is now fired
+          // exclusively inside executeOrchestratorTool, which has the
+          // authoritative ok/error status. We only need `result` to persist
+          // the tool output in history.
+          const { result } = await executeOrchestratorTool(
             toolName,
             parsedArgs,
             cwd,
@@ -814,10 +878,15 @@ export async function runOrchestratorLoop(
             : result;
           history.addToolResult(tcId, forHistory);
 
-          const forTui = result.length > 4000
-            ? result.slice(0, 2000) + "\n[TRUNCATED]\n" + result.slice(-2000)
-            : result;
-          callbacks?.onToolResult?.(toolName, ok, forTui);
+          // FIX-ORCH-CRIT (HIGH 6): Removed the duplicate onToolResult call
+          // here. executeOrchestratorTool already fires onToolResult for every
+          // tool (chamar_planejador, chamar_programador, executar_comando_readonly,
+          // usar_scout, buscar_web, ler_url, perguntar_usuario). Firing it again
+          // here caused the TUI to display each tool result TWICE. The only
+          // case that doesn't fire onToolResult inside executeOrchestratorTool
+          // is the "unknown tool" / "missing args" early-return paths, but
+          // those are handled by the malformed-args branch above (which does
+          // fire onToolResult) or return without a result to display.
         }
         continue; // recurse — model will process tool results
       }

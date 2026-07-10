@@ -713,6 +713,56 @@ These tasks are ALREADY DONE — do not redo them. Use this context to continue:
 
 ---
 
+### 10.9 Orchestrator Mode (MoE — Mixture of Experts em nível de agente)
+
+> Arquivos: `src/orchestratorAgent.ts`, `src/plannerAgent.ts`, `src/coderAgent.ts`
+
+**CONCEITO**: Um modelo leve (Gemma 4 31B) atua como orquestrador — conversa com o usuário e delega trabalho complexo para um modelo pesado (GLM 5.2). O modelo pesado tem system prompts ESPECIALIZADOS (planejamento vs código) que produzem resultados melhores que um prompt genérico.
+
+**FEATURE TOGGLE**: `ORCHESTRATOR_MODE=1` para ativar (default: off). `/orchestrator` para toggle em runtime (requer restart).
+
+| Parâmetro | Env Var | Default | Regra |
+|-----------|---------|---------|-------|
+| `ORCHESTRATOR_MODE` | `ORCHESTRATOR_MODE` | `0` (off) | `1` para ativar |
+| `ORCHESTRATOR_MODEL` | `ORCHESTRATOR_MODEL` | `google/gemma-4-31b-it` | Modelo leve (orquestrador) |
+| `HEAVY_MODEL` | `HEAVY_MODEL` | `z-ai/glm-5.2` | Modelo pesado (planejador + programador) |
+
+**Arquitetura**:
+```
+Usuário → Orchestrator (Gemma 4 31B)
+  ├── chamar_planejador → Planner (GLM 5.2) — system prompt de planejamento
+  │   Tools: pensar, buscar_web, ler_url, usar_scout
+  ├── chamar_programador → Coder (GLM 5.2) — system prompt de código
+  │   Tools: editar_arquivo, aplicar_diff, editar_multi_arquivos,
+  │          desfazer_edicao, usar_scout, pensar, executar_comando
+  ├── executar_comando_readonly — allowlist de comandos seguros
+  ├── usar_scout — delega leituras para DiffusionGemma 26B
+  ├── buscar_web, ler_url — web
+  └── perguntar_usuario — pergunta ao usuário
+```
+
+**Compaction**: Quando o modelo pesado termina, o resultado cru é alimentado ao orquestrador. Se >500 chars, o orquestrador faz uma chamada separada para "compactar" (resumir). O **PLANO nunca é compactado** — permanece cru no contexto.
+
+**Scout com MCP**: O scout agora tem acesso aos tools read-only do MCP Roblox Studio (script_read, script_search, script_grep, search_game_tree, inspect_instance, console_output, get_studio_state). Permite ao scout encontrar UIs e ler scripts do Roblox.
+
+**Anti-recursão ajustada**: O scout bloqueia `CLAUDE_KILLER_AGENT_ID = "scout"`, `"sub-agent"`, `"small-task-agent"`. PERMITE `"planner"`, `"coder"`, `"orchestrator"` — os modelos pesados PODEM usar o scout.
+
+**Segurança**:
+- Orchestrator NÃO tem tools de edição (só orquestra)
+- Orchestrator tem `executar_comando_readonly` (allowlist, não `executar_comando`)
+- Planner NÃO tem tools de edição (só planeja)
+- Coder tem tools de edição + executar_comando (modelo pesado, confiável)
+- Todos usam `clearModelOverride()` no finally (previne leak)
+
+**Regras imutáveis**:
+- O PLANO nunca é compactado pelo orquestrador
+- O orquestrador NÃO edita arquivos
+- O orquestrador NÃO planeja (delega para planner)
+- Planner e Coder PODEM usar scout (não são bloqueados)
+- Orchestrator PODE usar scout diretamente (para verificações rápidas)
+
+---
+
 ## 11. Quality Gate
 
 > Arquivo: `src/strictQualityGate.ts`
@@ -1106,6 +1156,15 @@ Adicional: `~/.claude-killer/modes/<mode>/mcps/*.json` (mode-specific).
 73. **dotfileConfig deep copy** — `loadConfig` retorna deep copy (JSON.parse/stringify) para evitar cache mutation.
 
 74. **lspClient pathToFileURL** — usar `url.pathToFileURL()` NÃO `file://${absPath}` (Windows-safe).
+
+### 17.10 Orchestrator Mode
+
+75. **ORCHESTRATOR_MODE default off** — não ativar por default, requer opt-in.
+76. **Plano nunca compactado** — o plano do planner permanece cru no contexto do orquestrador.
+77. **Orchestrator sem tools de edição** — orquestrador NÃO tem editar_arquivo, aplicar_diff, etc.
+78. **Scout permite planner/coder** — anti-recursão do scout bloqueia scout/sub-agent/small-task, PERMITE planner/coder/orchestrator.
+79. **clearModelOverride em todos os finally** — orchestrator, planner, e coder devem chamar clearModelOverride() no finally.
+80. **Compaction >500 chars** — resultados do modelo pesado >500 chars são compactados antes de entrar no contexto do orquestrador.
 
 ---
 

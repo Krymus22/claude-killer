@@ -21,6 +21,9 @@ describe("Config", () => {
     delete process.env.RATE_LIMIT_RPM;
     delete process.env.MAX_HEAL_RETRIES;
     delete process.env.DEBUG;
+    delete process.env.ORCHESTRATOR_MODE;
+    delete process.env.ORCHESTRATOR_MODEL;
+    delete process.env.HEAVY_MODEL;
 
     const { config } = await import("../config.js");
 
@@ -28,6 +31,10 @@ describe("Config", () => {
     expect(config.diffPreview).toBe(true);
     expect(config.contextCompactThreshold).toBe(0.70);
     expect(config.contextWarnThreshold).toBe(0.65);
+    // Orchestrator mode defaults (FEAT-ORCH-WIRE)
+    expect(config.orchestratorMode).toBe(false);
+    expect(config.orchestratorModel).toBe("google/gemma-4-31b-it");
+    expect(config.heavyModel).toBe("z-ai/glm-5.2");
   });
 
   it("handles optionalInt with invalid value", async () => {

@@ -1624,6 +1624,16 @@ export async function chatWithModel(
   tools: OpenAI.Chat.Completions.ChatCompletionTool[] | undefined,
   modelId: string,
   disableThinking = false,
+  /**
+   * FEAT-ORCH-CORE: optional streaming callbacks. The orchestrator (and any
+   * future caller that wants streaming from a sub-agent) passes these so the
+   * TUI can render tokens as they arrive. The original 4-arg callers (scout,
+   * small task agent) are unaffected — these three params default to
+   * undefined, which is what `chat()` receives today.
+   */
+  onStreamStart?: () => void,
+  onToken?: (token: string) => void,
+  onThinking?: () => void,
 ): Promise<ChatResponse> {
   // Set the override — createStreamRequest will use this instead of config.model
   modelOverride = modelId;
@@ -1631,7 +1641,7 @@ export async function chatWithModel(
 
   try {
     log.debug(`[CHAT_WITH_MODEL] Calling ${modelId} (override set, config.model=${config.model} unchanged, thinking=${disableThinking ? "disabled" : "default"})`);
-    return await chat(messages, undefined, undefined, undefined, tools);
+    return await chat(messages, onStreamStart, onToken, onThinking, tools);
   } finally {
     modelOverride = null;
     disableThinkingOverride = false;

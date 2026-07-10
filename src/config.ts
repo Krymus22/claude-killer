@@ -36,6 +36,11 @@ function optionalFloat(key: string, fallback: number): number {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+function optionalString(key: string, defaultValue: string): string {
+  const val = process.env[key];
+  return val && val.trim() ? val.trim() : defaultValue;
+}
+
 // --- Detect API provider (NVIDIA NIM or ZenMux) -----------------------------
 
 const _provider = detectProvider();
@@ -94,6 +99,16 @@ export const config = {
 
   /** Top-p for nucleus sampling (0.0-1.0). Default: 0.95 (NVIDIA recommended). */
   topP: optionalFloat("TOP_P", 0.95),
+
+  /** Orchestrator mode — uses a lightweight model as orchestrator that delegates
+   *  to a heavy model for planning and coding. Default: off (uses traditional mode). */
+  orchestratorMode: optionalBool("ORCHESTRATOR_MODE", false),
+
+  /** Model to use as orchestrator (lightweight, fast). Default: google/gemma-4-31b-it */
+  orchestratorModel: optionalString("ORCHESTRATOR_MODEL", "google/gemma-4-31b-it"),
+
+  /** Heavy model for planning and coding (intelligent, slower). Default: z-ai/glm-5.2 */
+  heavyModel: optionalString("HEAVY_MODEL", "z-ai/glm-5.2"),
 
   /**
    * Max tokens per response.

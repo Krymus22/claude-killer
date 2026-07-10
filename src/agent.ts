@@ -1045,7 +1045,15 @@ const toolHandlers: Record<string, ToolHandler> = {
     // sub-agent (which would cause deadlock via acquireSubAgentSlot).
     // Sub-agents set CLAUDE_KILLER_AGENT_ID env var — if it's set, we're
     // inside a sub-agent context and must refuse.
-    if (process.env.CLAUDE_KILLER_AGENT_ID) {
+    //
+    // FEAT-SCOUT-MCP: relaxed to ONLY block when the agent ID is itself a
+    // scout/sub-agent/small-task-agent (the lightweight models that would
+    // deadlock via acquireSubAgentSlot). Heavy models ("planner", "coder",
+    // "orchestrator") are now ALLOWED to call the scout — this is the whole
+    // point of the scout: a faster, smaller model that does read/search on
+    // behalf of the heavy models.
+    const agentId = process.env.CLAUDE_KILLER_AGENT_ID;
+    if (agentId === "scout" || agentId === "sub-agent" || agentId === "small-task-agent") {
       return {
         resultStr: "[ERROR] usar_scout cannot be called from inside a sub-agent (would deadlock). Use ler_arquivo/buscar_texto directly.",
         usedHeal: false,

@@ -903,6 +903,8 @@ const COMMAND_HANDLERS: Record<string, (arg: string | null) => CommandResult> = 
   "/searx": (arg) => handleSearxCommand(arg),
   // /small — run a small task with a smaller model (llama-3.1-8b default)
   "/small": (arg) => handleSmallCommand(arg),
+  // /orchestrator — toggle orchestrator mode (lightweight + heavy model)
+  "/orchestrator": () => handleOrchestratorCommand(),
 };
 
 function handleLangCommand(arg: string | null): CommandResult {
@@ -1225,6 +1227,33 @@ function handlePoolCommand(): CommandResult {
     return { handled: true, message: "Pool: modo single-key (configure NVIDIA_API_KEYS for multi-key)" };
   }
   return { handled: true, message: formatPoolStats() };
+}
+
+/**
+ * /orchestrator — Toggle orchestrator mode at runtime.
+ *
+ * Orchestrator mode uses a lightweight model (default: google/gemma-4-31b-it)
+ * as the main conversational agent that delegates to a heavy model
+ * (default: z-ai/glm-5.2) for planning and coding via chamar_planejador /
+ * chamar_programador. See src/orchestratorAgent.ts.
+ *
+ * This handler toggles process.env.ORCHESTRATOR_MODE. Because config.ts reads
+ * the env var at module load (frozen into config.orchestratorMode), the TUI
+ * advises a restart — the new value takes effect on the next CLI launch.
+ * (runOrchestratorLoop's isOrchestratorMode() reads process.env live, but the
+ * gate in runStreaming uses the frozen config value, so a restart is the
+ * reliable path.)
+ */
+function handleOrchestratorCommand(): CommandResult {
+  const current = process.env.ORCHESTRATOR_MODE === "1";
+  process.env.ORCHESTRATOR_MODE = current ? "0" : "1";
+  return {
+    handled: true,
+    message: `Orchestrator mode: ${current ? "OFF" : "ON"}\n` +
+      `Model: ${process.env.ORCHESTRATOR_MODEL ?? "google/gemma-4-31b-it"}\n` +
+      `Heavy: ${process.env.HEAVY_MODEL ?? "z-ai/glm-5.2"}\n` +
+      `Restart the CLI for changes to take effect.`,
+  };
 }
 
 function handleSlashCommand(input: string): CommandResult {
@@ -2123,9 +2152,12 @@ export function App() {
     // if the current turn has no streaming, e.g., slash commands).
     setTokensPerSecond(0);
 
-    const response = await runAgentLoop(
-      fullInput,
-      () => {
+    // --- Streaming callbacks (shared by runAgentLoop and runOrchestratorLoop) ---
+    // The orchestrator uses the SAME callback interface as runAgentLoop, so we
+    // extract them into named consts and pass them to whichever loop is active.
+    // This avoids duplicating ~200 lines of TUI wiring (streaming, throttling,
+    // tool messages, ask-user) across the two code paths.
+    const onStreamStart = () => {
         streamStarted = true;
         // BUG FIX: reset streamStartTime AND tokenCount on EVERY stream
         // start. The agent may call chat() multiple times in one turn
@@ -2168,8 +2200,8 @@ export function App() {
           }
           return [...updated, { role: "assistant", content: "", isStreaming: true }];
         });
-      },
-      (token: string) => {
+      };
+    const onToken = (token: string) => {
         streamContent += token;
         streamContentRef.current = streamContent;
         // BUG FIX (tok/s-aleatorio): don't count empty tokens (heartbeats/
@@ -2236,8 +2268,8 @@ export function App() {
             });
           }, wait);
         }
-      },
-      () => {
+      };
+    const onThinking = () => {
         // ─── Stream ended — flush any pending throttled content ───────────
         // BUG FIX (scroll-roubo): the trailing setTimeout may still be
         // pending when the stream ends. Cancel it and do one final
@@ -2262,8 +2294,8 @@ export function App() {
         // Reset throttle state for the next stream in this same agent turn.
         lastStreamFlushRef.current = 0;
         setStatus("thinking");
-      },
-      (usage) => {
+      };
+    const onUsage = (usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number }) => {
         setLastUsage(usage);
         // Accumulate session totals so StatusBar shows cumulative cost/tokens
         // instead of just the last-turn values.
@@ -2313,11 +2345,11 @@ export function App() {
         }
         // Refresh effort label (might have changed via /effort)
         setEffortLabel(getEffortLabel());
-      },
-      // onToolCall: add a "tool" message to the chat in chronological order.
-      // This replaces the old behavior where tool calls were printed via
-      // console.log (which broke the Ink TUI by appearing ABOVE the layout).
-      (toolName: string, args: Record<string, unknown>) => {
+      };
+    // onToolCall: add a "tool" message to the chat in chronological order.
+    // This replaces the old behavior where tool calls were printed via
+    // console.log (which broke the Ink TUI by appearing ABOVE the layout).
+    const onToolCall = (toolName: string, args: Record<string, unknown>) => {
         setMessages((prev) => [
           ...prev,
           {
@@ -2327,9 +2359,9 @@ export function App() {
             isResult: false,
           },
         ]);
-      },
-      // onToolResult: add a "tool result" message with success/error status.
-      (toolName: string, ok: boolean, resultStr: string) => {
+      };
+    // onToolResult: add a "tool result" message with success/error status.
+    const onToolResult = (toolName: string, ok: boolean, resultStr: string) => {
         setMessages((prev) => [
           ...prev,
           {
@@ -2340,17 +2372,44 @@ export function App() {
             ok,
           },
         ]);
-      },
-      // Sprint 1: AskUser — IA faz pergunta, agent pausa, usuário responde
-      (question: AskUserQuestion) => {
+      };
+    // Sprint 1: AskUser — IA faz pergunta, agent pausa, usuário responde
+    const onAskUser = (question: AskUserQuestion) => {
         return new Promise<AskUserResponse>((resolve) => {
           questionResolverRef.current = resolve;
           setPendingQuestion(question);
         });
-      },
-      // allowUserQuestions: true (chat principal sempre pode perguntar)
-      true,
-    );
+      };
+
+    let response: string;
+    // Orchestrator mode: dynamic-import to avoid eagerly loading the
+    // orchestrator module (and its deps — plannerAgent, coderAgent,
+    // scoutAgent) when orchestrator mode is off (the default).
+    // config.orchestratorMode is frozen at module load; the /orchestrator
+    // slash command toggles process.env.ORCHESTRATOR_MODE and advises a
+    // restart. The orchestrator uses the SAME callback interface as
+    // runAgentLoop, so all TUI wiring (streaming, tool messages, ask-user)
+    // is shared between both code paths.
+    if (config.orchestratorMode) {
+      const { isOrchestratorMode, runOrchestratorLoop } = await import("../orchestratorAgent.js");
+      // isOrchestratorMode() reads process.env live (defensive — in case
+      // the env var was unset after startup). Falls back to runAgentLoop.
+      if (isOrchestratorMode()) {
+        response = await runOrchestratorLoop(fullInput, {
+          onStreamStart, onToken, onThinking, onUsage, onToolCall, onToolResult, onAskUser,
+        });
+      } else {
+        response = await runAgentLoop(
+          fullInput, onStreamStart, onToken, onThinking, onUsage,
+          onToolCall, onToolResult, onAskUser, true,
+        );
+      }
+    } else {
+      response = await runAgentLoop(
+        fullInput, onStreamStart, onToken, onThinking, onUsage,
+        onToolCall, onToolResult, onAskUser, true,
+      );
+    }
 
     return { response, streamStarted };
   }, []);

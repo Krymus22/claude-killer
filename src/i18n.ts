@@ -704,6 +704,14 @@ export const COMMAND_I18N: Record<string, Record<Language, CommandI18n>> = {
       desc: "Searx local search status (install is automatic)",
     },
   },
+  "/orchestrator": {
+    "pt-BR": {
+      desc: "Alternar modo orquestrador (modelo leve + pesado)",
+    },
+    en: {
+      desc: "Toggle orchestrator mode (lightweight + heavy)",
+    },
+  },
 };
 
 /** Get the localized description + subcommands for a slash command. */

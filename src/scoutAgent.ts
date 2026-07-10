@@ -37,6 +37,11 @@ import { pushActivity } from "./activityTracker.js";
 // FIX-SCOUT (BH9 HIGH 2): extract resolveAndCheckPath into a shared utility
 // so subAgents.ts and smallTaskAgent.ts use the same hard boundary.
 import { resolveAndCheckPath, validateCwd } from "./pathSecurity.js";
+// FEAT-SCOUT-MCP: MCP Roblox Studio read-only tools so the scout can find
+// UIs, read scripts, and search the game tree directly via MCP.
+import { getActiveMCPServers, getMCPToolDefinitions, callMCPTool } from "./extensions.js";
+import { classifyMcpTool, extractToolName } from "./robloxMcpGuard.js";
+import type OpenAI from "openai";
 
 // --- Types ------------------------------------------------------------------
 
@@ -137,6 +142,9 @@ RULES:
 - You MUST call at least ONE tool before responding. Do NOT respond with "DONE" without making tool calls first.
 - After ALL tool calls are done, respond with exactly: DONE
 - The main agent will receive the FULL results of your tool calls (file contents, search results) directly.
+
+You also have access to MCP Roblox Studio tools (if connected): script_read, script_search, script_grep, search_game_tree, inspect_instance, console_output, get_studio_state.
+Use these to find UIs, read scripts, and search the game tree in Roblox Studio.
 
 CRITICAL: Start by calling the appropriate tool for each task. Do not explain what you will do — just do it.`;
 
@@ -241,6 +249,33 @@ function isReadOnlyCommand(comando: string): boolean {
   );
 }
 
+/**
+ * Get MCP tools that are classified as "read" (read-only).
+ * These are added to the scout's tool set so it can read Roblox Studio
+ * instances, search the game tree, etc.
+ *
+ * FEAT-SCOUT-MCP: enables the scout to call MCP Roblox Studio read-only
+ * tools (script_read, script_search, script_grep, search_game_tree,
+ * inspect_instance, console_output, get_studio_state) to find UIs, read
+ * scripts, and search the game tree directly via the connected MCP server.
+ *
+ * Tools are filtered via robloxMcpGuard.classifyMcpTool — only "read"
+ * tools pass through. Write/execute/playtest/session tools are excluded
+ * (the scout is READ-ONLY by design).
+ */
+function getMCPReadTools(): OpenAI.Chat.Completions.ChatCompletionTool[] {
+  const allMcpTools = getMCPToolDefinitions();
+  return allMcpTools.filter(tool => {
+    // Extract the tool name (format: "serverName__toolName") and classify
+    // it. classifyMcpTool expects the bare name (e.g. "script_read"), so we
+    // strip the server prefix via extractToolName first.
+    const prefixedName = tool.function.name;
+    const bareName = extractToolName(prefixedName);
+    const classification = classifyMcpTool(bareName);
+    return classification === "read";
+  });
+}
+
 // --- Tool executor (read-only, inline) --------------------------------------
 
 // FIX-SCOUT (BH9 HIGH 2): resolveAndCheckPath has been extracted to
@@ -340,8 +375,23 @@ async function executeScoutTool(toolName: string, args: Record<string, unknown>,
         rawResult = typeof result === "string" ? result : String(result);
         break;
       }
-      default:
+      default: {
+        // FEAT-SCOUT-MCP: Check if this is an MCP tool (format: "serverName__toolName").
+        // MCP tools are prefixed with the server name and two underscores, e.g.
+        // "Roblox_Studio__script_read". If the tool name matches this pattern,
+        // delegate to callMCPTool — the actual tool execution happens in the
+        // MCP server process (e.g. the Roblox Studio plugin).
+        if (toolName.includes("__")) {
+          try {
+            const result = await callMCPTool(toolName, args);
+            rawResult = typeof result === "string" ? result : JSON.stringify(result);
+          } catch (err) {
+            rawResult = `[ERROR] MCP tool ${toolName} failed: ${(err as Error).message}`;
+          }
+          break;
+        }
         return `[ERROR] Unknown tool: ${toolName}`;
+      }
     }
     return truncateResult(rawResult);
   } catch (err) {
@@ -533,6 +583,18 @@ export async function runScout(args: ScoutArgs): Promise<ScoutResult | null> {
     // it directly, skipping the slow round-trips of reading files itself.
     const toolResults: ToolCallRecord[] = [];
 
+    // FEAT-SCOUT-MCP: Combine scout's built-in read-only tools with any
+    // active MCP Roblox Studio read-only tools (script_read, script_search,
+    // script_grep, search_game_tree, inspect_instance, console_output,
+    // get_studio_state). Computed ONCE before the loop — MCP server/tool
+    // list doesn't change mid-run, and recomputing per iteration wastes
+    // cycles. If no MCP servers are active, this is just SCOUT_TOOLS.
+    const allTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
+      ...SCOUT_TOOLS,
+      ...getMCPReadTools(),
+    ];
+    log.debug(`[SCOUT] Tool set: ${allTools.length} tools (${SCOUT_TOOLS.length} built-in + ${allTools.length - SCOUT_TOOLS.length} MCP read)`);
+
     const scoutStartTime = Date.now();
 
     while (callNum < maxCalls) {
@@ -573,7 +635,7 @@ export async function runScout(args: ScoutArgs): Promise<ScoutResult | null> {
       // then, the per-iteration check at the top of the loop is the best
       // we can do, and the OpenAI client's own timeout (5 min) is the
       // hard ceiling.
-      const response = await chatWithScoutModel(history, SCOUT_TOOLS);
+      const response = await chatWithScoutModel(history, allTools);
 
       // BUG FIX (false-positive): if finish_reason is "error" (no choice),
       // return completed=false instead of treating empty content as summary.

@@ -50,6 +50,7 @@
 | `deepseek-ai/deepseek-v3.1` | nvidia | 128k | 8,192 | ✅ | ❌ |
 | `deepseek-ai/deepseek-v4-pro` | nvidia | **1M** | **32,768** | ✅ | ✅ |
 | `google/diffusiongemma-26b-a4b-it` | nvidia | 256k | 4,096 | ✅ | ✅ |
+| `meta/llama-3.1-8b-instruct` | nvidia | 128k | 4,096 | ✅ | ❌ |
 | `mistralai/mistral-medium-3.5-128b` | nvidia | 128k | 8,192 | ✅ | ❌ |
 | `thudm/glm-4.5` | nvidia | 128k | 8,192 | ✅ | ❌ |
 | `z-ai/glm-5.2-free` | zenmux | 1M | 16,384 | ✅ | ✅ |
@@ -661,6 +662,52 @@ think → pensar
 4. Agente principal usa o summary como contexto e pula direto para a edição
 
 **Race condition prevention**: `chatWithModel` usa `modelOverride` (variável module-level) em vez de mutar `config.model` global. O override é limpo no `finally` — nunca corrompe `config.model` permanentemente.
+
+### 10.8 Small Task Agent (/small — modelo menor para tarefas do usuário)
+
+> Arquivo: `src/smallTaskAgent.ts`
+
+**PROBLEMA**: O modelo principal (ex: GLM 5.2, Mistral Medium) é excelente mas lento no servidor NVIDIA (filas enormes). Para tarefas simples como "lista os arquivos .ts", "roda git status" — não vale a pena esperar o modelo grande.
+
+**SOLUÇÃO**: O usuário digita `/small <tarefa>` e um modelo menor e rápido (default: `meta/llama-3.1-8b-instruct`) executa a tarefa com um tool set limitado. O small model faz a tarefa, produz um resumo OBJETIVO e CURTO, e o resumo é injetado no contexto da IA principal no próximo prompt.
+
+**DIFERENÇA DO SCOUT**: O scout é chamado PELA IA principal (delegação interna). O small é chamado PELO USUÁRIO via `/small` (slash command). O scout faz leituras para a IA; o small faz tarefas para o usuário.
+
+| Parâmetro | Env Var | Default | Regra |
+|-----------|---------|---------|-------|
+| `SMALL_TASK_ENABLED` | `SMALL_TASK_ENABLED` | `1` (on) | `0` para desativar |
+| `SMALL_TASK_MODEL` | `SMALL_TASK_MODEL` | `meta/llama-3.1-8b-instruct` | Modelo menor (deve suportar tools) |
+| `SMALL_TASK_MAX_TOOL_CALLS` | `SMALL_TASK_MAX_TOOL_CALLS` | `10` | Max tool calls por task (cap 20) |
+| `SMALL_TASK_TIMEOUT_MS` | `SMALL_TASK_TIMEOUT_MS` | `60000` (60s) | Timeout global |
+
+**Segurança**:
+- **READ-ONLY + executar_comando**: só tem `executar_comando, ler_arquivo, buscar_arquivos, buscar_texto`. NÃO pode editar/escrever.
+- **Anti-recursão**: small não pode ser chamado de dentro de sub-agentes (guard via `CLAUDE_KILLER_AGENT_ID`).
+- **Max 10 tool calls**: small task = quick task.
+- **60s timeout global**: não pode travar a CLI.
+- **Single tool call por turno**: llama-3.1-8b não suporta parallel tool calls. Se o modelo retorna múltiplas, só a primeira é executada.
+- **Fallback parser**: se o modelo retorna tool calls como texto (comum em 8B), o parser extrai e executa.
+
+**Fluxo**:
+1. Usuário digita `/small <tarefa>`
+2. CLI mostra `⚡ small task: <tarefa>` no chat
+3. Small model executa com tool set limitado
+4. Tool calls aparecem no chat com prefixo `small:` (ex: `small:executar_comando`)
+5. Small model produz resumo objetivo (máx 5 linhas)
+6. CLI mostra `⚡ small result: <resumo>` no chat
+7. Resumo é armazenado em `pendingSummaries`
+8. No próximo prompt do usuário, o agent loop injeta `[SMALL TASK RESULTS] <resumo>` como system message
+9. IA principal recebe o resumo e sabe que a tarefa já foi feita
+
+**Context injection**: `consumePendingSmallTaskSummaries()` é chamado no início de `runAgentLoop()`. Retorna e limpa os summaries pendentes. A IA vê:
+```
+[SMALL TASK RESULTS]
+The following small tasks were completed by a smaller model (user-initiated via /small).
+These tasks are ALREADY DONE — do not redo them. Use this context to continue:
+
+[SMALL TASK 1 COMPLETED]
+<resumo>
+```
 
 ---
 

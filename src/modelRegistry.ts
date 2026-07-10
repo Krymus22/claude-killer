@@ -143,6 +143,18 @@ export const MODEL_REGISTRY: ModelInfo[] = [
     provider: "nvidia",
   },
   {
+    id: "meta/llama-3.1-8b-instruct",
+    name: "Llama 3.1 8B Instruct",
+    contextWindow: 128_000,
+    maxOutputTokens: 4_096,
+    costPer1MPrompt: 0,
+    costPer1MCompletion: 0,
+    supportsTools: true,
+    supportsParallelTools: false,
+    hasThinking: false,
+    provider: "nvidia",
+  },
+  {
     id: "meta/llama-3.3-70b-instruct",
     name: "Llama 3.3 70B",
     contextWindow: 128_000,

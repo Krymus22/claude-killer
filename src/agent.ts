@@ -2257,6 +2257,28 @@ export async function runAgentLoop(
   blockedCallCounter.clear(); // BUG-PP+: reset duplicate-call counter for new session
   setEffortLevel(getEffortLevel()); // refresh system prompt with current effort
 
+  // ── Inject pending small task summaries ────────────────────────────────
+  // The user may have run /small <task> before this prompt. The small task
+  // agent stores its summary in pendingSummaries. We inject them as a system
+  // message so the main AI knows what was already done — without the user
+  // having to re-explain or the AI having to re-run the task.
+  try {
+    const { consumePendingSmallTaskSummaries } = await import("./smallTaskAgent.js");
+    const summaries = consumePendingSmallTaskSummaries();
+    if (summaries.length > 0) {
+      const formatted = summaries.map((s, i) => `[SMALL TASK ${i + 1} COMPLETED]\n${s}`).join("\n\n");
+      history.addSystemMessage(
+        `[SMALL TASK RESULTS]\n` +
+        `The following small tasks were completed by a smaller model (user-initiated via /small).\n` +
+        `These tasks are ALREADY DONE — do not redo them. Use this context to continue:\n\n` +
+        formatted
+      );
+      log.debug(`[AGENT] Injected ${summaries.length} small task summary(ies) into context`);
+    }
+  } catch (err) {
+    log.debug(`[AGENT] Failed to inject small task summaries: ${(err as Error).message}`);
+  }
+
   // 3.7: Initialize TASK_STATE.md from the user's first message
   try {
     initTaskStateFromUserMessage(userInput);

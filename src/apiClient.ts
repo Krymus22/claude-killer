@@ -1508,6 +1508,30 @@ export async function chatWithModel(
   }
 }
 
+/**
+ * Clear the model override and disable-thinking override set by chatWithModel.
+ *
+ * BUG FIX (BH-SMALL-1 / model-override-leak-on-timeout): when a caller races
+ * chatWithModel against a timeout (e.g., smallTaskAgent.runSmallTask uses
+ * Promise.race to enforce a 60s global timeout), the chatWithModel promise
+ * continues running in the background — its `finally` block (which clears
+ * modelOverride) only runs when the underlying `chat()` call eventually
+ * completes (up to 5 min, the OpenAI client timeout). During that window,
+ * modelOverride is still set to the sub-agent's model (e.g., llama-3.1-8b),
+ * so any chat() call from the main agent would silently use the WRONG model.
+ *
+ * Callers that race chatWithModel against a timeout MUST call this function
+ * when they stop waiting (timeout, abort, or early exit) to prevent the
+ * override from leaking into subsequent main-agent chat() calls.
+ *
+ * In the normal (non-raced) case, chatWithModel's own `finally` has already
+ * cleared both flags, so this is a no-op — safe to call unconditionally.
+ */
+export function clearModelOverride(): void {
+  modelOverride = null;
+  disableThinkingOverride = false;
+}
+
 // BUG FIX (BUG 6): helper for cancelar/abortar um stream perdedor do hedging.
 // Tenta várias APIs comuns: OpenAI SDK Stream expõe `.controller` (AbortController);
 // Node streams têm `.destroy()`; alguns objetos têm `.abort()`. Se nada for

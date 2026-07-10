@@ -37,6 +37,7 @@ import { discoverExtensions, getAllExtensions } from "../extensionCenter.js";
 import { setEffortLevel, getEffortLabel } from "../effortLevels.js";
 import { getPoolSize, formatPoolStats, setPrewarmListener, type PrewarmEvent } from "../apiKeyPool.js";
 import { setHeartbeatListener, type HeartbeatEvent } from "../heartbeat.js";
+import { runSmallTask, isSmallTaskEnabled, getSmallTaskModel, consumePendingSmallTaskSummaries } from "../smallTaskAgent.js";
 import { getRegistry as getExternalToolRegistry } from "../externalTools.js";
 import {
   getAllModes,
@@ -833,6 +834,8 @@ const COMMAND_HANDLERS: Record<string, (arg: string | null) => CommandResult> = 
   "/lang": (arg) => handleLangCommand(arg),
   // Searx local search status/install
   "/searx": (arg) => handleSearxCommand(arg),
+  // /small — run a small task with a smaller model (llama-3.1-8b default)
+  "/small": (arg) => handleSmallCommand(arg),
 };
 
 function handleLangCommand(arg: string | null): CommandResult {
@@ -951,6 +954,33 @@ function handleEffortCommand(arg: string | null): CommandResult {
   // on the next request. The visual label update is handled by
   // handleSlashCommandFlow which calls setEffortLabel after this returns.
   return { handled: true, message: `Effort alterado para: ${getEffortLabel()}` };
+}
+
+/**
+ * /small <task> — runs a small task with a smaller model (default: llama-3.1-8b).
+ * The task executes with a limited tool set (executar_comando, ler_arquivo,
+ * buscar_arquivos, buscar_texto) and produces a concise summary. The summary
+ * is shown in the chat AND injected into the main AI's context on the next
+ * prompt.
+ *
+ * This is a "marker" command — it returns handled=false so the caller
+ * (handleSlashCommandFlow) can run it asynchronously (since runSmallTask
+ * is async and handleSlashCommand is sync). The actual execution happens
+ * in handleSlashCommandFlow via a special case for "/small".
+ */
+function handleSmallCommand(arg: string | null): CommandResult {
+  if (!arg || arg.trim() === "") {
+    return {
+      handled: true,
+      message: "Uso: /small <tarefa>\n" +
+        "Exemplo: /small lista os arquivos .ts e conta quantos são\n" +
+        "Exemplo: /small roda git status e me diz o estado do repo\n" +
+        "\nO small task usa um modelo menor (default: llama-3.1-8b) para " +
+        "tarefas rápidas. O resumo é injetado no contexto da IA principal.",
+    };
+  }
+  // Marker — handleSlashCommandFlow will detect this and run async
+  return { handled: false, message: undefined };
 }
 
 function handleModeCommand(arg: string | null): CommandResult {
@@ -2228,7 +2258,146 @@ export function App() {
     });
   }, []);
 
+  // ── Sidequest draining ─────────────────────────────────────────────────
+  // BUG FIX (BH-SMALL-2 / sidequest-stuck-during-async-slash): previously
+  // only handleSubmit's finally block drained the sidequest queue. Async
+  // slash commands (/small, /compact) bypass handleSubmit's finally by
+  // returning early, so sidequests typed by the user DURING a /small or
+  // /compact run were left stuck in sidequestsRef.current — visually shown
+  // as ⚡ in the chat but never sent to the IA until the user happened to
+  // submit ANOTHER normal message (whose finally would finally drain them).
+  //
+  // Fix: extract the draining logic into this stable useCallback so /small
+  // and /compact can call it from their own finally blocks. handleSubmit
+  // also uses it (replacing the inline loop) so the logic lives in ONE place.
+  const drainSidequests = useCallback(async () => {
+    // Loop until the ref is empty. Each iteration snapshots the ref, clears
+    // it, injects the queued sidequests into the agent history, and re-runs
+    // the agent loop. Sidequests that arrive during the inner runStreaming
+    // are picked up by the next loop iteration.
+    while (sidequestsRef.current.length > 0) {
+      const queued = sidequestsRef.current.slice();
+      sidequestsRef.current = [];
+      setSidequests([]);
+      try {
+        // Expand @-mentions in each sidequest (same as main path).
+        const expandedQueued = queued.map((sq) => expandAtMentions(sq));
+        // Add plan mode suffix if active (so IA doesn't call tools).
+        const planSuffix = history.isPlanMode()
+          ? "\n\n[PLAN MODE IS ACTIVE] You must NOT call any tools. Output a step-by-step plan as markdown. End with ===END PLAN==="
+          : "";
+        const sidequestInput = expandedQueued
+          .map((sq) => `[USER SIDEQUEST] ${sq}`)
+          .join("\n\n") + planSuffix;
+        const { response, streamStarted } = await runStreaming(sidequestInput);
+        finalizeMessage(response, streamStarted);
+        syncTodos();
+        syncPlan();
+      } catch (err) {
+        const errMsg = (err as Error).message ?? String(err);
+        setMessages((prev) => {
+          const withoutStreaming = prev.filter((m) => !m.isStreaming);
+          return [...withoutStreaming, {
+            role: "assistant" as const,
+            content: `❌ Sidequest error: ${errMsg}`,
+            isError: true,
+          }];
+        });
+        // Stop processing further queued sidequests — if the agent loop
+        // failed (e.g., API error), continuing would just cascade failures.
+        // Clear any sidequests queued during the failed run so they don't
+        // get stuck in the ref forever.
+        sidequestsRef.current = [];
+        setSidequests([]);
+        break;
+      }
+    }
+  }, [runStreaming, finalizeMessage, syncTodos, syncPlan]);
+
   const handleSlashCommandFlow = useCallback((trimmed: string): boolean => {
+    // ── /small <task> — special async handling ────────────────────────────
+    // handleSmallCommand returns { handled: false } when there's an argument,
+    // signaling that the task should be run asynchronously here.
+    if (trimmed.startsWith("/small ") || trimmed === "/small") {
+      const arg = trimmed.slice("/small".length).trim();
+      const smallResult = handleSlashCommand(trimmed);
+      if (smallResult.handled) {
+        // No argument — show usage
+        if (smallResult.message) {
+          setSystemMessages((prev) => [...prev, smallResult.message!]);
+        }
+        isProcessing.current = false;
+        setStatus("idle");
+        return true;
+      }
+      // Has argument — run the small task asynchronously
+      if (!isSmallTaskEnabled()) {
+        setSystemMessages((prev) => [...prev, "⚠️ Small task desabilitado via SMALL_TASK_ENABLED=0"]);
+        isProcessing.current = false;
+        setStatus("idle");
+        return true;
+      }
+      const cwd = process.cwd();
+      const task = arg;
+      // Show "⚡ small task: <task>" in chat
+      setSystemMessages((prev) => [...prev, `⚡ small task: ${task}`]);
+      setStatus("thinking");
+      isProcessing.current = true;
+      (async () => {
+        try {
+          const result = await runSmallTask(task, cwd, {
+            onToolCall: (toolName, args) => {
+              // Show tool calls in chat (like main agent).
+              //
+              // BUG FIX (BH-SMALL-2 / dead-code-and-cast): the previous
+              // version computed `const argsStr = JSON.stringify(args).slice(0, 80)`
+              // but never used it, AND set a `ts: Date.now()` field that does
+              // NOT exist on the ChatMessage interface — it only compiled
+              // because of the `as ChatMessage` cast, which silently bypassed
+              // TypeScript's excess-property check. Both removed.
+              setMessages((prev) => [...prev, {
+                role: "tool",
+                content: JSON.stringify(args),
+                toolName: `small:${toolName}`,
+                isResult: false,
+              } as ChatMessage]);
+            },
+            onToolResult: (_toolName, result, ok) => {
+              setMessages((prev) => [...prev, {
+                role: "tool",
+                content: result,
+                toolName: `small:${_toolName}`,
+                isResult: true,
+                ok,
+              } as ChatMessage]);
+            },
+          });
+          if (result.ok) {
+            setSystemMessages((prev) => [...prev, `⚡ small result: ${result.summary}`]);
+          } else {
+            setSystemMessages((prev) => [...prev, `⚠️ small falhou: ${result.error ?? "erro desconhecido"}`]);
+          }
+        } catch (err) {
+          const msg = (err as Error).message ?? String(err);
+          setSystemMessages((prev) => [...prev, `⚠️ small erro: ${msg}`]);
+        } finally {
+          // BUG FIX (BH-SMALL-2 / sidequest-stuck-during-async-slash):
+          // /small bypasses handleSubmit's finally block (which normally
+          // drains the sidequest queue). Drain sidequests here so messages
+          // typed by the user during /small are sent to the IA promptly
+          // instead of getting stuck in sidequestsRef until the next normal
+          // submit. drainSidequests handles its own errors internally
+          // (showing them as assistant error messages), so the outer try
+          // is just defensive.
+          try {
+            await drainSidequests();
+          } catch { /* drainSidequests handles its own errors */ }
+          isProcessing.current = false;
+          setStatus("idle");
+        }
+      })();
+      return true;
+    }
     let result: CommandResult;
     try {
       result = handleSlashCommand(trimmed);
@@ -2320,6 +2489,13 @@ export function App() {
           } catch (err) {
             setSystemMessages((prev) => [...prev, `Erro na compactacao: ${(err as Error).message}`]);
           } finally {
+            // BUG FIX (BH-SMALL-2 / sidequest-stuck-during-async-slash):
+            // /compact has the same shape as /small — it runs an async IIFE
+            // that bypasses handleSubmit's finally. Drain sidequests here so
+            // user messages typed during compaction are processed.
+            try {
+              await drainSidequests();
+            } catch { /* drainSidequests handles its own errors */ }
             isProcessing.current = false;
             setStatus("idle");
           }
@@ -2333,7 +2509,7 @@ export function App() {
       return true;
     }
     return false;
-  }, [exit]);
+  }, [exit, drainSidequests]);
 
   // -- Submit handler -----------------------------------------------------
   const handleSubmit = useCallback(
@@ -2512,79 +2688,22 @@ export function App() {
         // the inner runStreaming (since isProcessing.current stays true
         // throughout, the user can keep typing sidequests).
         //
-        // Fix: read from `sidequestsRef` (always current) and LOOP until the
-        // ref is empty. Each iteration snapshots the ref, clears it, injects
-        // the queued sidequests into the agent history, and re-runs the
-        // agent loop. Sidequests that arrive during the inner runStreaming
-        // are picked up by the next loop iteration.
-        while (sidequestsRef.current.length > 0) {
-          const queued = sidequestsRef.current.slice();
-          sidequestsRef.current = [];
-          setSidequests([]);
-          // BUG FIX (sidequest-double-send): previously, each sidequest was
-          // added to history INDIVIDUALLY via history.addUserMessage(sq)
-          // here, AND then runStreaming → runAgentLoop added the COMBINED
-          // message ([USER SIDEQUEST] sq1\n\n...) via history.addUserMessage.
-          // The IA saw each sidequest TWICE: once raw (no prefix) and once
-          // with the [USER SIDEQUEST] prefix. This also wrote duplicates to
-          // the session JSONL file (each addUserMessage calls tryAppendToSession).
-          // Fix: do NOT add individual sidequests to history here — let
-          // runAgentLoop add the combined message (it calls
-          // history.addUserMessage(userInput) internally).
-          try {
-            // BUG FIX (sidequest-no-at-mention): @-mentions were NOT expanded
-            // in sidequests (only in the main path). A sidequest like
-            // "@package.json" was sent as the literal string instead of the
-            // file's content. Fix: expand @-mentions in each sidequest,
-            // same as the main path (expandAtMentions).
-            const expandedQueued = queued.map((sq) => expandAtMentions(sq));
-            // BUG FIX (sidequest-no-plan-suffix): plan mode suffix was NOT
-            // added to sidequests. If plan mode was active, the IA could
-            // call tools in response to a sidequest — violating plan mode.
-            // Fix: add the plan mode suffix, same as the main path.
-            const planSuffix = history.isPlanMode()
-              ? "\n\n[PLAN MODE IS ACTIVE] You must NOT call any tools. Output a step-by-step plan as markdown. End with ===END PLAN==="
-              : "";
-            const sidequestInput = expandedQueued
-              .map((sq) => `[USER SIDEQUEST] ${sq}`)
-              .join("\n\n") + planSuffix;
-            const { response, streamStarted } = await runStreaming(sidequestInput);
-            finalizeMessage(response, streamStarted);
-            syncTodos();
-            // BUG FIX (missing-syncPlan): syncPlan was only called at the
-            // end of the finally, so a plan created/updated during the
-            // sidequest runStreaming wouldn't be reflected in the PlanPanel
-            // until after the entire finally completed. Now we sync after
-            // each sidequest batch.
-            syncPlan();
-          } catch (err) {
-            const errMsg = (err as Error).message ?? String(err);
-            setMessages((prev) => {
-              const withoutStreaming = prev.filter((m) => !m.isStreaming);
-              return [...withoutStreaming, {
-                role: "assistant" as const,
-                content: `❌ Sidequest error: ${errMsg}`,
-                isError: true,
-              }];
-            });
-            // Stop processing further queued sidequests — if the agent loop
-            // failed (e.g., API error), continuing would just cascade
-            // failures. Clear any sidequests queued during the failed run
-            // so they don't get stuck in the ref forever (visible as ⚡ but
-            // never processed). The user can re-submit them after seeing
-            // the error.
-            sidequestsRef.current = [];
-            setSidequests([]);
-            break;
-          }
-        }
+        // BUG FIX (BH-SMALL-2 / sidequest-stuck-during-async-slash): the
+        // draining logic was previously inlined here. It has been extracted
+        // into `drainSidequests` so that /small and /compact (which bypass
+        // handleSubmit's finally) can drain the queue from their own finally
+        // blocks. This call is now a one-liner; see drainSidequests for the
+        // implementation and the per-sidequest error-handling rationale
+        // (sidequest-double-send, sidequest-no-at-mention,
+        // sidequest-no-plan-suffix, missing-syncPlan).
+        await drainSidequests();
         isProcessing.current = false;
         setStatus("idle");
         syncTodos();
         syncPlan();
       }
     },
-    [exit, syncTodos, showAutocomplete, acMatches, acIndex, hasSpace]
+    [exit, syncTodos, showAutocomplete, acMatches, acIndex, hasSpace, drainSidequests]
   );
 
   // -- Input change handler -----------------------------------------------

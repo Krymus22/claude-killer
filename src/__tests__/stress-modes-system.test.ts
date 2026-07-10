@@ -43,6 +43,7 @@ vi.mock("../toolDetector.js", () => ({ findToolBinary: toolDetectorMock.findTool
 // Mock node:child_process (usado por manifestLoader.executeFromManifest)
 vi.mock("node:child_process", () => ({
   execSync: vi.fn(() => "ok output"),
+  execFileSync: vi.fn(() => "ok output"),
   spawn: vi.fn(),
 }));
 

@@ -46,10 +46,14 @@ const cpMock = vi.hoisted(() => ({
   execSync: vi.fn(() => {
     throw new Error("mocked: command not found");
   }),
+  execFileSync: vi.fn(() => {
+    throw new Error("mocked: command not found");
+  }),
   spawn: vi.fn(),
 }));
 vi.mock("node:child_process", () => ({
   execSync: cpMock.execSync,
+  execFileSync: cpMock.execFileSync,
   spawn: cpMock.spawn,
 }));
 
@@ -339,8 +343,8 @@ describe("Cross-module: Manifest + findToolBinary + executeFromManifest", () => 
 
   it("tool com manifest E binary → function call gerada + execução funciona", async () => {
     toolDetectorMock.findToolBinary.mockReturnValue("/fake/path/to/rojo"); // binary encontrado
-    // execSync mockado para retornar sucesso (default é throw)
-    cpMock.execSync.mockReturnValue("ok output from tool");
+    // execFileSync mockado para retornar sucesso (default é throw)
+    cpMock.execFileSync.mockReturnValue("ok output from tool");
     const manifests = [
       {
         name: "rojo_build",
@@ -364,8 +368,8 @@ describe("Cross-module: Manifest + findToolBinary + executeFromManifest", () => 
     expect(result.errors).toEqual([]);
     // findToolBinary foi chamado para encontrar o binary
     expect(toolDetectorMock.findToolBinary).toHaveBeenCalledWith("rojo", "roblox");
-    // execSync foi chamado para executar o binary
-    expect(cpMock.execSync).toHaveBeenCalled();
+    // execFileSync foi chamado para executar o binary
+    expect(cpMock.execFileSync).toHaveBeenCalled();
   });
 
   it("tool sem manifest → isManifestTool retorna false (não aparece como function call)", () => {

@@ -27,7 +27,7 @@ const mlModesMock = vi.hoisted(() => ({ getActiveMode: vi.fn(() => null) }));
 vi.mock("../modes.js", () => ({ getActiveMode: mlModesMock.getActiveMode }));
 
 vi.mock("../toolDetector.js", () => ({ findToolBinary: vi.fn(() => null) }));
-vi.mock("node:child_process", () => ({ execSync: vi.fn(() => "ok"), spawn: vi.fn() }));
+vi.mock("node:child_process", () => ({ execSync: vi.fn(() => "ok"), execFileSync: vi.fn(() => "ok"), spawn: vi.fn() }));
 
 // ─── manifestLoader.ts ──────────────────────────────────────────────────────
 

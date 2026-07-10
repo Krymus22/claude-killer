@@ -1045,6 +1045,68 @@ Adicional: `~/.claude-killer/modes/<mode>/mcps/*.json` (mode-specific).
 
 45. **suggestMode sem false positives** — regex de keywords NÃO deve incluir bare words comuns como "studio" (false positive para "Visual Studio"). Usar compound phrases como "roblox studio".
 
+### 17.9 Bug Hunt Massivo — Regras MEDIUM/LOW (Julho 2026)
+
+> Regras descobertas durante a correção dos bugs MEDIUM e LOW.
+
+46. **Empty reasoning_content reseta hang timer** — `if (reasoning != null)` NÃO `if (reasoning)`. Strings vazias `""` de reasoning models devem resetar o timer.
+
+47. **stopHeartbeat reseta lastModelState** — `stopHeartbeat()` deve setar `lastModelState = "unknown"` para que `first_success` evento volte a disparar em restart.
+
+48. **MAX_CONCURRENT_SUB_AGENTS NaN guard** — `Math.max(1, parseInt(...) || default)`. Non-numeric env var NÃO deve causar NaN deadlock.
+
+49. **compactHistoryAsync [SESSION CONTINUATION] dedup** — deve checar `hasContinuation` antes de injetar (não acumular). Mirror de `injectPostCompactionMessages`.
+
+50. **llmCompactor prefix** — usar `[AI CONTEXT COMPACTED - N old messages summarized...]` (§6.2.1), NÃO `[CONVERSATION MEMORY]`.
+
+51. **modelBasedCompactionAsync isLlmCompactionAvailable guard** — checar antes de chamar chat(). Não desperdiçar API call em keyless envs.
+
+52. **scoutAgent clearModelOverride em finally** — sempre chamar `clearModelOverride()` no finally do scout.
+
+53. **isRobloxStudioMcpTool normalized matching** — normalizar server name (strip non-alphanumerics, lowercase) antes de comparar. NÃO apenas 3 prefixes hardcoded.
+
+54. **/small case-insensitive** — `trimmed.toLowerCase().startsWith("/small ")`.
+
+55. **ChatDisplay header dedup com system messages** — `prevMsg.role === "system"` NÃO deve suprimir o header do próximo assistant message.
+
+56. **ConfiguratorChat mountedRef guard** — todos os callbacks do configureTool devem checar `mountedRef.current` antes de setState.
+
+57. **FolderBrowser Tab quick-select** — Tab deve chamar `onSelect(currentPath)`.
+
+58. **ExtensionHub install guard** — `installingRef` deve prevenir múltiplos installs simultâneos.
+
+59. **toolUpdater chmodSync após write** — `fs.chmodSync(filePath, 0o600)` após writeFileSync (mode só aplica em file creation).
+
+60. **dotfileConfig deep merge** — mcpServers/theme/telemetry/shortcuts devem ser deep-merged, NÃO shallow-merged.
+
+61. **dotfileConfig saveConfig mode 0o600** — config pode conter API keys. Usar `{ mode: 0o600 }`.
+
+62. **searxManager waitForSearxHealthy** — não retornar true imediatamente após start. Poll até healthy (30s timeout).
+
+63. **impactAnalyzer cache key inclui cwd** — `${process.cwd()}::${targetFile}` para evitar cross-project contamination.
+
+64. **config MODEL="" fallback** — `process.env.MODEL?.trim() || default`. Empty/whitespace NÃO deve produzir model vazio.
+
+65. **logger 10 segmentos** — `logger.statusBar` deve usar 10 segmentos (§8.3), NÃO 40.
+
+66. **activityTracker || não ??** — `formatShortLabel` deve usar `||` para empty string fallback.
+
+67. **logger inline code precedence** — inline code `replaceAll` deve rodar ANTES de bold/italic (§8.6).
+
+68. **tools MAX_OUTPUT_BYTES usa Buffer.byteLength** — NÃO string.length (UTF-16 chars ≠ bytes).
+
+69. **i18n detectLanguage LANGUAGE priority** — split por `:`, iterar em ordem, first match wins. NÃO `String.includes`.
+
+70. **autoMemory mode 0o600/0o700** — files com `mode: 0o600`, dirs com `mode: 0o700`.
+
+71. **skillTracker total budget check** — parar de adicionar skills se `totalTokens + tokens > MAX_TOTAL_TOKENS`.
+
+72. **parallelTools sequential para same-file** — same-name+same-file writes em grupos SEPARADOS (sequential), NÃO mesmo grupo (parallel).
+
+73. **dotfileConfig deep copy** — `loadConfig` retorna deep copy (JSON.parse/stringify) para evitar cache mutation.
+
+74. **lspClient pathToFileURL** — usar `url.pathToFileURL()` NÃO `file://${absPath}` (Windows-safe).
+
 ---
 
 ## COMO USAR ESTE DOCUMENTO

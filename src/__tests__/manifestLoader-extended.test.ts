@@ -34,9 +34,13 @@ vi.mock("../modes.js", () => ({ getActiveMode: modesMock.getActiveMode }));
 const toolDetectorMock = vi.hoisted(() => ({ findToolBinary: vi.fn(() => null) }));
 vi.mock("../toolDetector.js", () => ({ findToolBinary: toolDetectorMock.findToolBinary }));
 
-const cpMock = vi.hoisted(() => ({ execSync: vi.fn(() => "ok") }));
+const cpMock = vi.hoisted(() => ({
+  execSync: vi.fn(() => "ok"),
+  execFileSync: vi.fn(() => "ok"),
+}));
 vi.mock("node:child_process", () => ({
   execSync: cpMock.execSync,
+  execFileSync: cpMock.execFileSync,
   spawn: vi.fn(),
 }));
 
@@ -61,6 +65,7 @@ describe("manifestLoader — extended (edge cases)", () => {
     modesMock.getActiveMode.mockReturnValue(null);
     toolDetectorMock.findToolBinary.mockReturnValue("/fake/binary");
     cpMock.execSync.mockReturnValue("ok output");
+    cpMock.execFileSync.mockReturnValue("ok output");
   });
 
   afterEach(() => {
@@ -209,19 +214,19 @@ describe("manifestLoader — extended (edge cases)", () => {
 
   // --- executeFromManifest ---------------------------------------------------
 
-  it("repassa cwd customizado para o execSync", async () => {
+  it("repassa cwd customizado para o execFileSync", async () => {
     const manifests: ToolManifest[] = [
       { name: "rojo_build", description: "Build", category: "x", command: "rojo", args: ["build"] },
     ];
     await executeFromManifest("rojo_build", { dir: "/custom/cwd" }, manifests, "roblox");
-    expect(cpMock.execSync).toHaveBeenCalled();
-    // execSync(command, options) — 2 args
-    const opts = cpMock.execSync.mock.calls[0]![1] as { cwd?: string };
+    expect(cpMock.execFileSync).toHaveBeenCalled();
+    // execFileSync(binary, args, options) — 3 args
+    const opts = cpMock.execFileSync.mock.calls[0]![2] as { cwd?: string };
     expect(opts.cwd).toBe("/custom/cwd");
   });
 
-  it("captura timeout do execSync e retorna ok=false com errors", async () => {
-    cpMock.execSync.mockImplementation(() => {
+  it("captura timeout do execFileSync e retorna ok=false com errors", async () => {
+    cpMock.execFileSync.mockImplementation(() => {
       const err = new Error("Command timed out") as any;
       err.status = 124;
       err.stderr = "timeout";

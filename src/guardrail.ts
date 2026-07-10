@@ -65,13 +65,20 @@ function runCommand(
  * Write content to a temporary file in the OS temp dir, returning its path.
  * Only used for languages that don't need project context (JS, Python, Java).
  * Caller is responsible for unlinking it afterwards.
+ *
+ * SECURITY (CWE-377 / js/insecure-temporary-file): previously used a
+ * predictable name `claudekiller_${Date.now()}_${Math.random()}${suffix}` —
+ * both Date.now() and Math.random() are non-cryptographic, so an attacker
+ * could predict the name and pre-create a symlink at that location to
+ * redirect the write. Now we create a unique private temp dir via
+ * mkdtempSync (uses random bytes from the OS) and write the file inside it
+ * with mode 0o600. The caller must clean up the dir, not just the file —
+ * use `fs.rmSync(path.dirname(tmp), { recursive: true, force: true })`.
  */
 function writeTempFile(content: string, suffix: string): string {
-  const tmpPath = path.join(
-    os.tmpdir(),
-    `claudekiller_${Date.now()}_${Math.random().toString(36).slice(2)}${suffix}`
-  );
-  fs.writeFileSync(tmpPath, content, "utf8");
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "claudekiller-"));
+  const tmpPath = path.join(tmpDir, `content${suffix}`);
+  fs.writeFileSync(tmpPath, content, { encoding: "utf8", mode: 0o600 });
   return tmpPath;
 }
 
@@ -120,7 +127,9 @@ function validateJs(content: string): ValidationResult {
       errorMessage: `JavaScript syntax error:\n${res.output}`,
     };
   } finally {
-    try { fs.unlinkSync(tmp); } catch { /* ignore */ }
+    // SECURITY: writeTempFile now creates a unique temp dir; clean up the
+    // whole dir (recursive) to remove both the file and the dir itself.
+    try { fs.rmSync(path.dirname(tmp), { recursive: true, force: true }); } catch { /* ignore */ }
   }
 }
 
@@ -149,7 +158,9 @@ function validatePython(content: string): ValidationResult {
       errorMessage: `Python syntax error:\n${output}`,
     };
   } finally {
-    try { fs.unlinkSync(tmp); } catch { /* ignore */ }
+    // SECURITY: writeTempFile now creates a unique temp dir; clean up the
+    // whole dir (recursive) to remove both the file and the dir itself.
+    try { fs.rmSync(path.dirname(tmp), { recursive: true, force: true }); } catch { /* ignore */ }
   }
 }
 

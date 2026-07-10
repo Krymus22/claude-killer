@@ -2,14 +2,6 @@
  * sideBySideDiff.ts - Colorful side-by-side diff viewer for terminal.
  */
 
-// Colors used for diff rendering (inline constants to avoid circular deps)
-const colors = {
-  success: "green",
-  error: "red",
-  warning: "yellow",
-  muted: "gray",
-};
-
 export interface DiffLine {
   oldNum: number | null;
   newNum: number | null;

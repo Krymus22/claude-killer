@@ -69,7 +69,9 @@ function generateSessionId(): string {
   // Use local time components instead of toISOString() (which is UTC)
   const date = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
   const time = `${String(now.getHours()).padStart(2, "0")}-${String(now.getMinutes()).padStart(2, "0")}-${String(now.getSeconds()).padStart(2, "0")}`;
-  const rand = Math.random().toString(36).slice(2, 6);
+  // Use crypto.randomBytes for a non-guessable suffix (CodeQL: js/insecure-randomness).
+  // Even though sessions are local-only (no remote access), crypto is cheap and correct.
+  const rand = crypto.randomBytes(3).toString("hex").slice(0, 4);
   return `${date}_${time}_${rand}`;
 }
 

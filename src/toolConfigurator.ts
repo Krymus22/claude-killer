@@ -20,9 +20,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import * as log from "./logger.js";
-import { config } from "./config.js";
 import { chat } from "./apiClient.js";
-import { findToolBinary } from "./toolDetector.js";
 import { searchInDefinedFolders, copyToModeTools } from "./fileFinder.js";
 import type { AskUserCallback } from "./askUser.js";
 

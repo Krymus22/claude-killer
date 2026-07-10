@@ -23,8 +23,6 @@
  *   - Sub-agents: 10+ parallel (no key contention)
  */
 
-import { platform } from "node:os";
-
 export type ProviderName = "nvidia" | "zenmux";
 
 export interface ProviderConfig {

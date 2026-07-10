@@ -13,7 +13,7 @@ import { config } from "./config.js";
 import { getModelMaxOutputTokens } from "./modelRegistry.js";
 import * as log from "./logger.js";
 import { initApiKeyPool, acquireKeyForStreaming, tryAcquireKeyImmediate, getPoolSize, getAvailableKeyCount, getTotalKeyCount } from "./apiKeyPool.js";
-import { providerSendsThinkingMode, getProviderReasoningField, providerNeedsHedging } from "./apiProvider.js";
+import { providerSendsThinkingMode, providerNeedsHedging } from "./apiProvider.js";
 import { getModelInfo } from "./modelRegistry.js";
 import { t as i18nT } from "./i18n.js";
 

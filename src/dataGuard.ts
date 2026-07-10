@@ -20,7 +20,7 @@
 import { chat } from "./apiClient.js";
 import * as log from "./logger.js";
 import { pushActivity } from "./activityTracker.js";
-import { formatBugHuntMessage, type BugFinding } from "./bugHunter.js";
+import { type BugFinding } from "./bugHunter.js";
 import * as nodeFs from "node:fs";
 
 export interface DataGuardResult {

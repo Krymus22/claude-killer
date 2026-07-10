@@ -16,8 +16,6 @@
  *   - agent.ts: inject structured errors after tool failures
  */
 
-import * as log from "./logger.js";
-
 // --- Types ------------------------------------------------------------------
 
 export interface StructuredError {

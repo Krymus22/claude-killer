@@ -311,8 +311,9 @@ export async function aplicarDiff(
 
   try {
     const dir = path.dirname(resolved);
-    fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(resolved, contentToWrite, "utf8");
+    // SECURITY: mode 0o700 on parent dir + 0o600 on file (CWE-377).
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(resolved, contentToWrite, { encoding: "utf8", mode: 0o600 });
     log.success(`File written: ${resolved} (${contentToWrite.length} bytes)`);
   } catch (err) {
     // BUG FIX (Error Path Hunter Round 4): On write failure (disk full,
@@ -329,7 +330,8 @@ export async function aplicarDiff(
     let restored = false;
     if (originalContent.length > 0) {
       try {
-        fs.writeFileSync(resolved, originalContent, "utf8");
+        // SECURITY: mode 0o600 — restrictive perms on restored file (CWE-377).
+        fs.writeFileSync(resolved, originalContent, { encoding: "utf8", mode: 0o600 });
         restored = true;
         log.warn(`[APLICAR_DIFF] Write failed — restored original content for ${resolved}`);
       } catch (restoreErr) {

@@ -33,13 +33,10 @@ import { recordSkillInvocation } from "./skillTracker.js";
 import { recordSessionFileEdit } from "./fileRehydration.js";
 import * as log from "./logger.js";
 import { config } from "./config.js";
-import { readFileAdvanced } from "./fileRead.js";
 import { editFile, type EditOperation } from "./fileEdit.js";
 import { globSearch } from "./fileSearch.js";
 import { grepSearch, formatGrepResults } from "./contentSearch.js";
-import { gitStatus, gitDiff, gitLog, gitCommit, gitBlame, gitShow, gitBranch, gitCheckout } from "./gitTool.js";
 import { multiFileEditWithLocks, type FileEditRequest } from "./multiFileEdit.js";
-import { listSessions } from "./session.js";
 import { parseFile } from "./lspAst.js";
 import { withRetry, isRetryableError } from "./retry.js";
 import { readOnlyCache, shouldCacheResult } from "./toolCache.js";
@@ -61,7 +58,6 @@ import {
 import {
   getRegistry,
   getDetector,
-  getExecutor,
   getSuggester,
   initializeTools,
   type Tool,
@@ -89,7 +85,7 @@ import {
 } from "./promiseDetector.js";
 import { checkReadBeforeWrite, recordRead } from "./readBeforeWrite.js";
 import { validateToolCall, formatValidationErrors } from "./toolSchemaValidation.js";
-import { desfazerEdicao, listarBackups, aplicarDiff, executarComando, lerArquivo } from "./tools.js";
+import { desfazerEdicao, executarComando } from "./tools.js";
 import { pokaYokeCheck, EXPANDED_TOOL_DESCRIPTIONS } from "./pokaYoke.js";
 import { runQualityGate, resetGateState, isStrictModeEnabled } from "./strictQualityGate.js";
 import { getActiveMode as getActiveModeFromModes } from "./modes.js";
@@ -99,7 +95,6 @@ import { getEffortLevel, setEffortLevel } from "./effortLevels.js";
 import { runSubAgent } from "./subAgents.js";
 import { runScout, formatScoutResult, isScoutEnabled, type ScoutArgs, type ScoutTask, type ScoutResult } from "./scoutAgent.js";
 import { generateTestSuggestionForFile, resetAutoTestSuggestions } from "./autoTestGenerator.js";
-import { formatPoolStats, getPoolSize } from "./apiKeyPool.js";
 import {
   initTaskStateFromUserMessage,
   updateTaskState,
@@ -649,7 +644,7 @@ const toolHandlers: Record<string, ToolHandler> = {
     const dir = asString(args.dir, process.cwd());
     const filePath = args.path ? asString(args.path) : undefined;
     // Use the testRunner to run tests
-    const { runBugTest, detectLanguage } = await import("./testRunner.js");
+    const { runBugTest } = await import("./testRunner.js");
     if (filePath) {
       const result = runBugTest(filePath, dir);
       return {
@@ -661,7 +656,6 @@ const toolHandlers: Record<string, ToolHandler> = {
   },
 
   "sugerir_fixes": async (args) => {
-    const dir = asString(args.dir, process.cwd());
     return {
       resultStr: "Fix suggestions: analyze test failures and check the source code for the bug. Use ler_arquivo to read the failing file, then editar_arquivo to fix.",
       usedHeal: false,
@@ -1719,7 +1713,6 @@ async function handleChatResponse(
           let depth = 0;
           let inString = false;
           let escape = false;
-          let endIdx = -1;
           for (let i = 0; i < rawArgs.length; i++) {
             const ch = rawArgs[i];
             if (escape) { escape = false; continue; }
@@ -1734,7 +1727,6 @@ async function handleChatResponse(
                 try {
                   JSON.parse(rawArgs.slice(0, i + 1));
                   recovered = rawArgs.slice(0, i + 1);
-                  endIdx = i;
                   break;
                 } catch {
                   // not valid JSON, keep scanning
@@ -1881,81 +1873,6 @@ function fireTrigger(name: "always" | "on_task"): void {
   executeTrigger(name, triggerCtx).catch((err) => {
     log.warn(`${name} trigger failed: ${(err as Error).message}`);
   });
-}
-
-/**
- * Handle a stop_reason. Returns true if the agent should recurse (continue working),
- * false if the turn is complete and may finish.
- */
-
-async function checkPlanCompletion(): Promise<boolean> {
-  try {
-    const { hasIncompletePlan, formatPlan } = await import("./planExecutor.js");
-    if (hasIncompletePlan()) {
-      // Sprint C bug fix (BUG-AA): só bloquear finish se a IA realmente
-      // tocou arquivos (fez trabalho). Se a IA só foi pedida pra CRIAR
-      // o plano (sem executar), não faz sentido bloquear — a tarefa era
-      // criar o plano, não completá-lo.
-      if (turnTouchedFiles.size === 0) {
-        log.debug(`[PLAN] Plan has incomplete steps but no files touched — allowing finish (plan creation task)`);
-        return false;
-      }
-      log.warn(`[PLAN] Blocking finish - plan has incomplete steps`);
-      history.addSystemMessage(`${formatPlan()}\n\nNÃO finalize até completar TODOS os passos do plano. Continue trabalhando.`);
-      return true;
-    }
-  } catch { /* planExecutor not available */ }
-  return false;
-}
-
-async function checkHonestyReview(message: { content?: string | null }): Promise<boolean> {
-  try {
-    const { isHonestyFeatureEnabled, runDevilsAdvocate, runAnonymousReview } = await import("./honestySystem.js");
-    const editedFiles = [...turnTouchedFiles].map((f) => ({ path: f, content: "" }));
-    if (editedFiles.length === 0) return false;
-
-    const agentClaims = message.content ?? "";
-    const devilsOn = await isHonestyFeatureEnabled("feature:devils_advocate");
-    const reviewOn = await isHonestyFeatureEnabled("feature:anonymous_review");
-    if (!devilsOn && !reviewOn) return false;
-
-    const fs = await import("node:fs");
-    for (const f of editedFiles) {
-      try { f.content = fs.readFileSync(f.path, "utf8"); } catch { /* skip */ }
-    }
-
-    const promises: Promise<any>[] = [];
-    if (devilsOn) promises.push(runDevilsAdvocate(editedFiles, agentClaims));
-    if (reviewOn) promises.push(runAnonymousReview(editedFiles));
-    const results = await Promise.all(promises);
-
-    if (devilsOn) {
-      const daResult = results[0];
-      if (daResult?.severity === "high" && daResult.issues.length > 0) {
-        const msg = `[DEVIL'S ADVOCATE] Problemas críticos encontrados:\n${daResult.issues.map((i: string) => "  - " + i).join("\n")}\n\nCorrija antes de finalizar.`;
-        history.addSystemMessage(msg);
-        return true;
-      }
-    }
-  } catch { /* honestySystem not available */ }
-  return false;
-}
-
-async function checkGoalCompletion(message: { content?: string | null }): Promise<boolean> {
-  try {
-    const { verifyGoalCompletion, formatGoalVerification } = await import("./goalVerifier.js");
-    if (turnTouchedFiles.size === 0) return false;
-
-    const userRequestRaw = history.getHistory().find((m) => m.role === "user")?.content;
-    const userRequest = typeof userRequestRaw === "string" ? userRequestRaw : "";
-    const result = await verifyGoalCompletion(userRequest, [...turnTouchedFiles], message.content ?? "");
-    if (!result.done && result.verified) {
-      log.warn(`[GOAL_VERIFIER] Task NOT done - blocking finish`);
-      history.addSystemMessage(formatGoalVerification(result));
-      return true;
-    }
-  } catch { /* goalVerifier not available */ }
-  return false;
 }
 
 /**
@@ -2231,7 +2148,7 @@ async function handleStopReason(message: { content?: string | null }): Promise<b
 
   // IDEIA 14: Inject failure memory before finishing (for next turn's awareness)
   try {
-    const { getRecentFailures, clearFailures } = await import("./failureMemory.js");
+    const { getRecentFailures } = await import("./failureMemory.js");
     const failures = getRecentFailures();
     if (failures) {
       log.debug(`[FAILURE_MEMORY] ${failures.length} recent failures noted`);

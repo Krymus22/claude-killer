@@ -135,8 +135,12 @@ export async function fetchLlmsTxt(library: string): Promise<LlmsTxtResult> {
     if (result.ok && result.stdout && result.stdout.length > 100) {
       // Save to cache
       const dir = path.dirname(cachePath);
-      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-      fs.writeFileSync(cachePath, result.stdout, "utf8");
+      // SECURITY: mode 0o700 — restrictive perms on cache dir (CWE-377).
+      // The path may fall back to os.tmpdir() when HOME is unset (see
+      // getCacheDir), so we apply restrictive permissions.
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+      // SECURITY: mode 0o600 — restrictive perms on cache file (CWE-377).
+      fs.writeFileSync(cachePath, result.stdout, { encoding: "utf8", mode: 0o600 });
       log.info(`[LLMS_TXT] Fetched ${url} (${result.stdout.length} bytes)`);
       return { library, url, content: result.stdout.slice(0, MAX_CONTENT_LENGTH), fromCache: false, found: true };
     }

@@ -27,7 +27,6 @@
  */
 
 import { chat } from "./apiClient.js";
-import * as history from "./history.js";
 import * as log from "./logger.js";
 import { pushActivity } from "./activityTracker.js";
 import * as nodePath from "node:path";

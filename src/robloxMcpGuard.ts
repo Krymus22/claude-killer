@@ -240,24 +240,6 @@ export function evaluateMcpToolCall(
 }
 
 /**
- * Format a HELPFUL message when an unknown tool is allowed but not classified.
- * (Kept for reference — currently not used because unknown tools are allowed
- * silently. If you want to surface a notice, return this as blockReason.)
- */
-function formatUnknownAllowedMessage(toolName: string): string {
-  return [
-    `[MCP_GUARD] Tool "${toolName}" is not in the recognized list, but is ALLOWED.`,
-    `(Default-allow policy: trust the user who installed the MCP.)`,
-    ``,
-    `If you want to add it to the classification for documentation:`,
-    `  - Open src/robloxMcpGuard.ts`,
-    `  - Add: "${toolName}": "<category>",  // <description>`,
-    ``,
-    `Categories: read | write | execute | playtest | session`,
-  ].join("\n");
-}
-
-/**
  * Format the error message when a WRITE tool is blocked.
  * Tells the IA exactly which tool to use instead and why.
  */

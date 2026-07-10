@@ -68,16 +68,6 @@ const EXT_TO_GRAMMAR: Record<string, string> = {
   ".java": "tree-sitter-java",
 };
 
-const GRAMMAR_TO_EXT: Record<string, string> = {
-  "tree-sitter-typescript": ".ts",
-  "tree-sitter-tsx": ".tsx",
-  "tree-sitter-javascript": ".js",
-  "tree-sitter-python": ".py",
-  "tree-sitter-rust": ".rs",
-  "tree-sitter-go": ".go",
-  "tree-sitter-java": ".java",
-};
-
 /** Detect whether an import statement is a default import. */
 function isDefaultImport(text: string): boolean {
   if (text.includes("import default")) return true;

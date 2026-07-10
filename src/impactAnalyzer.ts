@@ -161,15 +161,6 @@ function runCmd(
   });
 }
 
-/** Detect language based on file extension (built-in only, sync). */
-function detectLanguage(filePath: string): string {
-  const ext = path.extname(filePath).toLowerCase();
-  for (const [lang, exts] of Object.entries(EXTENSIONS_BY_LANG)) {
-    if (exts.includes(ext)) return lang;
-  }
-  return "unknown";
-}
-
 /**
  * Detect language based on file extension (async, merges built-in + mode custom).
  *
@@ -233,7 +224,6 @@ async function isRgAvailable(): Promise<boolean> {
  */
 export function extractSymbols(filePath: string, content: string): FileSymbol[] {
   const ext = path.extname(filePath).toLowerCase();
-  const symbols: FileSymbol[] = [];
   const lines = content.split("\n");
 
   const patterns: RegExp[] = [];

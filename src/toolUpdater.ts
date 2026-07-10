@@ -104,8 +104,12 @@ function loadState(): UpdaterState {
 function saveState(state: UpdaterState): void {
   try {
     const dir = path.dirname(getStatePath());
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(getStatePath(), JSON.stringify(state, null, 2), "utf8");
+    // SECURITY: mode 0o700 — restrictive perms on parent dir (CWE-377).
+    // The path may fall back to os.tmpdir() when HOME is unset (see
+    // getStatePath), so we apply restrictive permissions.
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    // SECURITY: mode 0o600 — restrictive perms on state file (CWE-377).
+    fs.writeFileSync(getStatePath(), JSON.stringify(state, null, 2), { encoding: "utf8", mode: 0o600 });
   } catch (err) {
     log.warn(`toolUpdater: failed to save state: ${(err as Error).message}`);
   }

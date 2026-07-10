@@ -32,8 +32,7 @@
 
 import * as nodePath from "node:path";
 import * as nodeFs from "node:fs";
-import { config } from "./config.js";
-import { getModelInfo, getModelMaxOutputTokens, modelSupportsTools, modelSupportsParallelTools } from "./modelRegistry.js";
+import { getModelInfo, modelSupportsTools } from "./modelRegistry.js";
 import * as log from "./logger.js";
 import { pushActivity } from "./activityTracker.js";
 

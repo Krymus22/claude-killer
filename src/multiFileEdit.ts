@@ -63,8 +63,9 @@ function applyAllEdits(preparedEdits: PreparedEdit[]): string[] {
 
   for (const prepared of preparedEdits) {
     const dir = path.dirname(prepared.resolved);
-    fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(prepared.resolved, prepared.result.content, "utf8");
+    // SECURITY: mode 0o700 on parent dir + 0o600 on file (CWE-377).
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(prepared.resolved, prepared.result.content, { encoding: "utf8", mode: 0o600 });
     edited.push(prepared.resolved);
   }
 
@@ -74,7 +75,8 @@ function applyAllEdits(preparedEdits: PreparedEdit[]): string[] {
 function rollbackEdits(backups: Array<{ path: string; original: string }>): void {
   for (const backup of backups) {
     try {
-      fs.writeFileSync(backup.path, backup.original, "utf8");
+      // SECURITY: mode 0o600 — restrictive perms on restored file (CWE-377).
+      fs.writeFileSync(backup.path, backup.original, { encoding: "utf8", mode: 0o600 });
     } catch {
       log.error(`Rollback failed for ${backup.path}`);
     }
@@ -123,8 +125,9 @@ function applyAllEditsWithBackup(
       backups.push({ path: prepared.resolved, original: prepared.original });
     }
     const dir = path.dirname(prepared.resolved);
-    fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(prepared.resolved, prepared.result.content, "utf8");
+    // SECURITY: mode 0o700 on parent dir + 0o600 on file (CWE-377).
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(prepared.resolved, prepared.result.content, { encoding: "utf8", mode: 0o600 });
     edited.push(prepared.resolved);
   }
   return edited;

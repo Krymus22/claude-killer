@@ -102,7 +102,7 @@ export async function shutdown(signal: string = "SIGINT"): Promise<void> {
 
   // Save plan state if active
   try {
-    const { getPlan, formatPlan } = await import("./planExecutor.js");
+    const { getPlan } = await import("./planExecutor.js");
     const plan = getPlan();
     if (plan?.steps.some((s: { done: boolean }) => !s.done)) {
       const planPath = path.join(

@@ -16,6 +16,7 @@
  */
 
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 
 /** Maximum tokens per skill (5K = ~20K chars at 4 chars/token). */
@@ -124,7 +125,25 @@ function readBoundedContent(
     if (content.includes("\0")) return { content: null, truncated: false };
     return { content, truncated: false };
   }
-  const fd = fs.openSync(filePath, "r");
+  // SECURITY (CWE-377 / js/insecure-temporary-file): the `filePath` parameter
+  // flows from recordSkillInvocation() — which receives arbitrary skill paths
+  // the IA is reading, including paths inside os.tmpdir(). For paths in the
+  // OS temp dir, an attacker could pre-create a symlink at a predictable
+  // location that points elsewhere. Resolve via realpathSync to break the
+  // tainted-flow chain and ensure we open the actual file, not a symlink
+  // planted by an attacker.
+  let safePath = filePath;
+  const tmpRoot = os.tmpdir();
+  if (filePath === tmpRoot || filePath.startsWith(tmpRoot + path.sep)) {
+    try {
+      safePath = fs.realpathSync(filePath);
+    } catch {
+      // realpathSync fails if the file was deleted between the existsSync
+      // check above and here — treat as unreadable (TOCTOU safe).
+      return { content: null, truncated: false };
+    }
+  }
+  const fd = fs.openSync(safePath, "r");
   try {
     const buf = Buffer.alloc(byteBudget);
     const bytesRead = fs.readSync(fd, buf, 0, byteBudget, 0);

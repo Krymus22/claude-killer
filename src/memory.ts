@@ -150,9 +150,11 @@ function writeMarkdown(filePath: string, content: string): void {
   try {
     const dir = path.dirname(filePath);
     if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
+      // SECURITY: mode 0o700 — restrictive perms on memory dir (CWE-377).
+      fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
     }
-    fs.writeFileSync(filePath, content, "utf8");
+    // SECURITY: mode 0o600 — restrictive perms on memory file (CWE-377).
+    fs.writeFileSync(filePath, content, { encoding: "utf8", mode: 0o600 });
     log.debug(`Wrote memory file: ${filePath}`);
   } catch (err) {
     log.warn(`Failed to write memory file ${filePath}: ${(err as Error).message}`);
@@ -174,9 +176,11 @@ function writeJson(filePath: string, data: unknown): void {
   try {
     const dir = path.dirname(filePath);
     if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
+      // SECURITY: mode 0o700 — restrictive perms on memory dir (CWE-377).
+      fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
     }
-    fs.writeFileSync(filePath, JSON.stringify(data, null, 2), "utf8");
+    // SECURITY: mode 0o600 — restrictive perms on memory file (CWE-377).
+    fs.writeFileSync(filePath, JSON.stringify(data, null, 2), { encoding: "utf8", mode: 0o600 });
   } catch (err) {
     log.warn(`Failed to write JSON file ${filePath}: ${(err as Error).message}`);
   }

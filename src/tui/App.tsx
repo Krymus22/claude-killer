@@ -47,7 +47,7 @@ import {
   suggestMode,
   confirmAndSaveMode,
 } from "../modes.js";
-import { getLocalizedSlashCommands, getCommandI18n, detectLanguage, setLanguage, resetLanguageCache } from "../i18n.js";
+import { getLocalizedSlashCommands, detectLanguage, setLanguage, resetLanguageCache } from "../i18n.js";
 // Sprint 10: Inbox organizer — /organize slash command + 'O' key in Hub
 import { organizeInbox, formatOrganizeResult } from "../inboxOrganizer.js";
 import { colors } from "./theme.js";
@@ -600,8 +600,6 @@ function handleBuscarCommand(arg: string | null): CommandResult {
  * or "let's work on the roblox game".
  */
 function handleCdCommand(arg: string | null): CommandResult {
-  const currentCwd = process.cwd();
-
   // /cd (sem arg) — abre o seletor visual interativo (FolderBrowser)
   if (!arg) {
     return { handled: true, openFolderBrowser: true };
@@ -1728,7 +1726,11 @@ export function App() {
   const [tokensPerSecond, setTokensPerSecond] = useState(0);
 
   // ── Sidequest: messages typed while IA is working ──────────────────────
-  const [sidequests, setSidequests] = useState<string[]>([]);
+  // Only the setter is used — the state value itself is never read because
+  // the always-fresh `sidequestsRef` is read instead (avoids stale-closure
+  // bugs in the memoized handleSubmit). The setter is still needed to trigger
+  // re-renders that flush the ⚡ indicator.
+  const [, setSidequests] = useState<string[]>([]);
   // Ref mirror of `sidequests`. The `handleSubmit` finally block reads this
   // ref instead of the state because `handleSubmit` is memoized via
   // useCallback WITHOUT `sidequests` in its deps array (intentionally —

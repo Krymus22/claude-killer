@@ -337,7 +337,7 @@ export async function executeFromManifest(
   manifests: ToolManifest[],
   modeName: string | null,
 ): Promise<{ ok: boolean; output: string; errors: string[]; duration: number }> {
-  const { execSync } = await import("node:child_process");
+  const { execFileSync } = await import("node:child_process");
   const startTime = Date.now();
 
   // 1. Find manifest
@@ -393,16 +393,20 @@ export async function executeFromManifest(
   const cwd = typeof args.dir === "string" ? args.dir : process.cwd();
 
   // 4. Execute
+  // SECURITY: use execFileSync (shell: false) instead of execSync with
+  // hand-rolled quoting. Avoids command injection from cmdArgs values.
+  // (CodeQL: js/indirect-command-line-injection.)
   try {
-    const fullCmd = `"${binaryPath}" ${cmdArgs.map((a) => a.includes(" ") ? `"${a}"` : a).join(" ")}`;
-    log.debug(`[MANIFEST] Executing: ${fullCmd} (cwd: ${cwd})`);
+    const displayCmd = `"${binaryPath}" ${cmdArgs.map((a) => a.includes(" ") ? `"${a}"` : a).join(" ")}`;
+    log.debug(`[MANIFEST] Executing: ${displayCmd} (cwd: ${cwd})`);
 
-    const result = execSync(fullCmd, {
+    const result = execFileSync(binaryPath, cmdArgs, {
       encoding: "utf8",
       timeout: 60000, // 60s timeout
       cwd,
       stdio: ["pipe", "pipe", "pipe"],
       maxBuffer: 10 * 1024 * 1024,
+      shell: false,
     });
 
     return {

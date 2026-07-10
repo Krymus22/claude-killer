@@ -313,9 +313,11 @@ export function restoreBackup(originalPath: string): boolean {
     const content = fs.readFileSync(latest.backupPath, "utf8");
     const dir = path.dirname(resolved);
     if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
+      // SECURITY: mode 0o700 — restrictive perms on parent dir (CWE-377).
+      fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
     }
-    fs.writeFileSync(resolved, content, "utf8");
+    // SECURITY: mode 0o600 — restrictive perms on restored file (CWE-377).
+    fs.writeFileSync(resolved, content, { encoding: "utf8", mode: 0o600 });
 
     // Remove the restored entry from the index so the next restore goes further back
     index.entries = index.entries.filter((e) => e.id !== latest.id);

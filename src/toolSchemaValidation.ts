@@ -122,7 +122,10 @@ function validateProperty(value: unknown, propSchema: SchemaProperty, propPath: 
   }
 
   // Nested object check
-  if (propSchema.type === "object" && propSchema.properties && typeof value === "object" && value !== null) {
+  // Note: value === null already returned at line 100, so the null check here
+  // would be redundant — but we keep `typeof value === "object"` to ensure
+  // we don't pass primitives (string/number/boolean) to validateObject.
+  if (propSchema.type === "object" && propSchema.properties && typeof value === "object") {
     errors.push(...validateObject(value as Record<string, unknown>, propSchema.properties, propPath));
   }
 

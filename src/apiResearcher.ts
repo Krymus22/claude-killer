@@ -251,6 +251,55 @@ function decodeHtmlEntities(text: string): string {
     });
 }
 
+/**
+ * Strip HTML tags from a string, including:
+ * - Complete tags: <script ...>...</script>, <style ...>...</style>, <tag ...>
+ * - Incomplete/unclosed tags: <script (no closing >), </script (no closing >)
+ * - Self-closing tags: <br/>
+ *
+ * This is more thorough than `/<[^>]+>/g` which misses unclosed tags like
+ * `<script` (without the closing `>`), which CodeQL flags as
+ * `js/incomplete-multi-character-sanitization`.
+ *
+ * @param input  The HTML string to strip.
+ * @param replacement  String to substitute for each stripped tag.
+ *                     Default "" (concatenate text). Use " " to preserve word
+ *                     boundaries when extracting visible text from HTML.
+ *
+ * NOTE: This is for parsing Bing/search result HTML (semi-trusted).
+ * For user-supplied HTML, use a proper sanitizer like DOMPurify.
+ */
+function stripHtmlTags(input: string, replacement: string = ""): string {
+  if (!input) return "";
+  return input
+    // Remove complete script/style blocks (with content) — always full delete,
+    // never replace with space (we don't want script content as visible text).
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi, "")
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style\s*>/gi, "")
+    // Remove any remaining complete tags (including self-closing)
+    .replace(/<[^>]+>/g, replacement)
+    // Remove incomplete/unclosed tags: `<script` or `</script` at end without `>`
+    .replace(/<\/?\w[^>]*$/g, replacement)
+    .replace(/<\/?\w+/g, replacement); // bare `<script` or `<img` without any attributes
+}
+
+/**
+ * Check whether a URL points to bing.com (any subdomain).
+ *
+ * CodeQL flags `url.includes("bing.com/")` as
+ * `js/incomplete-url-substring-sanitization` because a URL like
+ * `evil.com/?bing.com/` would pass the substring check. Parsing the URL
+ * and testing the hostname against an anchored regex closes that bypass.
+ */
+function isBingUrl(url: string): boolean {
+  try {
+    const u = new URL(url);
+    return /(^|\.)bing\.com$/i.test(u.hostname);
+  } catch {
+    return false;
+  }
+}
+
 /** Fetch URL using Node.js native fetch (no curl dependency). */
 async function fetchUrl(url: string, timeoutMs: number = 10000): Promise<{ ok: boolean; text: string; status: number }> {
   // BUG FIX: previously, `clearTimeout(timer)` ran right after `await fetch()`
@@ -368,13 +417,12 @@ function parseBingResults(htmlRaw: string, num: number): SearchResult[] {
       continue;
     }
     // Skip Bing internal links
-    if (!url.startsWith("http") || url.includes("bing.com/")) continue;
+    if (!url.startsWith("http") || isBingUrl(url)) continue;
 
     // Extract title: <h2 ...><a ...>TITLE</a></h2>
     const titleMatch = block.match(/<h2[^>]*><a[^>]*>([\s\S]*?)<\/a><\/h2>/);
     if (!titleMatch) continue;
-    const title = titleMatch[1]
-      .replace(/<[^>]+>/g, "")
+    const title = stripHtmlTags(titleMatch[1])
       .trim();
     if (!title) continue;
 
@@ -382,8 +430,7 @@ function parseBingResults(htmlRaw: string, num: number): SearchResult[] {
     const snippetMatch = block.match(/<p[^>]*>([\s\S]*?)<\/p>/);
     let snippet = "";
     if (snippetMatch) {
-      snippet = snippetMatch[1]
-        .replace(/<[^>]+>/g, "")
+      snippet = stripHtmlTags(snippetMatch[1])
         .replace(/&nbsp;/g, " ")
         .replace(/\s+/g, " ")
         .trim();
@@ -432,19 +479,19 @@ function parseBingNewsResults(htmlRaw: string, num: number): SearchResult[] {
         } catch { /* ignore */ }
       }
     }
-    if (!url.startsWith("http") || url.includes("bing.com/")) continue;
+    if (!url.startsWith("http") || isBingUrl(url)) continue;
 
     // Extract title from <a>...</a> or <h3>...</h3>
     const titleMatch = block.match(/<a[^>]*>([\s\S]*?)<\/a>/) ??
                        block.match(/<h[23][^>]*>([\s\S]*?)<\/h[23]>/);
     if (!titleMatch) continue;
-    const title = titleMatch[1].replace(/<[^>]+>/g, "").trim();
+    const title = stripHtmlTags(titleMatch[1]).trim();
     if (!title || title.length < 5) continue;
 
     // Extract snippet
     const snippetMatch = block.match(/<p[^>]*>([\s\S]*?)<\/p>/);
     const snippet = snippetMatch
-      ? snippetMatch[1].replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim()
+      ? stripHtmlTags(snippetMatch[1]).replace(/\s+/g, " ").trim()
       : "";
 
     results.push({ url, title, snippet });
@@ -460,7 +507,7 @@ function parseBingNewsResults(htmlRaw: string, num: number): SearchResult[] {
       const url = m[1];
       if (seen.has(url)) continue;
       seen.add(url);
-      const title = m[2].replace(/<[^>]+>/g, "").trim();
+      const title = stripHtmlTags(m[2]).trim();
       if (title.length < 10) continue;
       // Skip obvious navigation/social links
       if (/^(Home|Sign in|Login|Subscribe|Follow|Share|Menu)$/i.test(title)) continue;
@@ -615,8 +662,8 @@ async function searchWithSearx(query: string, num: number): Promise<SearchResult
       .filter((r: any) => r.url && r.title)
       .map((r: any) => ({
         url: r.url as string,
-        title: decodeHtmlEntities(String(r.title).replace(/<[^>]+>/g, "").trim()),
-        snippet: decodeHtmlEntities(String(r.content ?? "").replace(/<[^>]+>/g, "").trim()),
+        title: decodeHtmlEntities(stripHtmlTags(String(r.title)).trim()),
+        snippet: decodeHtmlEntities(stripHtmlTags(String(r.content ?? "")).trim()),
       }));
 
     if (results.length > 0) {
@@ -1000,10 +1047,15 @@ export async function webSearch(query: string, num: number = 5, newsMode?: boole
           console.log(`[WEB_SEARCH] Bing: ${results.length} results for "${query.slice(0, 50)}"`);
           return results;
         }
-        // DEBUG: save HTML when parse fails
+        // DEBUG: save HTML when parse fails.
+        // Use mkdtempSync to create a unique private temp directory (avoids
+        // symlink/predictable-filename attacks flagged by CodeQL as
+        // js/insecure-temporary-file). The file inside is written with mode 0600
+        // to mitigate js/http-to-file-access (writing untrusted HTTP data).
         try {
-          const debugFile = path.join(os.tmpdir(), `claude-killer-bing-debug-${Date.now()}.html`);
-          fs.writeFileSync(debugFile, bingResult.text.slice(0, 50000));
+          const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "claude-killer-bing-"));
+          const debugFile = path.join(tmpDir, "debug.html");
+          fs.writeFileSync(debugFile, bingResult.text.slice(0, 50000), { mode: 0o600 });
           console.log(`[WEB_SEARCH] Bing: 0 results. HTML saved to ${debugFile} (${bingResult.text.length} bytes, b_algo: ${(bingResult.text.match(/class="b_algo"/g) || []).length})`);
         } catch { /* ignore */ }
       } else {
@@ -1064,7 +1116,7 @@ export async function webSearch(query: string, num: number = 5, newsMode?: boole
         const snippets: string[] = [];
         let sm;
         while ((sm = snippetRegex.exec(ddgResult.text)) !== null) {
-          snippets.push(decodeHtmlEntities(sm[1].replace(/<[^>]+>/g, "").trim()));
+          snippets.push(decodeHtmlEntities(stripHtmlTags(sm[1]).trim()));
         }
         let m;
         let i = 0;
@@ -1073,7 +1125,7 @@ export async function webSearch(query: string, num: number = 5, newsMode?: boole
           const uddgMatch = url.match(/uddg=([^&]+)/);
           if (uddgMatch) url = decodeURIComponent(uddgMatch[1]);
           if (url.startsWith("//")) url = "https:" + url;
-          const title = decodeHtmlEntities(m[2].replace(/<[^>]+>/g, "").trim());
+          const title = decodeHtmlEntities(stripHtmlTags(m[2]).trim());
           results.push({ url, title, snippet: decodeHtmlEntities(snippets[i] ?? "") });
           i++;
         }
@@ -1139,14 +1191,12 @@ function extractTextFromHtml(html: string): string {
   // Fall back to full HTML if no content section found
   if (!content) content = html;
 
-  // Strip scripts, styles, and HTML tags
-  let text = content
-    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
-    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
-    .replace(/<nav[^>]*>[\s\S]*?<\/nav>/gi, "")
-    .replace(/<footer[^>]*>[\s\S]*?<\/footer>/gi, "")
-    .replace(/<header[^>]*>[\s\S]*?<\/header>/gi, "")
-    .replace(/<[^>]+>/g, " ")
+  // Strip scripts, styles, and HTML tags (stripHtmlTags handles script/style
+  // blocks and any other complete or incomplete tags, including nav/footer/header
+  // via the generic <[^>]+> pass).
+  // Use " " as replacement so adjacent text blocks separated by tags don't
+  // concatenate (e.g., <p>Hello</p>World → "Hello World", not "HelloWorld").
+  let text = stripHtmlTags(content, " ")
     .replace(/&nbsp;/g, " ");
   // Comprehensive entity decoding (numeric + named, handles ç ã é etc.)
   text = decodeHtmlEntities(text);
@@ -1167,7 +1217,7 @@ function extractTextFromHtml(html: string): string {
     const paragraphs = html.match(/<p[^>]*>[\s\S]*?<\/p>/gi) ?? [];
     if (paragraphs.length > 0) {
       const pText = paragraphs
-        .map(p => p.replace(/<[^>]+>/g, " "))
+        .map(p => stripHtmlTags(p))
         .map(p => decodeHtmlEntities(p))
         .map(p => p.replace(/\s+/g, " ").trim())
         .filter(p => p.length > 30)

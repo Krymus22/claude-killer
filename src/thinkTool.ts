@@ -18,7 +18,6 @@
  */
 
 import { getEffortLevel } from "./effortLevels.js";
-import { t } from "./i18n.js";
 
 export interface ThinkArgs {
   pensamento: string;

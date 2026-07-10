@@ -310,9 +310,13 @@ private checkInstallation(tool: Tool): boolean {
     try {
       const dir = path.dirname(this.userToolsPath);
       if (!fs.existsSync(dir)) {
-        fs.mkdirSync(dir, { recursive: true });
+        // SECURITY: mode 0o700 — only the owner can traverse/list this dir.
+        // The path may fall back to os.tmpdir() when HOME is unset (see
+        // constructor), so we apply restrictive permissions to mitigate
+        // symlink attacks (CWE-377 / js/insecure-temporary-file).
+        fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
       }
-      
+
       const userTools = this.getAll()
         .filter(t => t.category === "custom")
         .map(t => ({
@@ -325,11 +329,13 @@ private checkInstallation(tool: Tool): boolean {
           context: t.context,
           outputParser: t.outputParser
         }));
-      
+
+      // SECURITY: mode 0o600 — only the owner can read/write this file.
+      // Mitigates symlink-attack risk if the path resolves inside os.tmpdir().
       fs.writeFileSync(
         this.userToolsPath,
         JSON.stringify(userTools, null, 2),
-        "utf-8"
+        { encoding: "utf-8", mode: 0o600 }
       );
     } catch (error) {
       log.error(`Failed to save user tools: ${error}`);

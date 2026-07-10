@@ -6,7 +6,7 @@
  * Aberto via tecla 'C' no Hub ou comando /configurar.
  */
 
-import React, { useState, useRef } from "react";
+import React, { useState } from "react";
 import { Box, Text, useInput } from "ink";
 import { colors } from "./theme.js";
 import { configureTool, detectToolsWithoutManifest, type ConfiguratorResult } from "../toolConfigurator.js";
@@ -29,7 +29,6 @@ export function ConfiguratorChat({ onClose, onMessage, toolName }: Readonly<Conf
   const [input, setInput] = useState("");
   const [running, setRunning] = useState(false);
   const [finished, setFinished] = useState(false);
-  const scrollRef = useRef(0);
 
   const mode = getActiveMode();
   const modeName = mode?.name ?? null;

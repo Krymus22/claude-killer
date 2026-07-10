@@ -137,6 +137,12 @@ function getSearchPaths(toolName: string): string[] {
  * On Unix: uses `which` (reliable, inherits shell PATH).
  */
 function findInPath(toolName: string): string | null {
+  // SECURITY: validate toolName before interpolating into shell command.
+  // (CodeQL: js/shell-command-injection-from-environment.)
+  // Allow only alphanumerics, dash, underscore, dot — typical binary names.
+  if (!/^[A-Za-z0-9._-]+$/.test(toolName)) {
+    return null;
+  }
   try {
     if (process.platform === "win32") {
       // Use PowerShell — same as executar_comando does.

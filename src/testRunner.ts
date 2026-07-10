@@ -815,22 +815,26 @@ export function getTestFilePath(sourceFile: string): string {
 }
 
 export function getTestCommand(language: BugTestLanguage, testFile: string, projectRoot: string): string {
+  // SECURITY: shell-quote the testFile path to prevent command injection.
+  // (CodeQL: js/shell-command-injection-from-environment.)
+  // testFile is typically an internally-generated path, but defense-in-depth.
+  const safeTestFile = `'${testFile.replace(/'/g, "'\\''")}'`;
   switch (language) {
     case "typescript":
       try {
         execSync("npx vitest --version", { encoding: "utf8", stdio: "pipe", cwd: projectRoot, timeout: 5000 });
-        return `npx vitest run ${testFile} --reporter=dot`;
+        return `npx vitest run ${safeTestFile} --reporter=dot`;
       } catch {
-        return `npx tsx ${testFile}`;
+        return `npx tsx ${safeTestFile}`;
       }
     case "javascript":
-      return `node ${testFile}`;
+      return `node ${safeTestFile}`;
     case "python":
-      return `python3 ${testFile}`;
+      return `python3 ${safeTestFile}`;
     case "luau":
-      return `luau ${testFile}`;
+      return `luau ${safeTestFile}`;
     case "lua":
-      return `lua ${testFile}`;
+      return `lua ${safeTestFile}`;
     default:
       return "";
   }

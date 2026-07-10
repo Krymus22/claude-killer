@@ -18,7 +18,6 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import * as https from "node:https";
-import { pipeline } from "node:stream/promises";
 import { createWriteStream } from "node:fs";
 import * as log from "./logger.js";
 import { detectAndVerify } from "./toolDetector.js";

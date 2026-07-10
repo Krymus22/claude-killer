@@ -12,7 +12,7 @@
  *   - Future: inbox organizer can suggest copying found files
  */
 
-import { execSync, spawn } from "node:child_process";
+import { execSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
@@ -143,9 +143,11 @@ export function searchInDefinedFolders(
   try {
     const cmd = platform === "win32" ? "where" : "which";
     // Even though isSafeFileName already rejected dangerous chars, we
-    // additionally quote the fileName so any future relaxations of the
-    // allowlist can't introduce an injection.
-    const quoted = `"${fileName.replace(/"/g, '\\"')}"`;
+    // additionally quote the fileName AND escape both `"` and `\` so any
+    // future relaxations of the allowlist can't introduce an injection.
+    // (CodeQL: js/incomplete-sanitization — must escape backslash too,
+    // otherwise `file\` would escape the closing quote in shell.)
+    const quoted = `"${fileName.replace(/["\\]/g, '\\$&')}"`;
     const result = execSync(`${cmd} ${quoted}`, {
       encoding: "utf8",
       timeout: 5000,

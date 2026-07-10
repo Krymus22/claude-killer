@@ -17,7 +17,7 @@
 // Windows terminals with legacy code pages.
 import { forceUtf8Environment } from "./utf8Safety.js";
 import { setTuiMode } from "./logger.js";
-import { initApiKeyPool, prewarmPool, getPoolSize, getPoolStats } from "./apiKeyPool.js";
+import { initApiKeyPool, prewarmPool } from "./apiKeyPool.js";
 import { startHeartbeat, stopHeartbeat } from "./heartbeat.js";
 import { getProviderConfig, providerNeedsHeartbeat, providerUsesMultiKeyPool } from "./apiProvider.js";
 import { autoStartSearx, autoStopSearx } from "./searxManager.js";

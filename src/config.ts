@@ -5,27 +5,10 @@
  */
 
 import "dotenv/config";
-import { getModelContextWindow, getModelMaxOutputTokens, getModelCost } from "./modelRegistry.js";
+import { getModelContextWindow, getModelCost } from "./modelRegistry.js";
 import { detectProvider, getProviderConfig } from "./apiProvider.js";
 
 // --- Helpers ----------------------------------------------------------------
-
-function requireEnv(key: string): string {
-  const value = process.env[key];
-  if (!value || value.trim() === "") {
-    // BUG FIX: example was hardcoded as "NVIDIA_API_KEY=nvapi-xxxx" regardless
-    // of which env var was missing. If requireEnv("ZENMUX_API_KEY") was called,
-    // the message would misleadingly suggest setting NVIDIA_API_KEY. Now uses
-    // the actual key name in the example.
-    console.error(
-      `\nX  Missing required environment variable: ${key}\n` +
-        `   Set it in your shell or in a .env file.\n` +
-        `   Example: ${key}=xxxx\n`
-    );
-    process.exit(1);
-  }
-  return value.trim();
-}
 
 function optionalInt(key: string, fallback: number): number {
   const raw = process.env[key];

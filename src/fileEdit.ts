@@ -306,7 +306,8 @@ export async function editFile(
     try {
       await fs.promises.access(resolved);
       const backupPath = resolved + ".bak";
-      await fs.promises.writeFile(backupPath, original, "utf8");
+      // SECURITY: mode 0o600 — restrictive perms on backup file (CWE-377).
+      await fs.promises.writeFile(backupPath, original, { encoding: "utf8", mode: 0o600 });
     } catch { /* file doesn't exist yet, no backup needed */ }
   }
 
@@ -374,8 +375,10 @@ export async function editFile(
   // toolMessage: "[ERROR] ..." } instead of throwing).
   const dir = path.dirname(resolved);
   try {
-    fs.mkdirSync(dir, { recursive: true });
-    await fs.promises.writeFile(resolved, result.content, "utf8");
+    // SECURITY: mode 0o700 — restrictive perms on parent dir (CWE-377).
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    // SECURITY: mode 0o600 — restrictive perms on edited file (CWE-377).
+    await fs.promises.writeFile(resolved, result.content, { encoding: "utf8", mode: 0o600 });
   } catch (err) {
     const writeErr = err as NodeJS.ErrnoException;
     const errMsg = `[ERROR] Failed to write ${resolved}: ${writeErr.message}`;
@@ -393,7 +396,8 @@ export async function editFile(
         // If restoreBackup fails, try a direct write of the original content
         // we still have in memory (it was read at the start of editFile).
         try {
-          await fs.promises.writeFile(resolved, original, "utf8");
+          // SECURITY: mode 0o600 — restrictive perms on restored file (CWE-377).
+          await fs.promises.writeFile(resolved, original, { encoding: "utf8", mode: 0o600 });
           log.warn(`fileEdit: restored original content after write failure (in-memory fallback)`);
         } catch {
           log.error(`fileEdit: FAILED to restore original after write failure: ${(restoreErr as Error).message}`);
@@ -403,7 +407,8 @@ export async function editFile(
       // No rollback backup was saved, but we still have the original in memory
       // — try to restore it directly so the file isn't left truncated.
       try {
-        await fs.promises.writeFile(resolved, original, "utf8");
+        // SECURITY: mode 0o600 — restrictive perms on restored file (CWE-377).
+        await fs.promises.writeFile(resolved, original, { encoding: "utf8", mode: 0o600 });
         log.warn(`fileEdit: restored original content from in-memory copy (no rollback backup was saved)`);
       } catch (restoreErr) {
         log.error(`fileEdit: FAILED to restore original from in-memory copy: ${(restoreErr as Error).message}`);

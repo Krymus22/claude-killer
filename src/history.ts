@@ -103,18 +103,6 @@ export function loadProjectMemoryFiles(): MemoryFile[] {
   });
 }
 
-/**
- * Legacy: returns concatenated contents (with headers) or null if none found.
- * Kept for backward compat with tests; new code should use loadProjectMemoryFiles().
- */
-function loadProjectMemory(): string | null {
-  const files = loadProjectMemoryFiles();
-  if (files.length === 0) return null;
-  return files
-    .map((p) => `--- MEMORY: ${p.relativePath} ---\n${p.content}`)
-    .join("\n\n");
-}
-
 /** Human-readable file size (e.g., "2.3 KB", "1.1 MB", "450 B"). */
 function formatFileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -1453,8 +1441,6 @@ function getToolName(toolCallId: string, currentIndex: number): string {
   return "";
 }
 
-const READ_TOOLS = new Set(["ler_arquivo", "buscar_texto_no_projeto", "ler_linhas_arquivo"]);
-
 /** Edit tools that may have an [IMPACT] hint appended to their result. */
 const EDIT_TOOLS = new Set([
   "editar_arquivo",
@@ -1462,10 +1448,6 @@ const EDIT_TOOLS = new Set([
   "escrever_arquivo",
   "aplicar_diff",
 ]);
-
-function isReadTool(toolName: string): boolean {
-  return READ_TOOLS.has(toolName);
-}
 
 function isEditTool(toolName: string): boolean {
   return EDIT_TOOLS.has(toolName);

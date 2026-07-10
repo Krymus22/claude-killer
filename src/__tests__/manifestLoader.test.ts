@@ -45,9 +45,11 @@ vi.mock("../toolDetector.js", () => ({
 // Mock node:child_process para executeFromManifest
 const cpMock = vi.hoisted(() => ({
   execSync: vi.fn(() => "ok output"),
+  execFileSync: vi.fn(() => "ok output"),
 }));
 vi.mock("node:child_process", () => ({
   execSync: cpMock.execSync,
+  execFileSync: cpMock.execFileSync,
   spawn: vi.fn(),
 }));
 
@@ -74,6 +76,7 @@ describe("manifestLoader", () => {
     modesMock.getActiveMode.mockReturnValue(null);
     toolDetectorMock.findToolBinary.mockReturnValue(null);
     cpMock.execSync.mockReturnValue("ok output");
+    cpMock.execFileSync.mockReturnValue("ok output");
   });
 
   afterEach(() => {

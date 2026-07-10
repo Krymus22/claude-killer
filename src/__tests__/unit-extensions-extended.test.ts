@@ -850,7 +850,12 @@ describe("extensions (unit-extended) — skill loading", () => {
 });
 
 describe("extensions (unit-extended) — shutdownMCPServers", () => {
-  it("sends 'cancelled' notification before killing child", async () => {
+  it("kills child process directly without sending 'cancelled' notification", async () => {
+    // FIX-LOW-5: shutdownMCPServers no longer sends a malformed
+    // notifications/cancelled JSON-RPC frame. It just kills the child
+    // process directly (the OS reclaims resources; the MCP shutdown/exit
+    // handshake is for graceful shutdown during normal operation, not for
+    // process teardown at exit time).
     writeMcpPlugin(globalPluginsDir, "p", "srv", "echo");
     const child = withAutoReply(fakeChild());
     spawnMock.mockImplementation(() => child);
@@ -858,12 +863,12 @@ describe("extensions (unit-extended) — shutdownMCPServers", () => {
     initExtensionDirs();
     await loadAllExtensions();
     shutdownMCPServers();
-    // kill() was called
+    // kill() was called on the child process
     expect(child.kill).toHaveBeenCalled();
-    // 'cancelled' notification was written to stdin
+    // No 'cancelled' notification should be written to stdin
     const writes = (child.stdin.write as any).mock.calls.map((c: any) => c[0]);
     const cancelledWrite = writes.find((w: string) => w.includes("notifications/cancelled"));
-    expect(cancelledWrite).toBeDefined();
+    expect(cancelledWrite).toBeUndefined();
   });
 
   it("is idempotent: multiple shutdowns don't throw", async () => {

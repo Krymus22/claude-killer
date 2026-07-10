@@ -304,10 +304,13 @@ describe("Bug Hunter #2a (part 3) — Bug A: PRESERVE_PREFIXES does not accumula
     await compactHistoryAsync();
 
     const history = getHistory();
-    // 1 preserved (from middle) + 1 freshly injected by compactHistoryAsync = 2.
-    // (compactHistoryAsync always injects a new continuation message.)
+    // FIX-MED-2: compactHistoryAsync now checks hasContinuation and skips
+    // injecting a fresh [SESSION CONTINUATION] message if one already
+    // exists in preservedSystem (BH6 MEDIUM 1: previously stacked N copies
+    // after N compactions). So we expect exactly 1 instance — the carried-
+    // over one is preserved, and no duplicate is injected.
     const total = countPrefix(history, "[SESSION CONTINUATION");
-    expect(total).toBe(2);
+    expect(total).toBe(1);
   });
 
   it("still preserves ## TASK_STATE (single instance, never regenerated)", async () => {

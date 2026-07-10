@@ -420,10 +420,16 @@ describe("Bug 1 regression: tokensPerSecond resets between turns", () => {
     // at the start. We can't easily test the actual value in the rendered
     // output without a real API call, but we can verify the App doesn't crash
     // and the StatusBar renders.
+    //
+    // FIX-TUI Bug 1: the "Claude-Killer" banner is no longer rendered in the
+    // live Ink view (it's printed via process.stdout.write BEFORE Ink takes
+    // over — see App.tsx render comment). Instead we check for the input
+    // placeholder which is always rendered when the App is idle.
     const { lastFrame } = render(<App />);
     await delay(100);
     const out = stripAnsi(lastFrame() ?? "");
-    expect(out).toContain("Claude-Killer");
+    // Input placeholder is shown when status === "idle"
+    expect(out).toContain("Digite");
   });
 });
 

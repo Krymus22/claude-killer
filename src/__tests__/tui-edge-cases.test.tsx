@@ -388,19 +388,27 @@ describe("App — edge cases", () => {
   });
 
   it("renders correctly when extensions are not yet discovered (empty Hub)", async () => {
+    // FIX-TUI Bug 1: the "Claude-Killer" banner is no longer rendered in the
+    // live Ink view (it's printed via process.stdout.write BEFORE Ink takes
+    // over). Check for the input placeholder instead, which is always present
+    // when the App is idle.
     const { lastFrame } = render(<App />);
     await delay(100);
     const out = stripAnsi(lastFrame() ?? "");
-    expect(out).toContain("Claude-Killer");
+    expect(out).toContain("Digite");
   });
 
   it("does not crash when typing a single space", async () => {
+    // FIX-TUI Bug 1: "Claude-Killer" banner is not in the live Ink view
+    // (printed before Ink takes over). Check for effort label "MEDIUM"
+    // (always rendered by StatusBar) — input has content (" ") so the
+    // placeholder won't show here.
     const { stdin, lastFrame } = render(<App />);
     stdin.write(" ");
     await delay(50);
     const out = stripAnsi(lastFrame() ?? "");
     expect(typeof out).toBe("string");
-    expect(out).toContain("Claude-Killer");
+    expect(out).toContain("MEDIUM");
   });
 
   it("does not crash when typing backspace on empty input", async () => {
@@ -460,12 +468,14 @@ describe("App — edge cases", () => {
   });
 
   it("does not crash when Esc pressed without Hub open", async () => {
+    // FIX-TUI Bug 1: "Claude-Killer" banner is not in the live Ink view
+    // (printed before Ink takes over). Check for input placeholder instead.
     const { stdin, lastFrame } = render(<App />);
     stdin.write("\x1b"); // Esc
     await delay(50);
     const out = stripAnsi(lastFrame() ?? "");
     expect(typeof out).toBe("string");
-    expect(out).toContain("Claude-Killer");
+    expect(out).toContain("Digite");
   });
 
   it("does not crash when arrow keys pressed without autocomplete", async () => {

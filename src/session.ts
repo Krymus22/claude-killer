@@ -654,6 +654,128 @@ export function listSessions(cwd?: string): SessionMeta[] {
   return sessions.sort((a, b) => b.lastModified.localeCompare(a.lastModified));
 }
 
+// --- Session history (richer view for /history) ------------------------------
+
+/**
+ * Richer per-session metadata used by the /history slash command to render a
+ * visual timeline. Unlike `SessionMeta` (which only has a single `summary`),
+ * this includes both the first user message and the last assistant message so
+ * the user can quickly recognize what each session was about at a glance.
+ */
+export interface SessionHistoryEntry {
+  id: string;
+  createdAt: string;
+  lastModified: string;
+  messageCount: number;
+  /** Truncated first user message (max 55 chars). Empty string if none. */
+  firstUserMessage: string;
+  /** Truncated last assistant message (max 55 chars). Empty string if none. */
+  lastAssistantMessage: string;
+  effortLevel: EffortLevel | null;
+  usage: SessionUsage | null;
+}
+
+/**
+ * Extract a plain-text representation from a message's `content` field.
+ *
+ * Per the OpenAI chat spec, `content` can be either:
+ *   - a string ("hello"), OR
+ *   - an array of content parts ([{type:"text", text:"..."}, ...])
+ *
+ * For the array form we concatenate all `text` parts. Returns "" if no text
+ * is available (e.g. assistant message with only tool_calls, image-only user
+ * message, etc.).
+ */
+function extractMessageText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    const parts: string[] = [];
+    for (const part of content) {
+      if (part && typeof part === "object" && typeof (part as { text?: unknown }).text === "string") {
+        parts.push((part as { text: string }).text);
+      }
+    }
+    return parts.join(" ");
+  }
+  return "";
+}
+
+/**
+ * Get a richer view of all sessions for the current project directory — used
+ * by the /history slash command to render a visual timeline.
+ *
+ * Similar to `listSessions` but also extracts the first user message and the
+ * last assistant message (truncated to 55 chars) so the user can quickly
+ * recognize what each session was about.
+ *
+ * @param cwd  Override cwd (for testing). Defaults to process.cwd().
+ * @returns Sessions sorted by lastModified (newest first). Caps at 30 entries
+ *          so the timeline stays scannable in a terminal.
+ */
+export function getHistoryEntries(cwd?: string): SessionHistoryEntry[] {
+  const dir = getProjectSessionDir(cwd);
+  if (!fs.existsSync(dir)) return [];
+
+  const files = fs.readdirSync(dir).filter((f) => f.endsWith(".jsonl"));
+  const entries: SessionHistoryEntry[] = [];
+
+  for (const file of files) {
+    try {
+      const filePath = path.join(dir, file);
+      const content = fs.readFileSync(filePath, "utf8");
+      const lines = content.split("\n").filter(Boolean);
+      if (lines.length === 0) continue;
+
+      const header = JSON.parse(lines[0]!);
+      // BUG FIX (inflated-count): same as listSessions — skip compaction-snapshot
+      // lines so msgCount reflects only real user/assistant/tool/system messages.
+      let msgCount = 0;
+      let firstUserMsg = "";
+      let lastAssistantMsg = "";
+
+      for (let i = 1; i < lines.length; i++) {
+        let parsed: { type?: string; role?: string; content?: unknown };
+        try {
+          parsed = JSON.parse(lines[i]!);
+        } catch {
+          continue;
+        }
+        if (parsed.type === "compaction-snapshot") continue;
+        msgCount++;
+
+        const text = extractMessageText(parsed.content);
+        if (parsed.role === "user" && !firstUserMsg && text.length > 0) {
+          firstUserMsg = text;
+        }
+        if (parsed.role === "assistant" && text.length > 0) {
+          lastAssistantMsg = text;
+        }
+      }
+
+      const stat = fs.statSync(filePath);
+      const effortLevel = getSessionEffortLevel(filePath);
+      const usage = getSessionUsage(filePath);
+      entries.push({
+        id: header.id ?? file.replace(".jsonl", ""),
+        createdAt: header.createdAt ?? "unknown",
+        lastModified: stat.mtime.toISOString(),
+        messageCount: msgCount,
+        // Truncate to 55 chars — terminal preview, not the full message.
+        firstUserMessage: firstUserMsg.slice(0, 55),
+        lastAssistantMessage: lastAssistantMsg.slice(0, 55),
+        effortLevel,
+        usage,
+      });
+    } catch {
+      // skip corrupt files
+    }
+  }
+
+  return entries
+    .sort((a, b) => b.lastModified.localeCompare(a.lastModified))
+    .slice(0, 30);
+}
+
 /**
  * Resolve a session ID (exact or partial prefix match).
  * Returns the full ID if found, or the input if no match.

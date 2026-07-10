@@ -589,8 +589,8 @@ export const COMMAND_I18N: Record<string, Record<Language, CommandI18n>> = {
     en: { desc: "Clear history" },
   },
   "/history": {
-    "pt-BR": { desc: "Resumo do histórico" },
-    en: { desc: "History summary" },
+    "pt-BR": { desc: "Linha do tempo visual de todas as sessões" },
+    en: { desc: "Visual timeline of all sessions" },
   },
   "/skills": {
     "pt-BR": { desc: "Listar skills" },

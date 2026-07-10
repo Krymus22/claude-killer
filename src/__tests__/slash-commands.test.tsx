@@ -232,6 +232,7 @@ vi.mock("../session.js", () => ({
   setActiveSession: vi.fn(),
   getActiveSessionId: vi.fn(() => "test-session"),
   listSessions: vi.fn(() => []),
+  getHistoryEntries: vi.fn(() => []),
   deleteSession: vi.fn(() => true),
   renameSession: vi.fn(() => true),
 }));

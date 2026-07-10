@@ -186,6 +186,36 @@ const SMALL_TASK_TOOLS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
       },
     },
   },
+  {
+    type: "function",
+    function: {
+      name: "buscar_web",
+      description: "Busca na web por informações. Retorna títulos, URLs e snippets. Útil para pesquisar documentação, exemplos de código, ou informações atuais.",
+      parameters: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "Termo de busca" },
+          maxResults: { type: "number", description: "Máximo de resultados (default: 5)" },
+        },
+        required: ["query"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "ler_url",
+      description: "Lê o conteúdo de uma URL. Extrai texto de páginas web (remove HTML). Útil para ler documentação ou artigos.",
+      parameters: {
+        type: "object",
+        properties: {
+          url: { type: "string", description: "URL para ler" },
+          maxLength: { type: "number", description: "Tamanho máximo do conteúdo (default: 10000 chars)" },
+        },
+        required: ["url"],
+      },
+    },
+  },
 ];
 
 // --- Path traversal protection (BH-SMALL-3) --------------------------------
@@ -322,6 +352,29 @@ async function executeSmallTaskTool(
           ok: true,
         };
       }
+      case "buscar_web": {
+        const query = String(args.query ?? "");
+        if (!query) return { result: "[ERROR] query vazia", ok: false };
+        const maxResults = typeof args.maxResults === "number" ? args.maxResults : 5;
+        const { webSearch } = await import("./apiResearcher.js");
+        const results = await webSearch(query, maxResults);
+        if (results.length === 0) return { result: "Nenhum resultado encontrado.", ok: true };
+        const formatted = results.map((r: any, i: number) =>
+          `${i + 1}. ${r.title ?? "Sem título"}\n   URL: ${r.url}\n   ${r.snippet ?? ""}`
+        ).join("\n\n");
+        return { result: formatted, ok: true };
+      }
+      case "ler_url": {
+        const url = String(args.url ?? "");
+        if (!url) return { result: "[ERROR] url vazia", ok: false };
+        const maxLength = typeof args.maxLength === "number" ? args.maxLength : 10000;
+        const { webRead } = await import("./apiResearcher.js");
+        const content = await webRead(url);
+        const truncated = content.length > maxLength
+          ? content.slice(0, maxLength) + "\n[TRUNCATED]"
+          : content;
+        return { result: truncated || "[ERROR] Conteúdo vazio", ok: !!content };
+      }
       default:
         return { result: `[ERROR] Tool desconhecida: ${toolName}`, ok: false };
     }
@@ -446,7 +499,7 @@ function parseToolCallsFromContent(content: string): OpenAI.Chat.Completions.Cha
 const SMALL_TASK_SYSTEM_PROMPT = `Você é um assistente rápido que executa PEQUENAS tarefas via tool calls.
 
 REGRAS:
-1. Use as tools (executar_comando, ler_arquivo, buscar_arquivos, buscar_texto) para fazer a tarefa.
+1. Use as tools (executar_comando, ler_arquivo, buscar_arquivos, buscar_texto, buscar_web, ler_url) para fazer a tarefa.
 2. Faça no MÁXIMO ${SMALL_TASK_MAX_TOOL_CALLS} tool calls.
 3. Depois de executar, dê um RESUMO do que fez e do resultado.
 4. NÃO explique o que vai fazer antes de fazer — apenas faça e resuma.

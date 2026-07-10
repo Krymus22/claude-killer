@@ -181,6 +181,7 @@ const mockedCompactHistory = vi.hoisted(() => vi.fn(() => null));
 const mockedGetCavemanLevel = vi.hoisted(() => vi.fn(() => null));
 const mockedSetCavemanLevel = vi.hoisted(() => vi.fn());
 const mockedReloadProjectMemory = vi.hoisted(() => vi.fn(() => null));
+const mockedGetHistoryEntries = vi.hoisted(() => vi.fn(() => []));
 vi.mock("../history.js", () => ({
   isPlanMode: mockedIsPlanMode,
   resetHistory: mockedResetHistory,
@@ -290,6 +291,7 @@ vi.mock("../session.js", () => ({
   setActiveSession: vi.fn(),
   getActiveSessionId: vi.fn(() => "test-session"),
   listSessions: vi.fn(() => []),
+  getHistoryEntries: mockedGetHistoryEntries,
   deleteSession: vi.fn(() => true),
   renameSession: vi.fn(() => true),
 }));
@@ -399,6 +401,8 @@ describe("Slash Commands FULL — cobertura completa de TODOS os comandos", () =
     mockedFormatPoolStats.mockReturnValue("1 keys, 40 RPM");
     mockedOrganizeInbox.mockReturnValue({ organized: [], ignored: [], errors: [] });
     mockedFormatOrganizeResult.mockReturnValue("");
+    // /history default — no sessions
+    mockedGetHistoryEntries.mockReturnValue([]);
   });
 
   afterEach(() => {
@@ -438,14 +442,42 @@ describe("Slash Commands FULL — cobertura completa de TODOS os comandos", () =
 
   // ─── /history ─────────────────────────────────────────────────────────────
 
-  it("/history — mostra contagem de mensagens do histórico", async () => {
-    mockedHistoryLength.mockReturnValue(7);
-    mockedHistorySummary.mockReturnValue("7 mensagens, 1.2k tokens");
+  it("/history — mostra timeline visual de sessões (não vazio)", async () => {
+    mockedGetHistoryEntries.mockReturnValue([
+      {
+        id: "2026-07-09_18-00-00_xpto",
+        createdAt: "2026-07-09 18:00:00",
+        lastModified: "2026-07-09T18:00:00.000Z",
+        messageCount: 45,
+        firstUserMessage: "Faz o sistema de save",
+        lastAssistantMessage: "Sistema completo com DataStoreService",
+        effortLevel: "high",
+        usage: null,
+      },
+    ]);
     const { stdin, lastFrame } = render(<App />);
     await sendCommand(stdin, "/history");
     const out = stripAnsi(lastFrame() ?? "");
-    expect(out).toContain("History:");
-    expect(out).toContain("7 mensagens");
+    // Visual timeline header
+    expect(out).toContain("Session History");
+    expect(out).toContain("1 session");
+    // Session entry: date, msg count, message previews
+    expect(out).toContain("2026-07-09 18:00");
+    expect(out).toContain("45 msgs");
+    expect(out).toContain("Faz o sistema de save");
+    expect(out).toContain("Sistema completo com DataStoreService");
+    // Footer hint to load sessions
+    expect(out).toContain("/session load <id>");
+  });
+
+  it("/history (vazio) — mostra mensagem amigável sem sessões", async () => {
+    mockedGetHistoryEntries.mockReturnValue([]);
+    const { stdin, lastFrame } = render(<App />);
+    await sendCommand(stdin, "/history");
+    const out = stripAnsi(lastFrame() ?? "");
+    expect(out).toContain("Session History");
+    expect(out).toContain("0 sessions");
+    expect(out).toContain("No saved sessions yet");
   });
 
   // ─── /skills ──────────────────────────────────────────────────────────────

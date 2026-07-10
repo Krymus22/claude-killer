@@ -70,7 +70,7 @@ import { ConfiguratorChat } from "./ConfiguratorChat.js";
 import type { AskUserQuestion, AskUserResponse } from "../askUser.js";
 import { getSearxStatus } from "../searxManager.js";
 import { loadConfig as loadDotfileConfig, updateConfig as updateDotfileConfig, saveConfig as saveDotfileConfig } from "../dotfileConfig.js";
-import { listSessions, deleteSession, renameSession, startSession, getLastSession, loadSessionMessages, setActiveSession, getActiveSessionId, updateSessionProjectCwd, updateSessionEffortLevel, updateSessionUsage, type SessionUsage } from "../session.js";
+import { listSessions, deleteSession, renameSession, startSession, getLastSession, loadSessionMessages, setActiveSession, getActiveSessionId, updateSessionProjectCwd, updateSessionEffortLevel, updateSessionUsage, getHistoryEntries, type SessionUsage } from "../session.js";
 // Static import (no circular dep) — fixes the syncPlan() race condition.
 // Previously syncPlan() used `await import("../planExecutor.js")` which
 // scheduled a microtask that could fire AFTER createPlan() was called in
@@ -139,9 +139,77 @@ function handleResetCommand(): CommandResult {
 }
 
 function handleHistoryCommand(): CommandResult {
-  const summary = history.historySummary();
-  const length = history.historyLength();
-  return { handled: true, message: `History: ${length} messages (${summary})` };
+  // /history — visual session timeline browser.
+  //
+  // Shows ALL sessions for the current project (capped at 30 newest) as a
+  // box-drawing timeline with date, message count, first user message, and
+  // last assistant message previews. This is a NICER visual version of
+  // /session list — same underlying data, but with message previews and a
+  // timeline frame.
+  //
+  // To load a session, the user runs `/session load <id>` (the ID is the
+  // filename without extension — same as `/session list`).
+  const entries = getHistoryEntries();
+  const activeId = getActiveSessionId();
+
+  // Box width = 62 (between ║ and ║). Each line is padded with spaces so the
+  // right ║ lines up. Emoji (📅/📄) render as 2 cells in most terminals but
+  // count as 1 in JS string length — so the right ║ will be 1 cell short on
+  // emoji lines. Acceptable for a terminal preview.
+  const WIDTH = 60;
+  function pad(content: string): string {
+    // Truncate (in case a date or count pushes past WIDTH) then pad to WIDTH.
+    if (content.length > WIDTH) return content.slice(0, WIDTH - 1) + "…";
+    return content + " ".repeat(WIDTH - content.length);
+  }
+
+  if (entries.length === 0) {
+    return {
+      handled: true,
+      message: [
+        "╔" + "═".repeat(WIDTH) + "╗",
+        "║" + pad("  📅 Session History — 0 sessions") + "║",
+        "╠" + "═".repeat(WIDTH) + "╣",
+        "║" + pad("") + "║",
+        "║" + pad("  No saved sessions yet.") + "║",
+        "║" + pad("  Sessions are auto-saved — just start chatting.") + "║",
+        "║" + pad("") + "║",
+        "╚" + "═".repeat(WIDTH) + "╝",
+      ].join("\n"),
+    };
+  }
+
+  const lines: string[] = [
+    "╔" + "═".repeat(WIDTH) + "╗",
+    "║" + pad(`  📅 Session History — ${entries.length} session${entries.length === 1 ? "" : "s"}`) + "║",
+    "╠" + "═".repeat(WIDTH) + "╣",
+    "║" + pad("") + "║",
+  ];
+
+  for (const e of entries) {
+    // Date: prefer lastModified (ISO), formatted as "YYYY-MM-DD HH:MM".
+    // Fallbacks cover old sessions with missing fields.
+    const iso = e.lastModified || e.createdAt || "";
+    const datePart = iso.length >= 16 ? iso.slice(0, 16).replace("T", " ") : iso;
+    const active = e.id === activeId ? "  ← active" : "";
+    const header = `  📄 ${datePart}  (${e.messageCount} msgs)${active}`;
+    lines.push("║" + pad(header) + "║");
+
+    if (e.firstUserMessage) {
+      const preview = e.firstUserMessage.length > 55 ? e.firstUserMessage.slice(0, 55) + "…" : e.firstUserMessage;
+      lines.push("║" + pad(`     "${preview}"`) + "║");
+    }
+    if (e.lastAssistantMessage) {
+      const preview = e.lastAssistantMessage.length > 55 ? e.lastAssistantMessage.slice(0, 55) + "…" : e.lastAssistantMessage;
+      lines.push("║" + pad(`     → "${preview}"`) + "║");
+    }
+    lines.push("║" + pad("") + "║");
+  }
+
+  lines.push("║" + pad("  Use /session load <id> to load a session") + "║");
+  lines.push("╚" + "═".repeat(WIDTH) + "╝");
+
+  return { handled: true, message: lines.join("\n") };
 }
 
 function handleSkillsCommand(): CommandResult {

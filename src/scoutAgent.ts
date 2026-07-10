@@ -131,8 +131,8 @@ const SCOUT_SYSTEM_PROMPT = `You are a SCOUT sub-agent for Claude-Killer. Your O
 YOU ARE FAST: You use a smaller, faster model. Your purpose is to execute read/search calls so the main (slower) model doesn't have to.
 
 RULES:
-- You have ONLY read tools: ler_arquivo, buscar_arquivos, buscar_texto, parse_ast.
-- You CANNOT edit, write, or run commands. Just read and search.
+- You have read tools: ler_arquivo, buscar_arquivos, buscar_texto, parse_ast, and executar_comando_readonly (for safe read-only commands like ls, cat, git status, grep).
+- You CANNOT edit, write, or run modifying commands (rm, mv, cp, echo >). Just read, search, and run safe read-only commands.
 - Do AT MOST 100 tool calls. Execute ALL the tasks given to you. Explore deeply if needed — navigate UIs, read nested files.
 - You MUST call at least ONE tool before responding. Do NOT respond with "DONE" without making tool calls first.
 - After ALL tool calls are done, respond with exactly: DONE
@@ -194,7 +194,52 @@ const SCOUT_TOOLS = [
       },
     },
   },
+  {
+    type: "function" as const,
+    function: {
+      name: "executar_comando_readonly",
+      description: "Execute a READ-ONLY shell command (ls, cat, git status, git log, grep, find, wc, pwd, etc). NÃO pode executar comandos que modificam arquivos (rm, mv, cp, echo >, etc).",
+      parameters: {
+        type: "object",
+        properties: {
+          comando: { type: "string", description: "O comando read-only para executar" },
+        },
+        required: ["comando"],
+      },
+    },
+  },
 ];
+
+/**
+ * Allowlist of read-only command prefixes. The scout can ONLY execute
+ * commands that start with one of these. Any command not in this list
+ * is rejected with an error message.
+ *
+ * SECURITY: this is an ALLOWLIST (not blocklist) — if a command is not
+ * explicitly listed, it's rejected. This prevents the scout from running
+ * destructive commands even if the model is prompt-injected.
+ */
+const READONLY_COMMAND_PREFIXES = [
+  "ls", "ll", "dir", "cat", "head", "tail", "wc", "find", "grep", "rg",
+  "git status", "git log", "git diff", "git branch", "git show", "git blame",
+  "git remote", "git rev-parse", "git ls-files", "git stash list",
+  "pwd", "echo", "which", "where", "whereis", "file", "stat", "du", "df",
+  "npm ls", "npm list", "npm view", "npm info",
+  "node --version", "npm --version", "npx --version",
+  "rojo --version", "selene --version", "stylua --version",
+  "wally --version", "tarmac --version",
+  "env", "printenv", "hostname", "uname", "date", "cal",
+  "ps", "top", "lsof",
+];
+
+function isReadOnlyCommand(comando: string): boolean {
+  const trimmed = comando.trim().toLowerCase();
+  // Remove leading "sudo" if present (we don't want to allow sudo anything)
+  const withoutSudo = trimmed.replace(/^sudo\s+/, "");
+  return READONLY_COMMAND_PREFIXES.some(prefix =>
+    withoutSudo.startsWith(prefix + " ") || withoutSudo === prefix
+  );
+}
 
 // --- Tool executor (read-only, inline) --------------------------------------
 
@@ -277,6 +322,22 @@ async function executeScoutTool(toolName: string, args: Record<string, unknown>,
         const resolved = resolveAndCheckPath(path, cwd);
         const result = await parseFile(resolved);
         rawResult = typeof result === "string" ? result : JSON.stringify(result);
+        break;
+      }
+      case "executar_comando_readonly": {
+        const comando = String(args.comando ?? "");
+        if (!comando) return "[ERROR] No command provided";
+        if (!isReadOnlyCommand(comando)) {
+          return `[ERROR] Command not in read-only allowlist: "${comando.slice(0, 50)}". Only read-only commands are allowed (ls, cat, git status, grep, find, wc, pwd, etc).`;
+        }
+        const { executarComando } = await import("./tools.js");
+        const result = await executarComando({
+          comando,
+          cwd,
+          timeoutMs: 15000, // 15s for scout (faster than main agent's 60s)
+          background: false,
+        });
+        rawResult = typeof result === "string" ? result : String(result);
         break;
       }
       default:
@@ -552,7 +613,7 @@ export async function runScout(args: ScoutArgs): Promise<ScoutResult | null> {
           log.warn(`[SCOUT] Model responded without tool calls at round ${callNum}. Nudging...`);
           history.push({
             role: "user",
-            content: "You MUST call at least one tool (ler_arquivo, buscar_arquivos, buscar_texto, or parse_ast) before responding. Make the tool call NOW.",
+            content: "You MUST call at least one tool (ler_arquivo, buscar_arquivos, buscar_texto, parse_ast, or executar_comando_readonly) before responding. Make the tool call NOW.",
           });
           continue;
         }

@@ -455,3 +455,152 @@ describe("session — effort level persistence (per-session)", () => {
     expect(loaded!.effortLevel).toBeNull();
   });
 });
+
+describe("session — getHistoryEntries (visual /history browser)", () => {
+  /**
+   * Tests for getHistoryEntries, which powers the /history slash command's
+   * visual timeline. Verifies: empty case, single session, multi-session
+   * sorting, message previews (first user + last assistant), 55-char
+   * truncation, compaction-snapshot skipping, and the 30-session cap.
+   */
+
+  it("retorna vazio se não há sessões", async () => {
+    const { getHistoryEntries } = await loadSessionModule();
+    expect(getHistoryEntries()).toEqual([]);
+  });
+
+  it("retorna uma entrada após startSession + mensagens", async () => {
+    const { startSession, appendMessage, getHistoryEntries } = await loadSessionModule();
+    startSession();
+    appendMessage({ role: "user", content: "primeira pergunta" });
+    appendMessage({ role: "assistant", content: "primeira resposta" });
+    const entries = getHistoryEntries();
+    expect(entries.length).toBe(1);
+    expect(entries[0]).toHaveProperty("id");
+    expect(entries[0]).toHaveProperty("createdAt");
+    expect(entries[0]).toHaveProperty("lastModified");
+    expect(entries[0]).toHaveProperty("messageCount");
+    expect(entries[0]).toHaveProperty("firstUserMessage");
+    expect(entries[0]).toHaveProperty("lastAssistantMessage");
+    expect(entries[0]).toHaveProperty("effortLevel");
+    expect(entries[0]).toHaveProperty("usage");
+  });
+
+  it("firstUserMessage contém a primeira mensagem do usuário", async () => {
+    const { startSession, appendMessage, getHistoryEntries } = await loadSessionModule();
+    startSession();
+    appendMessage({ role: "user", content: "crie um sistema de inventário" });
+    appendMessage({ role: "assistant", content: "ok, criando" });
+    appendMessage({ role: "user", content: "outra pergunta" });
+    const entries = getHistoryEntries();
+    expect(entries[0]!.firstUserMessage).toContain("crie um sistema de inventário");
+  });
+
+  it("lastAssistantMessage contém a última resposta do assistant", async () => {
+    const { startSession, appendMessage, getHistoryEntries } = await loadSessionModule();
+    startSession();
+    appendMessage({ role: "user", content: "pergunta" });
+    appendMessage({ role: "assistant", content: "resposta 1" });
+    appendMessage({ role: "assistant", content: "resposta final" });
+    const entries = getHistoryEntries();
+    expect(entries[0]!.lastAssistantMessage).toContain("resposta final");
+  });
+
+  it("trunca mensagens para 55 chars", async () => {
+    const { startSession, appendMessage, getHistoryEntries } = await loadSessionModule();
+    startSession();
+    const longMsg = "x".repeat(100);
+    appendMessage({ role: "user", content: longMsg });
+    const entries = getHistoryEntries();
+    expect(entries[0]!.firstUserMessage.length).toBe(55);
+  });
+
+  it("multiple sessions são ordenadas por lastModified (newest first)", async () => {
+    const { startSession, appendMessage, getHistoryEntries } = await loadSessionModule();
+    // Create 3 sessions with explicit IDs and append messages (to bump mtime).
+    startSession(undefined, "old-session");
+    appendMessage({ role: "user", content: "old" });
+    // Wait briefly so mtime differs across sessions.
+    await new Promise((r) => setTimeout(r, 20));
+    startSession(undefined, "mid-session");
+    appendMessage({ role: "user", content: "mid" });
+    await new Promise((r) => setTimeout(r, 20));
+    startSession(undefined, "new-session");
+    appendMessage({ role: "user", content: "new" });
+    const entries = getHistoryEntries();
+    expect(entries.length).toBe(3);
+    expect(entries[0]!.id).toBe("new-session");
+    expect(entries[1]!.id).toBe("mid-session");
+    expect(entries[2]!.id).toBe("old-session");
+  });
+
+  it("skips compaction-snapshot lines no msgCount", async () => {
+    const { startSession, appendMessage, appendCompactionSnapshot, getHistoryEntries } = await loadSessionModule();
+    startSession();
+    appendMessage({ role: "user", content: "msg1" });
+    appendCompactionSnapshot([{ role: "system", content: "compacted" }], "mechanical");
+    appendMessage({ role: "user", content: "msg2" });
+    const entries = getHistoryEntries();
+    expect(entries[0]!.messageCount).toBe(2); // snapshot não conta
+  });
+
+  it("limita a 30 entradas", async () => {
+    const { startSession, appendMessage, getHistoryEntries } = await loadSessionModule();
+    // Create 35 sessions — getHistoryEntries should return only 30 (newest).
+    for (let i = 0; i < 35; i++) {
+      startSession(undefined, `session-${String(i).padStart(2, "0")}`);
+      appendMessage({ role: "user", content: `msg ${i}` });
+      // Tiny delay so mtimes differ enough to sort reliably.
+      await new Promise((r) => setTimeout(r, 5));
+    }
+    const entries = getHistoryEntries();
+    expect(entries.length).toBe(30);
+  });
+
+  it("lida com content como array de partes (OpenAI spec)", async () => {
+    const { startSession, appendMessage, getHistoryEntries } = await loadSessionModule();
+    startSession();
+    // OpenAI-style content: array of parts (text + image_url).
+    appendMessage({
+      role: "user",
+      content: [
+        { type: "text", text: "veja esta imagem" },
+        { type: "image_url", image_url: { url: "data:..." } },
+      ] as any,
+    });
+    const entries = getHistoryEntries();
+    expect(entries[0]!.firstUserMessage).toContain("veja esta imagem");
+  });
+
+  it("retorna effortLevel e usage do header", async () => {
+    const { startSession, updateSessionEffortLevel, updateSessionUsage, appendMessage, getHistoryEntries } = await loadSessionModule();
+    startSession();
+    updateSessionEffortLevel("high");
+    // Write a usage object into the header (as would happen after a real API
+    // response). Without this, getSessionUsage returns null for fresh
+    // sessions — usage is only persisted after the first chat completion.
+    updateSessionUsage({
+      lastPromptTokens: 100,
+      lastCompletionTokens: 50,
+      lastTotalTokens: 150,
+      sessionPromptTokens: 100,
+      sessionCompletionTokens: 50,
+      sessionCost: 0.001,
+    });
+    appendMessage({ role: "user", content: "x" });
+    const entries = getHistoryEntries();
+    expect(entries[0]!.effortLevel).toBe("high");
+    expect(entries[0]!.usage).not.toBeNull();
+    expect(entries[0]!.usage!.lastTotalTokens).toBe(150);
+  });
+
+  it("retorna vazio para firstUserMessage se não há user msg", async () => {
+    const { startSession, appendMessage, getHistoryEntries } = await loadSessionModule();
+    startSession();
+    // Only assistant messages — no user message to extract.
+    appendMessage({ role: "assistant", content: "auto-response" });
+    const entries = getHistoryEntries();
+    expect(entries[0]!.firstUserMessage).toBe("");
+    expect(entries[0]!.lastAssistantMessage).toContain("auto-response");
+  });
+});

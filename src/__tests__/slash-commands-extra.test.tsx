@@ -172,6 +172,7 @@ const mockedCompactHistory = vi.hoisted(() => vi.fn(() => null));
 const mockedGetCavemanLevel = vi.hoisted(() => vi.fn(() => null));
 const mockedSetCavemanLevel = vi.hoisted(() => vi.fn());
 const mockedReloadProjectMemory = vi.hoisted(() => vi.fn(() => null));
+const mockedGetHistoryEntries = vi.hoisted(() => vi.fn(() => []));
 vi.mock("../history.js", () => ({
   isPlanMode: mockedIsPlanMode,
   resetHistory: mockedResetHistory,
@@ -262,6 +263,7 @@ vi.mock("../session.js", () => ({
   setActiveSession: vi.fn(),
   getActiveSessionId: vi.fn(() => "test-session"),
   listSessions: vi.fn(() => []),
+  getHistoryEntries: mockedGetHistoryEntries,
   deleteSession: vi.fn(() => true),
   renameSession: vi.fn(() => true),
 }));
@@ -368,6 +370,8 @@ describe("Slash Commands extras — output dos commands não cobertos", () => {
     mockedRenderTodoBar.mockReturnValue("");
     mockedGetPoolSize.mockReturnValue(1);
     mockedFormatPoolStats.mockReturnValue("1 keys, 40 RPM");
+    // /history default — no sessions
+    mockedGetHistoryEntries.mockReturnValue([]);
   });
 
   // ─── /exit ────────────────────────────────────────────────────────────────
@@ -391,26 +395,61 @@ describe("Slash Commands extras — output dos commands não cobertos", () => {
   // ─── /history ─────────────────────────────────────────────────────────────
 
   describe("/history", () => {
-    it("mostra contagem de mensagens do histórico", async () => {
-      mockedHistoryLength.mockReturnValue(5);
-      mockedHistorySummary.mockReturnValue("5 mensagens");
+    it("mostra timeline visual com 0 sessões quando vazio", async () => {
+      mockedGetHistoryEntries.mockReturnValue([]);
       const { stdin, lastFrame } = render(<App />);
       await sendCommand(stdin, "/history");
       const out = stripAnsi(lastFrame() ?? "");
-      // Formato esperado: "History: <n> mensagens (<summary>)"
-      expect(out).toContain("History:");
-      expect(out).toContain("5 mensagens");
+      // Visual frame: box-drawing characters present
+      expect(out).toContain("Session History");
+      expect(out).toContain("0 sessions");
+      // Friendly empty message
+      expect(out).toContain("No saved sessions yet");
+      // Box-drawing chars (frame)
+      expect(out).toContain("╔");
+      expect(out).toContain("╚");
     });
 
-    it("mostra o resumo retornado por historySummary()", async () => {
-      mockedHistoryLength.mockReturnValue(10);
-      mockedHistorySummary.mockReturnValue("Resumo customizado de 10 msgs");
+    it("mostra timeline com data, contagem de mensagens e previews", async () => {
+      mockedGetHistoryEntries.mockReturnValue([
+        {
+          id: "2026-07-10_14-30-00_abc1",
+          createdAt: "2026-07-10 14:30:00",
+          lastModified: "2026-07-10T14:30:00.000Z",
+          messageCount: 23,
+          firstUserMessage: "Refatora o sistema de inventário",
+          lastAssistantMessage: "Pronto! Criei InventoryManager.luau com...",
+          effortLevel: "medium",
+          usage: null,
+        },
+        {
+          id: "2026-07-10_12-15-00_def2",
+          createdAt: "2026-07-10 12:15:00",
+          lastModified: "2026-07-10T12:15:00.000Z",
+          messageCount: 8,
+          firstUserMessage: "Cria um botão de comprar",
+          lastAssistantMessage: "Botão criado em ShopGui/Button.luau",
+          effortLevel: null,
+          usage: null,
+        },
+      ]);
       const { stdin, lastFrame } = render(<App />);
       await sendCommand(stdin, "/history");
       const out = stripAnsi(lastFrame() ?? "");
-      // O resumo aparece entre parênteses no output
-      expect(out).toContain("Resumo customizado de 10 msgs");
-      expect(out).toContain("10 messages");
+      // Header
+      expect(out).toContain("Session History");
+      expect(out).toContain("2 sessions");
+      // Each session's date, msg count, and previews
+      expect(out).toContain("2026-07-10 14:30");
+      expect(out).toContain("23 msgs");
+      expect(out).toContain("Refatora o sistema de inventário");
+      expect(out).toContain("Pronto! Criei InventoryManager.luau com");
+      expect(out).toContain("2026-07-10 12:15");
+      expect(out).toContain("8 msgs");
+      expect(out).toContain("Cria um botão de comprar");
+      expect(out).toContain("Botão criado em ShopGui/Button.luau");
+      // Footer hint
+      expect(out).toContain("/session load <id>");
     });
   });
 

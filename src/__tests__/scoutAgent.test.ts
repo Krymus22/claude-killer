@@ -33,6 +33,7 @@ vi.mock("../apiClient.js", () => ({
 
 vi.mock("../tools.js", () => ({
   lerArquivo: vi.fn(),
+  executarComando: vi.fn(),
 }));
 
 vi.mock("../fileSearch.js", () => ({

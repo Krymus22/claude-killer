@@ -44,11 +44,21 @@ describe("detectProvider (variações de env)", () => {
     expect(detectProvider()).toBe("nvidia");
   });
 
-  it("trata valor desconhecido em API_PROVIDER como default nvidia", async () => {
+  it("REJEITA valor desconhecido em API_PROVIDER com exit(1) — BH-BRIDGE-1 HIGH-3", async () => {
+    // BH-BRIDGE-1 HIGH-3 fix: unknown API_PROVIDER values now exit(1) with a
+    // helpful error instead of silently falling through to nvidia. This catches
+    // typos like "bridg" or "aws" early.
     process.env.API_PROVIDER = "openai";
     process.env.NVIDIA_API_KEY = "nvapi-test";
     const { detectProvider } = await import("../apiProvider.js");
-    expect(detectProvider()).toBe("nvidia");
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation((code?: number) => {
+      throw new Error(`exit:${code}`);
+    });
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(() => detectProvider()).toThrow("exit:1");
+    expect(errSpy).toHaveBeenCalledWith(expect.stringContaining("not a valid provider"));
+    exitSpy.mockRestore();
+    errSpy.mockRestore();
   });
 
   it("prioriza explicit nvidia sobre ZENMUX_API_KEY setada", async () => {

@@ -1200,4 +1200,54 @@ Antes de corrigir qualquer bug:
 
 ---
 
+### 17.11 Bridge Mode (Julho 2026)
+
+> Regras para o provider "bridge" — permite que um LLM remoto (acessado via
+> servidor HTTP OpenAI-compatible + Cloudflare tunnel) atue como o cérebro
+> do claude-killer. Veja `bridge/README.md` para arquitetura completa.
+
+81. **BRIDGE_URL MUST be HTTPS** — `apiProvider.ts:getProviderConfig()` rejeita URLs não-HTTPS com exit(1). Tokens são enviados em Authorization headers — nunca sobre plaintext. URLs são validadas com `new URL()` (não apenas regex `^https://`).
+
+82. **BRIDGE_TOKEN MUST be non-empty** — `apiProvider.ts:getProviderConfig()` exige token não-vazio (após trim). Server (`bridge/server.mjs`) também exige token no startup. Token é comparado via SHA-256 hash + `crypto.timingSafeEqual` (NÃO via comparação direta — previne timing attack de length leak).
+
+83. **bridgeMaxRpm NaN guard** — `config.ts` usa `Math.max(1, Number.isNaN(parsed) ? 12 : parsed)` (NÃO `|| 12`) para que `BRIDGE_MAX_RPM=0` clamp para 1 em vez de silently virar 12. Mirrors §17.9 rule 48.
+
+84. **Bridge rate limiter usa bridgeMaxRpm** — `apiClient.ts` DEVE usar `config.bridgeMaxRpm` (default 12) quando `apiProvider === "bridge"`, NÃO `config.rateLimitRpm` (default 40, NVIDIA). Sem isso, CLI envia 40 RPM e server rejeita 28/min com 429.
+
+85. **Bridge nunca é auto-detectado** — `detectProvider()` só retorna "bridge" via `API_PROVIDER=bridge` explícito. Mesmo com BRIDGE_URL e BRIDGE_TOKEN setados, sem API_PROVIDER o provider é nvidia (ou zenmux se ZENMUX_API_KEY setado). Bridge requer opt-in consciente.
+
+86. **API_PROVIDER inválido = exit(1)** — `detectProvider()` NÃO faz fallback silencioso para valores desconhecidos (ex: "aws", "bridg" typo). Exit(1) com mensagem listando valores válidos: nvidia, zenmux, bridge.
+
+87. **Bridge não envia thinking_mode** — `BRIDGE_CONFIG.sendThinkingMode = false`. Pensar é built-in no LLM remoto. Enviar `chat_template_kwargs` causa erro 400. Mirrors §1.3 ZenMux.
+
+88. **Bridge não usa multi-key pool** — `BRIDGE_CONFIG.needsMultiKeyPool = false`. Single token = single identity. `apiKeyPool.ts` não é usado para bridge.
+
+89. **Bridge maxConcurrentSubAgents = 1** — operator processa queue sequencialmente. Sub-agentes paralelos sobrecarregariam o operator. Mirrors §17.10 regra 80 mas mais restritivo.
+
+90. **Bridge não precisa heartbeat** — `BRIDGE_CONFIG.needsHeartbeat = false`. Não há GPU cold start. Heartbeat seria desperdício de requests.
+
+91. **Bridge não precisa hedging** — `BRIDGE_CONFIG.needsHedging = false`. Não há GPU queue. Mirrors §17.4 regra 19 (hedging só NVIDIA).
+
+92. **Bridge server: path traversal protection** — `bridge/process-queue.mjs` valida request IDs com `isSafeId()` (allowlist `[A-Za-z0-9_-]+`, max 128 chars) antes de qualquer `path.join`. Sem isso, prompt injection via queued messages poderia escapar do queue dir. Mirrors §17.8 regra 31.
+
+93. **Bridge server: atomic file writes** — REQ e RESP files são escritos via temp+rename (`fs.writeFileSync(tmp); fs.renameSync(tmp, final)`) para prevenir leitura de JSON parcial. Server faz startup sweep de `.tmp` e `.corrupt` files.
+
+94. **Bridge server: CF-Connecting-IP** — rate limit usa `req.headers["cf-connecting-ip"]` (setado pela Cloudflare, NÃO client-controllable) em vez de `x-forwarded-for` first entry (attacker-controllable). Fallback: last XFF entry.
+
+95. **Bridge server: uncaughtException = shutdown** — `process.on("uncaughtException")` chama `shutdown()`, NÃO apenas loga. Server continua em estado corrompido se continuar. Mirrors §17.8 regra 34.
+
+96. **Bridge server: sem wildcard CORS** — CLI usa Node http (não browser), então CORS headers são desnecessários e expandem attack surface. OPTIONS retorna 204 sem headers CORS.
+
+97. **Bridge server: ipRequestLog Map com cap** — Map de IPs é periodicamente varrido (setInterval 60s) e tem hard cap de 10.000 entradas. Sem isso, attacker com XFF spoofing cresce Map indefinidamente.
+
+98. **Bridge server: body parsing com Buffer.concat** — NÃO usar `body += chunk.toString()` (O(n²)). Usar `const chunks=[]; chunks.push(chunk); Buffer.concat(chunks).toString("utf8")` no end. Mirrors §17.9 regra 68.
+
+99. **Bridge server: query string stripping** — URLs são parsed com `.split("?")[0]` antes de matching routes. `POST /v1/chat/completions?stream=true` deve funcionar, não 404.
+
+100. **Bridge token masking em logs** — `start-tunnel.sh` mostra apenas `${BRIDGE_TOKEN:0:4}...${BRIDGE_TOKEN: -4}` no stdout. Cloudflared/docker são iniciados com `env -u BRIDGE_TOKEN` para não vazar via `ps eaux`.
+
+101. **restoreMocks: true no vitest config** — `vitest.config.ts` tem `restoreMocks: true` para que `vi.spyOn` mocks não vazem entre testes se assertions throw antes de `mockRestore()`.
+
+---
+
 **FIM DO DOCUMENTO**

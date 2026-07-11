@@ -118,7 +118,12 @@ class Mutex {
 // --- Singletons --------------------------------------------------------------
 
 const mutex = new Mutex();
-const rateLimiter = new SlidingWindowRateLimiter(config.rateLimitRpm);
+// BH-BRIDGE-1 CRITICAL-1 fix: when provider is bridge, use bridgeMaxRpm (default 12)
+// instead of the NVIDIA default (40 RPM). The bridge server enforces 12 RPM per IP,
+// so sending 40 RPM floods with 429s. §17.11 rule 84.
+const rateLimiter = new SlidingWindowRateLimiter(
+  config.apiProvider === "bridge" ? config.bridgeMaxRpm : config.rateLimitRpm
+);
 
 // --- Utility -----------------------------------------------------------------
 

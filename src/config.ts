@@ -79,8 +79,37 @@ export const config = {
   nvidiaApiKeys: process.env.NVIDIA_API_KEYS ?? "",
   nvidiaApiKeysFile: process.env.NVIDIA_API_KEYS_FILE ?? "",
 
-  /** Base URL for the API endpoint (provider-specific). */
+  /** Base URL for the API endpoint (provider-specific).
+   *
+   * For NVIDIA: https://integrate.api.nvidia.com/v1
+   * For ZenMux: https://zenmux.ai/api/v1
+   * For Bridge: BRIDGE_URL env var (HTTPS only, §17.11 rule 81)
+   *
+   * Note: the field name `nvidiaBaseUrl` is kept for backwards compat
+   * (existing code references it); for non-NVIDIA providers it simply
+   * holds whichever baseUrl the active provider uses.
+   */
   nvidiaBaseUrl: _providerConfig.baseUrl,
+
+  /** Bridge provider config (only meaningful when apiProvider === "bridge").
+   *
+   * Exposed separately so other modules can reference bridge-specific values
+   * by their proper names without poking at `nvidiaApiKey`/`nvidiaBaseUrl`.
+   * - bridgeUrl: same as nvidiaBaseUrl when provider=bridge, "" otherwise
+   * - bridgeToken: same as nvidiaApiKey when provider=bridge, "" otherwise
+   * - bridgeMaxRpm: BRIDGE_MAX_RPM env var (default 12)
+   *
+   * §17.11 rule 83: bridgeMaxRpm >= 1 (NaN guard like §17.9 rule 48).
+   * Note: we use `Number.isNaN` (not `||`) so that "0" and negative numbers
+   * are clamped to 1 rather than silently replaced with the default 12.
+   * (Bug found during apiProvider-bridge testing.)
+   */
+  bridgeUrl: _provider === "bridge" ? _providerConfig.baseUrl : "",
+  bridgeToken: _provider === "bridge" ? _providerConfig.apiKey.trim() : "",
+  bridgeMaxRpm: (() => {
+    const parsed = parseInt(process.env.BRIDGE_MAX_RPM ?? "12", 10);
+    return Math.max(1, Number.isNaN(parsed) ? 12 : parsed);
+  })(),
 
   /**
    * Model identifier for the model on NVIDIA NIM.

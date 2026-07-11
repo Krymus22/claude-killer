@@ -11,6 +11,9 @@ export default defineConfig({
     ],
     testTimeout: 60000,
     setupFiles: ["./vitest-setup.ts"],
+    // BH-BRIDGE-3 HIGH-5 fix: auto-restore mocks after each test so vi.spyOn
+    // mocks don't leak if assertions throw before mockRestore() runs.
+    restoreMocks: true,
     coverage: {
       provider: "v8",
       reporter: ["lcov", "text"],

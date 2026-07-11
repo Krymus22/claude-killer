@@ -1,5 +1,5 @@
 /**
- * apiProvider.ts — Abstraction over API providers (NVIDIA NIM, ZenMux).
+ * apiProvider.ts — Abstraction over API providers (NVIDIA NIM, ZenMux, Bridge).
  *
  * Each provider has different characteristics:
  *
@@ -21,11 +21,40 @@
  *   - Heartbeat: not needed
  *   - Hedging: not needed
  *   - Sub-agents: 10+ parallel (no key contention)
+ *
+ * Bridge (custom Cloudflare-tunneled OpenAI-compatible server):
+ *   - Cold start: none (just network latency through tunnel)
+ *   - Concurrency: 1 (single-threaded queue processor on the remote side)
+ *   - Rate limit: BRIDGE_MAX_RPM env var (default 12, conservative)
+ *   - Thinking: built-in on the remote LLM, don't send chat_template_kwargs
+ *   - Reasoning field: "reasoning" (server emits OpenAI-compatible chunks)
+ *   - Heartbeat: not needed (no GPU cold start)
+ *   - Hedging: not needed (no GPU queue)
+ *   - Sub-agents: 1 (sequential — remote processes queue one at a time)
+ *   - Auth: BRIDGE_TOKEN shared secret in Authorization: Bearer header
+ *   - When to use: when you want a remote LLM (e.g., a chat-based model
+ *     accessed via a bridge server) to act as the agent's brain, instead of
+ *     a hosted API. The CLI sees a normal OpenAI-compatible endpoint; the
+ *     bridge server queues requests, an operator (or separate process)
+ *     processes them, and responses flow back through the same HTTP
+ *     connection.
+ *
+ * Configuration (env vars):
+ *   - API_PROVIDER=bridge              → activate bridge provider
+ *   - BRIDGE_URL=https://x.trycloudflare.com → bridge server URL (HTTPS only)
+ *   - BRIDGE_TOKEN=<shared-secret>     → required auth token
+ *   - BRIDGE_MAX_RPM=12                → optional, default 12
+ *
+ * Security:
+ *   - BRIDGE_URL MUST be HTTPS (§17.11 rule 81)
+ *   - BRIDGE_TOKEN MUST be set (§17.11 rule 82)
+ *   - Server validates Authorization: Bearer on every request
+ *   - Multi-key pool disabled (single token = single identity)
  */
 
 import * as fs from "node:fs";
 
-export type ProviderName = "nvidia" | "zenmux";
+export type ProviderName = "nvidia" | "zenmux" | "bridge";
 
 export interface ProviderConfig {
   name: ProviderName;
@@ -73,6 +102,29 @@ const ZENMUX_CONFIG: Omit<ProviderConfig, "apiKey"> = {
   heartbeatMaxTokens: 1,
 };
 
+/**
+ * BRIDGE_CONFIG: dynamic baseUrl (from BRIDGE_URL env var, validated HTTPS).
+ * The apiKey field is the BRIDGE_TOKEN (shared secret) — set in getProviderConfig().
+ *
+ * Bridge behaves like ZenMux for transport concerns (no thinking kwargs,
+ * no heartbeat, no hedging, no multi-key pool) but with concurrency=1
+ * because the remote queue processor handles one request at a time.
+ *
+ * §17.11 rule 81: BRIDGE_URL MUST be HTTPS.
+ * §17.11 rule 82: BRIDGE_TOKEN MUST be non-empty.
+ */
+const BRIDGE_CONFIG: Omit<ProviderConfig, "apiKey" | "baseUrl"> = {
+  name: "bridge",
+  // baseUrl is filled in dynamically by getProviderConfig() from BRIDGE_URL.
+  sendThinkingMode: false,
+  reasoningField: "reasoning",
+  needsHeartbeat: false,
+  needsHedging: false,
+  needsMultiKeyPool: false,
+  maxConcurrentSubAgents: 1,
+  heartbeatMaxTokens: 1,
+};
+
 // --- Public API -------------------------------------------------------------
 
 /**
@@ -93,10 +145,25 @@ export function detectProvider(): ProviderName {
   const explicit = process.env.API_PROVIDER?.toLowerCase().trim();
   if (explicit === "zenmux") return "zenmux";
   if (explicit === "nvidia") return "nvidia";
+  if (explicit === "bridge") return "bridge";
+
+  // BH-BRIDGE-1 HIGH-3 fix: if API_PROVIDER is set but doesn't match any known
+  // provider, exit with a helpful error instead of silently falling through to
+  // auto-detect. This catches typos like "bridg" or "aws" early.
+  if (explicit && explicit !== "") {
+    console.error(
+      `[claude-killer] API_PROVIDER="${explicit}" is not a valid provider.\n` +
+      `  Valid values: nvidia, zenmux, bridge.\n` +
+      `  Unset API_PROVIDER to auto-detect (zenmux if ZENMUX_API_KEY set, else nvidia).\n`
+    );
+    process.exit(1);
+  }
 
   // Auto-detect: zenmux only if NO NVIDIA key source is configured (§5.2).
   // Must include NVIDIA_API_KEYS_FILE — otherwise a file-only NVIDIA config
   // is misrouted to zenmux and the CLI exits with code 1 in getProviderConfig.
+  // Note: bridge is NEVER auto-detected — it must be explicitly set via
+  // API_PROVIDER=bridge because it requires both BRIDGE_URL and BRIDGE_TOKEN.
   if (
     process.env.ZENMUX_API_KEY &&
     !process.env.NVIDIA_API_KEY &&
@@ -176,6 +243,59 @@ function readFirstKeyFromFile(filePath: string | undefined): string {
 export function getProviderConfig(): ProviderConfig {
   const provider = detectProvider();
 
+  if (provider === "bridge") {
+    // §17.11 rule 81: BRIDGE_URL MUST be HTTPS.
+    const rawUrl = process.env.BRIDGE_URL?.trim() ?? "";
+    if (!rawUrl) {
+      console.error(
+        `[claude-killer] API_PROVIDER=bridge but BRIDGE_URL is not set.\n` +
+        `  Set BRIDGE_URL to your bridge server URL (must be HTTPS):\n` +
+        `    BRIDGE_URL=https://random-words.trycloudflare.com\n` +
+        `  See bridge/README.md for how to start a bridge server.\n`
+      );
+      process.exit(1);
+    }
+    if (!/^https:\/\//i.test(rawUrl)) {
+      // §17.11 rule 81: reject non-HTTPS URLs to prevent token leak over plaintext.
+      // BH-BRIDGE-1 LOW-8 fix: don't log the full rawUrl — it might contain a
+      // token if the user mistakenly put it in the URL. Only show the scheme.
+      const scheme = rawUrl.split(":")[0] ?? "(unknown)";
+      console.error(
+        `[claude-killer] BRIDGE_URL must be HTTPS (got scheme: "${scheme}://").\n` +
+        `  Bridge tokens are sent in Authorization headers — never send them\n` +
+        `  over plaintext HTTP. Use a Cloudflare tunnel (HTTPS by default) or\n` +
+        `  any HTTPS reverse proxy.\n`
+      );
+      process.exit(1);
+    }
+    // BH-BRIDGE-1 LOW-7 fix: validate URL well-formedness (not just https:// prefix).
+    // Without this, "https://" (prefix only) passes the regex but fails later in
+    // the OpenAI SDK with an opaque error.
+    try {
+      new URL(rawUrl);
+    } catch {
+      console.error(
+        `[claude-killer] BRIDGE_URL is not a valid URL.\n` +
+        `  Got a malformed URL (starts with https:// but is not parseable).\n` +
+        `  Check for typos and trailing characters.\n`
+      );
+      process.exit(1);
+    }
+    // §17.11 rule 82: BRIDGE_TOKEN MUST be non-empty.
+    const token = process.env.BRIDGE_TOKEN?.trim() ?? "";
+    if (!token) {
+      console.error(
+        `[claude-killer] API_PROVIDER=bridge but BRIDGE_TOKEN is not set.\n` +
+        `  Generate a shared secret and set it in BOTH the CLI .env and the\n` +
+        `  bridge server's .env. Example:\n` +
+        `    BRIDGE_TOKEN=$(openssl rand -hex 32)\n` +
+        `  The bridge server rejects requests without a matching token.\n`
+      );
+      process.exit(1);
+    }
+    return { ...BRIDGE_CONFIG, baseUrl: rawUrl, apiKey: token };
+  }
+
   if (provider === "zenmux") {
     const apiKey = process.env.ZENMUX_API_KEY ?? "";
     if (!apiKey) {
@@ -195,7 +315,8 @@ export function getProviderConfig(): ProviderConfig {
       `[claude-killer] No API key configured.\n` +
       `  Set NVIDIA_API_KEY or NVIDIA_API_KEYS (comma-separated)\n` +
       `  or NVIDIA_API_KEYS_FILE (one key per line) for NVIDIA NIM,\n` +
-      `  or ZENMUX_API_KEY for ZenMux.\n`
+      `  or ZENMUX_API_KEY for ZenMux,\n` +
+      `  or API_PROVIDER=bridge + BRIDGE_URL + BRIDGE_TOKEN for Bridge.\n`
     );
     process.exit(1);
   }
@@ -208,7 +329,9 @@ export function getProviderConfig(): ProviderConfig {
  */
 export function providerNeedsHeartbeat(): boolean {
   const provider = detectProvider();
-  return provider === "nvidia" ? NVIDIA_CONFIG.needsHeartbeat : ZENMUX_CONFIG.needsHeartbeat;
+  if (provider === "nvidia") return NVIDIA_CONFIG.needsHeartbeat;
+  if (provider === "bridge") return BRIDGE_CONFIG.needsHeartbeat;
+  return ZENMUX_CONFIG.needsHeartbeat;
 }
 
 /**
@@ -216,7 +339,9 @@ export function providerNeedsHeartbeat(): boolean {
  */
 export function providerNeedsHedging(): boolean {
   const provider = detectProvider();
-  return provider === "nvidia" ? NVIDIA_CONFIG.needsHedging : ZENMUX_CONFIG.needsHedging;
+  if (provider === "nvidia") return NVIDIA_CONFIG.needsHedging;
+  if (provider === "bridge") return BRIDGE_CONFIG.needsHedging;
+  return ZENMUX_CONFIG.needsHedging;
 }
 
 /**
@@ -224,34 +349,42 @@ export function providerNeedsHedging(): boolean {
  */
 export function getProviderMaxSubAgents(): number {
   const provider = detectProvider();
-  return provider === "nvidia" ? NVIDIA_CONFIG.maxConcurrentSubAgents : ZENMUX_CONFIG.maxConcurrentSubAgents;
+  if (provider === "nvidia") return NVIDIA_CONFIG.maxConcurrentSubAgents;
+  if (provider === "bridge") return BRIDGE_CONFIG.maxConcurrentSubAgents;
+  return ZENMUX_CONFIG.maxConcurrentSubAgents;
 }
 
 /**
  * Get the reasoning field name for the current provider.
- * NVIDIA uses "reasoning_content", ZenMux uses "reasoning".
+ * NVIDIA uses "reasoning_content", ZenMux/Bridge use "reasoning".
  */
 export function getProviderReasoningField(): "reasoning_content" | "reasoning" {
   const provider = detectProvider();
-  return provider === "nvidia" ? NVIDIA_CONFIG.reasoningField : ZENMUX_CONFIG.reasoningField;
+  if (provider === "nvidia") return NVIDIA_CONFIG.reasoningField;
+  if (provider === "bridge") return BRIDGE_CONFIG.reasoningField;
+  return ZENMUX_CONFIG.reasoningField;
 }
 
 /**
  * Whether to send chat_template_kwargs with thinking_mode.
  * NVIDIA: yes (enables thinking mode on the server).
- * ZenMux: no (thinking is built-in per model, sending it may cause errors).
+ * ZenMux/Bridge: no (thinking is built-in per model, sending it may cause errors).
  */
 export function providerSendsThinkingMode(): boolean {
   const provider = detectProvider();
-  return provider === "nvidia" ? NVIDIA_CONFIG.sendThinkingMode : ZENMUX_CONFIG.sendThinkingMode;
+  if (provider === "nvidia") return NVIDIA_CONFIG.sendThinkingMode;
+  if (provider === "bridge") return BRIDGE_CONFIG.sendThinkingMode;
+  return ZENMUX_CONFIG.sendThinkingMode;
 }
 
 /**
  * Whether the provider uses a multi-key pool.
  * NVIDIA: yes (each key = 1 concurrent, 40 RPM).
- * ZenMux: no (single key handles 10+ concurrent, no rate limit).
+ * ZenMux/Bridge: no (single key/token handles all concurrency).
  */
 export function providerUsesMultiKeyPool(): boolean {
   const provider = detectProvider();
-  return provider === "nvidia" ? NVIDIA_CONFIG.needsMultiKeyPool : ZENMUX_CONFIG.needsMultiKeyPool;
+  if (provider === "nvidia") return NVIDIA_CONFIG.needsMultiKeyPool;
+  if (provider === "bridge") return BRIDGE_CONFIG.needsMultiKeyPool;
+  return ZENMUX_CONFIG.needsMultiKeyPool;
 }

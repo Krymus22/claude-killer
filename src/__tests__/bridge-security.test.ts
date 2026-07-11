@@ -330,12 +330,16 @@ describe("bridge server — security", () => {
   describe("queue directory isolation", () => {
     it("writes REQ files to BRIDGE_QUEUE_DIR", async () => {
       const body = JSON.stringify({ messages: [{ role: "user", content: "test" }] });
-      await httpPost(server!.port, "/v1/chat/completions",
+      // Fire request but don't await — we want to catch the REQ file BEFORE
+      // the server times out (504) and cleans it up.
+      const requestPromise = httpPost(server!.port, "/v1/chat/completions",
         { Authorization: `Bearer ${server!.token}` }, body);
-      // Wait a moment for file write
-      await new Promise(r => setTimeout(r, 200));
+      // Wait a moment for file write (server writes REQ before long-polling)
+      await new Promise(r => setTimeout(r, 100));
       const files = fs.readdirSync(TEST_QUEUE_DIR);
       expect(files.some(f => f.startsWith("REQ-") && f.endsWith(".json"))).toBe(true);
+      // Let the request finish (will timeout 504) so server cleans up
+      await requestPromise.catch(() => {});
     });
 
     it("does NOT write outside BRIDGE_QUEUE_DIR", async () => {

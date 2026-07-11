@@ -18,9 +18,16 @@
  * heavy model and is ALLOWED to call usar_scout (the scout's anti-recursion
  * guard only blocks "scout" / "sub-agent" / "small-task-agent"). The
  * planner sets its own ID, so the scout's check (in agent.ts) lets it
- * through. We also clear the env var temporarily before calling runScout
- * as defense-in-depth — in case any future code path checks for ANY
- * non-empty CLAUDE_KILLER_AGENT_ID.
+ * through.
+ *
+ * FIX-ORCH-S1 (CRITICAL 4): previously the planner CLEARED
+ * CLAUDE_KILLER_AGENT_ID before calling runScout (defense-in-depth against
+ * any future check that blocks on ANY non-empty ID). But that defeated the
+ * whole point of the anti-recursion guard — a (hypothetical) recursive
+ * call path could now slip through. We no longer clear it: the scout's
+ * existing check in agent.ts already permits "planner", so the clear was
+ * unnecessary AND harmful (it disabled the guard for the duration of the
+ * scout call).
  */
 
 import type OpenAI from "openai";
@@ -196,10 +203,14 @@ function asString(val: unknown, fallback = ""): string {
  * Execute a planner tool call. Returns the result string + success flag.
  *
  * The planner's tools are read-only + pensar + scout. It CANNOT edit files.
- * Anti-recursion: when calling usar_scout, temporarily clear the agent ID so
- * any downstream check that blocks on ANY non-empty CLAUDE_KILLER_AGENT_ID
- * doesn't trip (defense-in-depth — the scout itself only blocks
- * "scout"/"sub-agent"/"small-task-agent").
+ *
+ * FIX-ORCH-S1 (CRITICAL 4): we no longer clear CLAUDE_KILLER_AGENT_ID before
+ * calling runScout. The scout's anti-recursion check in agent.ts already
+ * permits "planner" (it only blocks "scout"/"sub-agent"/"small-task-agent"),
+ * so the clear was unnecessary. Worse, clearing defeated the anti-recursion
+ * guard for the duration of the scout call — if any future code path
+ * re-entered the planner while the env var was deleted, it would slip past
+ * the guard. Keeping "planner" set preserves the guard end-to-end.
  */
 async function executePlannerTool(
   toolName: string,
@@ -273,27 +284,22 @@ async function executePlannerTool(
           onToolCall: callbacks?.onToolCall,
           onToolResult: callbacks?.onToolResult,
         };
-        // Defense-in-depth: clear agent ID while scout runs so any check that
-        // blocks on ANY non-empty ID doesn't trip. Restored in finally.
-        const savedAgentId = process.env.CLAUDE_KILLER_AGENT_ID;
-        delete process.env.CLAUDE_KILLER_AGENT_ID;
-        try {
-          const scoutResult = await runScout(scoutArgs);
-          if (scoutResult === null) {
-            return { result: "[SCOUT] Desabilitado ou falhou ao iniciar.", ok: false };
-          }
-          if (!scoutResult.completed) {
-            return {
-              result: `[SCOUT FAILED] ${scoutResult.error ?? "unknown"}`,
-              ok: false,
-            };
-          }
-          return { result: formatScoutResult(scoutResult), ok: true };
-        } finally {
-          if (savedAgentId !== undefined) {
-            process.env.CLAUDE_KILLER_AGENT_ID = savedAgentId;
-          }
+        // FIX-ORCH-S1 (CRITICAL 4): Do NOT clear CLAUDE_KILLER_AGENT_ID here.
+        // The scout's anti-recursion check in agent.ts already allows
+        // "planner" (it only blocks "scout"/"sub-agent"/"small-task-agent").
+        // Clearing the env var defeated the anti-recursion guard for the
+        // duration of the scout call. See module-level doc for full rationale.
+        const scoutResult = await runScout(scoutArgs);
+        if (scoutResult === null) {
+          return { result: "[SCOUT] Desabilitado ou falhou ao iniciar.", ok: false };
         }
+        if (!scoutResult.completed) {
+          return {
+            result: `[SCOUT FAILED] ${scoutResult.error ?? "unknown"}`,
+            ok: false,
+          };
+        }
+        return { result: formatScoutResult(scoutResult), ok: true };
       }
       case "pesquisar_api": {
         const apiName = String(args.apiName ?? "");

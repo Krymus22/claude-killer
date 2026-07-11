@@ -95,14 +95,40 @@ const READONLY_COMMAND_PREFIXES = [
 
 function isReadOnlyCommand(comando: string): boolean {
   const trimmed = comando.trim().toLowerCase();
-  // Remove leading "sudo" if present
-  const withoutSudo = trimmed.replace(/^sudo\s+/, "");
+  // FIX-ORCH-S1 (HIGH 6): REJECT sudo commands entirely (don't strip).
+  // Previously the code stripped a leading `sudo ` and then ran the rest of
+  // the command — which means `sudo cat /etc/shadow` was treated as
+  // `cat /etc/shadow` and ALLOWED. Stripping is the wrong direction: sudo
+  // is a privilege-escalation primitive and any command requiring it is by
+  // definition not a safe read-only command. Reject outright.
+  if (trimmed.startsWith("sudo ")) {
+    return false;
+  }
+  const withoutSudo = trimmed;
 
   // FIX-ORCH-CRIT (CRITICAL 1): REJECT shell metacharacters to prevent
   // injection. The previous prefix-only check passed `ls; rm -rf /`,
   // `cat foo > file`, `echo x > ~/.bashrc`, etc. Block any of:
   // ; & | ` $ < > && || $( ${ \n \r
   if (/[;&|`$<>]|&&|\|\||\$\(|\$\{|\n|\r/.test(withoutSudo)) {
+    return false;
+  }
+
+  // FIX-ORCH-S1 (CRITICAL 3): Reject commands that read sensitive files.
+  // Even though `cat` is in the read-only allowlist, `cat /proc/self/environ`,
+  // `cat ~/.ssh/id_rsa`, `cat .env`, `cat /etc/shadow` etc. leak credentials
+  // (API keys, SSH private keys, password hashes). This mirrors the rationale
+  // used to remove `env`/`printenv` from the allowlist (defense-in-depth
+  // against credential exfiltration via the read-only command channel).
+  const SENSITIVE_PATH_PATTERNS = [
+    /\/proc\/self\/(environ|cmdline|status)/,
+    /\/etc\/(shadow|passwd)/,
+    /\.ssh\//,
+    /\.env\b/,
+    /id_rsa/,
+    /authorized_keys/,
+  ];
+  if (SENSITIVE_PATH_PATTERNS.some(p => p.test(withoutSudo))) {
     return false;
   }
 
@@ -460,6 +486,14 @@ async function executeOrchestratorTool(
           onToolCall: callbacks?.onToolCall,
           onToolResult: callbacks?.onToolResult,
         });
+
+        // FIX-ORCH-S1 (CRITICAL 5): clear the stored plan now that the coder
+        // has consumed it. Without this, a subsequent chamar_programador call
+        // (in the same orchestrator turn or a later one within the same loop
+        // invocation) would reuse the STALE plan from the previous task —
+        // generating code for the wrong task. The plan is single-use by
+        // contract: chamar_planejador → chamar_programador is a 1:1 pairing.
+        planStore.plan = null;
 
         if (!coderResult.success) {
           const errResult = `[CODER FAILED] ${coderResult.error ?? "unknown error"}`;

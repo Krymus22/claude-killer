@@ -30,7 +30,8 @@ import * as log from "./logger.js";
 import { pushActivity } from "./activityTracker.js";
 import { think, THINK_TOOL_DEFINITION } from "./thinkTool.js";
 import { isScoutEnabled, runScout, formatScoutResult, type ScoutArgs, type ScoutTask } from "./scoutAgent.js";
-import { recordRead } from "./readBeforeWrite.js";
+import { recordRead, checkReadBeforeWrite } from "./readBeforeWrite.js";
+import { resolveAndCheckPath } from "./pathSecurity.js";
 import { editFile, type EditOperation } from "./fileEdit.js";
 import { aplicarDiff, desfazerEdicao, executarComando } from "./tools.js";
 import { multiFileEditWithLocks, type FileEditRequest } from "./multiFileEdit.js";
@@ -299,6 +300,21 @@ async function executeCoderTool(
       case "editar_arquivo": {
         const caminho = asString(args.caminho);
         if (!caminho) return { result: "[ERROR] caminho vazio", ok: false };
+        // FIX-ORCH-S1 (CRITICAL 1): path traversal protection.
+        try {
+          resolveAndCheckPath(caminho, process.cwd());
+        } catch (secErr) {
+          const msg = secErr instanceof Error ? secErr.message : String(secErr);
+          return { result: `[ERROR] ${msg}`, ok: false };
+        }
+        // FIX-ORCH-S1 (CRITICAL 2): read-before-write gate.
+        const rbwCheck = checkReadBeforeWrite("editar_arquivo", args);
+        if (!rbwCheck.allowed) {
+          return {
+            result: `[ERROR] Read-before-write: você precisa ler o arquivo antes de editá-lo. Use usar_scout para ler o arquivo primeiro.`,
+            ok: false,
+          };
+        }
         const rawEdits = args.edits;
         if (!Array.isArray(rawEdits) || rawEdits.length === 0) {
           return { result: "[ERROR] edits deve ser um array não-vazio", ok: false };
@@ -316,6 +332,21 @@ async function executeCoderTool(
       case "aplicar_diff": {
         const caminho = asString(args.caminho);
         if (!caminho) return { result: "[ERROR] caminho vazio", ok: false };
+        // FIX-ORCH-S1 (CRITICAL 1): path traversal protection.
+        try {
+          resolveAndCheckPath(caminho, process.cwd());
+        } catch (secErr) {
+          const msg = secErr instanceof Error ? secErr.message : String(secErr);
+          return { result: `[ERROR] ${msg}`, ok: false };
+        }
+        // FIX-ORCH-S1 (CRITICAL 2): read-before-write gate.
+        const rbwCheck = checkReadBeforeWrite("aplicar_diff", args);
+        if (!rbwCheck.allowed) {
+          return {
+            result: `[ERROR] Read-before-write: você precisa ler o arquivo antes de editá-lo. Use usar_scout para ler o arquivo primeiro.`,
+            ok: false,
+          };
+        }
         const bloco_diff = asString(args.bloco_diff);
         if (!bloco_diff) return { result: "[ERROR] bloco_diff vazio", ok: false };
         const result = await aplicarDiff({ caminho, bloco_diff });
@@ -326,6 +357,28 @@ async function executeCoderTool(
         const rawArquivos = args.arquivos ?? args.requests;
         if (!Array.isArray(rawArquivos) || rawArquivos.length === 0) {
           return { result: "[ERROR] arquivos deve ser um array não-vazio", ok: false };
+        }
+        // FIX-ORCH-S1 (CRITICAL 1): path traversal protection for every file.
+        // We resolve each requested filePath against the project cwd BEFORE
+        // delegating to multiFileEditWithLocks. If any path escapes, reject.
+        try {
+          for (const a of rawArquivos) {
+            const fp = String((a as any)?.filePath ?? (a as any)?.caminho ?? "");
+            if (fp) resolveAndCheckPath(fp, process.cwd());
+          }
+        } catch (secErr) {
+          const msg = secErr instanceof Error ? secErr.message : String(secErr);
+          return { result: `[ERROR] ${msg}`, ok: false };
+        }
+        // FIX-ORCH-S1 (CRITICAL 2): read-before-write gate. checkReadBeforeWrite
+        // expects the `requests` field shape; normalize `arquivos` → `requests`.
+        const rbwArgs = { ...args, requests: rawArquivos };
+        const rbwCheck = checkReadBeforeWrite("editar_multi_arquivos", rbwArgs);
+        if (!rbwCheck.allowed) {
+          return {
+            result: `[ERROR] Read-before-write: você precisa ler o arquivo antes de editá-lo. Use usar_scout para ler o arquivo primeiro.`,
+            ok: false,
+          };
         }
         const requests: FileEditRequest[] = rawArquivos.map((a: any) => ({
           filePath: String(a.filePath ?? a.caminho ?? ""),
@@ -358,6 +411,26 @@ async function executeCoderTool(
       case "desfazer_edicao": {
         const caminho = asString(args.caminho);
         if (!caminho) return { result: "[ERROR] caminho vazio", ok: false };
+        // FIX-ORCH-S1 (CRITICAL 1): path traversal protection.
+        try {
+          resolveAndCheckPath(caminho, process.cwd());
+        } catch (secErr) {
+          const msg = secErr instanceof Error ? secErr.message : String(secErr);
+          return { result: `[ERROR] ${msg}`, ok: false };
+        }
+        // FIX-ORCH-S1 (CRITICAL 2): read-before-write gate. desfazer_edicao
+        // restores a backup (writes to disk), so it's subject to the same
+        // read-before-write discipline as the other edit tools. NOTE:
+        // checkReadBeforeWrite currently treats desfazer_edicao as a no-op
+        // (not in WRITE_TOOLS), but we call it for consistency + future-proofing
+        // — if WRITE_TOOLS is extended to include undo, the gate activates.
+        const rbwCheck = checkReadBeforeWrite("desfazer_edicao", args);
+        if (!rbwCheck.allowed) {
+          return {
+            result: `[ERROR] Read-before-write: você precisa ler o arquivo antes de editá-lo. Use usar_scout para ler o arquivo primeiro.`,
+            ok: false,
+          };
+        }
         const result = desfazerEdicao({ caminho });
         return { result, ok: !result.includes("[ERROR]") && !result.toLowerCase().includes("não") };
       }

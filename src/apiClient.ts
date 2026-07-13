@@ -754,9 +754,11 @@ function createStreamRequest(
   const requestBody: any = {
     model: effectiveModel,
     messages,
-    tools: tools ?? TOOL_DEFINITIONS,
-    tool_choice: "auto",
-    parallel_tool_calls: true,
+    // BH-403-SCOUT-SUMMARY HIGH-1 fix: only set tools/tool_choice/parallel_tool_calls
+    // when tools is non-empty. NVIDIA API returns 400 if tools=[] (empty array).
+    // When tools is undefined (no tools requested) OR null, default to TOOL_DEFINITIONS.
+    // When tools is [] (explicitly empty — e.g., summarizer pure-text call),
+    // OMIT the tools field entirely so the API treats it as a text completion.
     stream: true,
     // CRITICAL: without stream_options.include_usage=true, NVIDIA's streaming
     // API does NOT return usage data in the final chunk. Without usage, the
@@ -774,6 +776,22 @@ function createStreamRequest(
   if (shouldSendThinking) {
     requestBody.chat_template_kwargs = { thinking_mode: "enabled" };
   }
+
+  // BH-403-SCOUT-SUMMARY HIGH-1 fix: only include tools/tool_choice/parallel_tool_calls
+  // when tools is a non-empty array. NVIDIA API returns 400 if tools=[] (empty array).
+  // - tools === undefined → use TOOL_DEFINITIONS (default main-agent tool set)
+  // - tools === null → also use TOOL_DEFINITIONS (backwards compat)
+  // - tools === [] (empty array) → OMIT tools entirely (pure text completion,
+  //   used by scout summarizer §17.13 rule 115)
+  // - tools === [tool1, tool2, ...] → use as-is
+  const effectiveTools = tools ?? TOOL_DEFINITIONS;
+  if (effectiveTools && effectiveTools.length > 0) {
+    requestBody.tools = effectiveTools;
+    requestBody.tool_choice = "auto";
+    requestBody.parallel_tool_calls = true;
+  }
+  // If effectiveTools is empty [], we simply don't add tools/tool_choice/parallel_tool_calls
+  // → API treats it as a text completion (no tool calling possible).
 
   // CRITICAL FIX: Hard request timeout.
   // If NVIDIA accepts TCP but never streams any data (server hang, LB issue),

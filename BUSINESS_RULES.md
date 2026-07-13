@@ -1248,6 +1248,35 @@ Antes de corrigir qualquer bug:
 
 101. **restoreMocks: true no vitest config** — `vitest.config.ts` tem `restoreMocks: true` para que `vi.spyOn` mocks não vazem entre testes se assertions throw antes de `mockRestore()`.
 
+### 17.12 Scout Multi-Provider (Julho 2026)
+
+> Regras para SCOUT_PROVIDER — permite que o scout use um provider
+> DIFERENTE do agente principal. Caso de uso principal: API_PROVIDER=bridge
+> (agente principal via Cloudflare tunnel) + SCOUT_PROVIDER=nvidia (scout
+> rápido local). Veja `apiProvider.ts` e `apiClient.ts`.
+
+102. **SCOUT_PROVIDER deve ser provider válido** — "nvidia" | "zenmux" | "bridge". Qualquer outro valor (incluindo typos como "bridg") causa exit(1). Mirrors regra 86 (API_PROVIDER inválido = exit(1)).
+
+103. **SCOUT_PROVIDER inválido = exit(1)** — `detectScoutProvider()` NÃO faz fallback silencioso. Mensagem lista valores válidos.
+
+104. **Scout provider reusa env vars do provider correspondente** — NÃO existe SCOUT_API_KEY separado. Quando SCOUT_PROVIDER=nvidia, usa NVIDIA_API_KEY; quando =bridge, usa BRIDGE_URL + BRIDGE_TOKEN. Evita duplicação de config.
+
+105. **Scout provider é independente do main provider** — helpers `scoutProviderNeedsHeartbeat()`, `scoutProviderSendsThinkingMode()`, `scoutProviderUsesMultiKeyPool()`, `getScoutProviderReasoningField()` retornam valores do SCOUT provider, NÃO do main. Ex: main=bridge (no heartbeat) + scout=nvidia (needs heartbeat) → scout DEVE ter heartbeat próprio.
+
+106. **scoutClient é lazy-initialized** — `getScoutClient()` só cria o OpenAI client na primeira chamada, NÃO no module load. Evita exit(1) quando SCOUT_PROVIDER env vars estão faltando mas scout nunca é usado.
+
+107. **clientOverride é module-level mas com save/restore** — `chatWithModel` salva `previousClientOverride`, seta o scout client, e restaura no finally. Previne race entre chamadas concorrentes. `clearModelOverride()` também limpa `clientOverride` (além de modelOverride) para casos de timeout race.
+
+108. **chat() pula pool quando clientOverride setado** — quando scout usa provider diferente, `chat()` NÃO inicializa o pool do main provider nem chama `chatWithPool`. Pool handles são sempre do main provider e mandariam scout pro endpoint errado. Roteia direto pra `chatSingleKey` que usa `clientOverride`.
+
+109. **Pool init gated on providerUsesMultiKeyPool()** — `chat()` só inicializa o pool se o MAIN provider usa multi-key pool. Sem isso, main=bridge + NVIDIA_API_KEY setado (pro scout) faria `initApiKeyPool()` carregar keys NVIDIA e rotear main agent pra NVIDIA.
+
+110. **createStreamRequest usa scoutProviderSendsThinkingMode() quando clientOverride setado** — decide thinking_mode baseado no provider do scout, não do main. Sem isso, main=bridge (no thinking) + scout=nvidia (needs thinking) não enviaria `chat_template_kwargs` pro scout, quebrando reasoning models.
+
+111. **Scout heartbeat é timer separado** — `startScoutHeartbeat()` cria `scoutHeartbeatTimer` independente do `heartbeatTimer` principal. Usa SCOUT_MODEL (não MODEL). `stopHeartbeat()` também para o scout heartbeat. Sem isso, main=bridge + scout=nvidia nunca heartbeatearia o scout → cold start em toda chamada.
+
+112. **Scout heartbeat só inicia quando scout usa provider diferente** — `index.ts` só chama `startScoutHeartbeat()` quando `detectScoutProvider() !== providerConfig.name`. Se scout = main provider, heartbeat principal já cobre.
+
 ---
 
 **FIM DO DOCUMENTO**

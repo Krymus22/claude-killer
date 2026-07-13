@@ -18,8 +18,8 @@
 import { forceUtf8Environment } from "./utf8Safety.js";
 import { setTuiMode } from "./logger.js";
 import { initApiKeyPool, prewarmPool, loadApiKeys } from "./apiKeyPool.js";
-import { startHeartbeat, stopHeartbeat } from "./heartbeat.js";
-import { getProviderConfig, providerNeedsHeartbeat, providerUsesMultiKeyPool } from "./apiProvider.js";
+import { startHeartbeat, stopHeartbeat, startScoutHeartbeat } from "./heartbeat.js";
+import { getProviderConfig, providerNeedsHeartbeat, providerUsesMultiKeyPool, scoutProviderNeedsHeartbeat, detectScoutProvider, getScoutProviderConfig } from "./apiProvider.js";
 import { autoStartSearx, autoStopSearx } from "./searxManager.js";
 import OpenAI from "openai";
 
@@ -167,6 +167,36 @@ async function main(): Promise<void> {
         timeout: 30_000,
       });
       startHeartbeat(heartbeatClient);
+    }
+  }
+
+  // BH-SCOUT-1 HIGH-3 fix: start a SEPARATE heartbeat for the scout client
+  // when the scout uses a DIFFERENT provider that needs heartbeat (e.g.,
+  // main=bridge + scout=nvidia). Without this, the scout's NVIDIA client
+  // never gets heartbeated → cold start on every scout call after idle.
+  // §17.11 rule 105: scout provider is independent of main provider.
+  if (scoutProviderNeedsHeartbeat() && detectScoutProvider() !== providerConfig.name) {
+    try {
+      const scoutConfig = getScoutProviderConfig();
+      // For NVIDIA scout, use the last key from the pool (reserve key) if available
+      let scoutHeartbeatKey = scoutConfig.apiKey;
+      if (detectScoutProvider() === "nvidia") {
+        const scoutKeys = loadApiKeys();
+        if (scoutKeys.length > 0) {
+          scoutHeartbeatKey = scoutKeys[scoutKeys.length - 1];
+        }
+      }
+      const scoutHeartbeatClient = new OpenAI({
+        apiKey: scoutHeartbeatKey,
+        baseURL: scoutConfig.baseUrl,
+        timeout: 30_000,
+      });
+      console.log(`[claude-killer] Scout heartbeat active (provider=${detectScoutProvider()}), interval=5min`);
+      // BH-SCOUT-1 HIGH-3: use startScoutHeartbeat (separate timer from main heartbeat)
+      startScoutHeartbeat(scoutHeartbeatClient);
+    } catch (e) {
+      // Non-fatal — scout will just have cold starts
+      console.warn(`[claude-killer] Scout heartbeat failed to start: ${(e as Error).message}`);
     }
   }
 

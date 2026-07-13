@@ -388,3 +388,139 @@ export function providerUsesMultiKeyPool(): boolean {
   if (provider === "bridge") return BRIDGE_CONFIG.needsMultiKeyPool;
   return ZENMUX_CONFIG.needsMultiKeyPool;
 }
+
+// --- Scout provider (multi-provider support) --------------------------------
+
+/**
+ * Detect which provider the SCOUT sub-agent should use.
+ *
+ * Default: same as the main provider (detectProvider()).
+ * Override: SCOUT_PROVIDER env var ("nvidia" | "zenmux" | "bridge").
+ *
+ * Use case: when API_PROVIDER=bridge (so the main agent uses a remote LLM
+ * via Cloudflare tunnel), you can set SCOUT_PROVIDER=nvidia so the scout
+ * uses the fast local NVIDIA API instead of routing through the bridge.
+ * This keeps the scout fast (DiffusionGemma 26B at 700 tok/s) and avoids
+ * consuming the operator's attention for trivial read/search tasks.
+ *
+ * §17.11 rule 102: SCOUT_PROVIDER must be a valid provider name.
+ * §17.11 rule 103: if SCOUT_PROVIDER is set but invalid, exit(1) (mirrors
+ * API_PROVIDER behavior in detectProvider).
+ * §17.11 rule 104: scout provider config uses the SAME env vars as the
+ * main provider (NVIDIA_API_KEY, BRIDGE_TOKEN, etc.) — no separate
+ * SCOUT_API_KEY. This avoids key duplication.
+ */
+export function detectScoutProvider(): ProviderName {
+  const explicit = process.env.SCOUT_PROVIDER?.toLowerCase().trim();
+  if (!explicit || explicit === "") {
+    // Default: same as main provider
+    return detectProvider();
+  }
+  if (explicit === "nvidia") return "nvidia";
+  if (explicit === "zenmux") return "zenmux";
+  if (explicit === "bridge") return "bridge";
+
+  // §17.11 rule 103: invalid SCOUT_PROVIDER = exit(1)
+  console.error(
+    `[claude-killer] SCOUT_PROVIDER="${explicit}" is not a valid provider.\n` +
+    `  Valid values: nvidia, zenmux, bridge.\n` +
+    `  Unset SCOUT_PROVIDER to use the same provider as the main agent.\n`
+  );
+  process.exit(1);
+}
+
+/**
+ * Get the provider config for the SCOUT sub-agent.
+ *
+ * When SCOUT_PROVIDER is unset, returns the same config as getProviderConfig().
+ * When SCOUT_PROVIDER is set, returns the config for that provider (using the
+ * same env vars — NVIDIA_API_KEY, BRIDGE_TOKEN, etc.).
+ *
+ * §17.11 rule 104: no separate SCOUT_API_KEY — reuses main provider's keys.
+ */
+export function getScoutProviderConfig(): ProviderConfig {
+  const scoutProvider = detectScoutProvider();
+  const mainProvider = detectProvider();
+
+  // If scout provider == main provider, just return the main config
+  if (scoutProvider === mainProvider) {
+    return getProviderConfig();
+  }
+
+  // Otherwise, build the config for the scout provider
+  if (scoutProvider === "bridge") {
+    const rawUrl = process.env.BRIDGE_URL?.trim() ?? "";
+    const token = process.env.BRIDGE_TOKEN?.trim() ?? "";
+    if (!rawUrl || !/^https:\/\//i.test(rawUrl) || !token) {
+      console.error(
+        `[claude-killer] SCOUT_PROVIDER=bridge but BRIDGE_URL or BRIDGE_TOKEN is missing/invalid.\n` +
+        `  The scout provider uses the SAME env vars as the main bridge provider.\n` +
+        `  Ensure BRIDGE_URL (HTTPS) and BRIDGE_TOKEN are both set.\n`
+      );
+      process.exit(1);
+    }
+    try { new URL(rawUrl); } catch {
+      console.error(`[claude-killer] SCOUT_PROVIDER=bridge but BRIDGE_URL is malformed.\n`);
+      process.exit(1);
+    }
+    return { ...BRIDGE_CONFIG, baseUrl: rawUrl, apiKey: token };
+  }
+
+  if (scoutProvider === "zenmux") {
+    const apiKey = process.env.ZENMUX_API_KEY?.trim() ?? "";
+    if (!apiKey) {
+      console.error(
+        `[claude-killer] SCOUT_PROVIDER=zenmux but ZENMUX_API_KEY is not set.\n`
+      );
+      process.exit(1);
+    }
+    return { ...ZENMUX_CONFIG, apiKey };
+  }
+
+  // nvidia
+  const apiKey = pickFirstNvidiaKey();
+  if (!apiKey) {
+    console.error(
+      `[claude-killer] SCOUT_PROVIDER=nvidia but no NVIDIA API key is configured.\n` +
+      `  Set NVIDIA_API_KEY or NVIDIA_API_KEYS or NVIDIA_API_KEYS_FILE.\n`
+    );
+    process.exit(1);
+  }
+  return { ...NVIDIA_CONFIG, apiKey };
+}
+
+/**
+ * Helper functions for the SCOUT provider (mirror the main provider helpers
+ * but use detectScoutProvider() instead of detectProvider()).
+ *
+ * §17.11 rule 105: scout provider helpers are independent of main provider.
+ * E.g., main=bridge (no heartbeat) + scout=nvidia (needs heartbeat) →
+ * scout SHOULD send heartbeats. These helpers make that possible.
+ */
+export function scoutProviderNeedsHeartbeat(): boolean {
+  const provider = detectScoutProvider();
+  if (provider === "nvidia") return NVIDIA_CONFIG.needsHeartbeat;
+  if (provider === "bridge") return BRIDGE_CONFIG.needsHeartbeat;
+  return ZENMUX_CONFIG.needsHeartbeat;
+}
+
+export function scoutProviderSendsThinkingMode(): boolean {
+  const provider = detectScoutProvider();
+  if (provider === "nvidia") return NVIDIA_CONFIG.sendThinkingMode;
+  if (provider === "bridge") return BRIDGE_CONFIG.sendThinkingMode;
+  return ZENMUX_CONFIG.sendThinkingMode;
+}
+
+export function scoutProviderUsesMultiKeyPool(): boolean {
+  const provider = detectScoutProvider();
+  if (provider === "nvidia") return NVIDIA_CONFIG.needsMultiKeyPool;
+  if (provider === "bridge") return BRIDGE_CONFIG.needsMultiKeyPool;
+  return ZENMUX_CONFIG.needsMultiKeyPool;
+}
+
+export function getScoutProviderReasoningField(): "reasoning_content" | "reasoning" {
+  const provider = detectScoutProvider();
+  if (provider === "nvidia") return NVIDIA_CONFIG.reasoningField;
+  if (provider === "bridge") return BRIDGE_CONFIG.reasoningField;
+  return ZENMUX_CONFIG.reasoningField;
+}

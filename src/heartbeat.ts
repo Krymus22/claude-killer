@@ -50,6 +50,13 @@ let totalSuccess = 0;
 let totalFailures = 0;
 let lastModelState: "warm" | "cold" | "unknown" = "unknown";
 
+// BH-SCOUT-1 HIGH-3 fix: separate timer for the scout heartbeat.
+// When main=bridge + scout=nvidia, the scout needs its own heartbeat
+// to keep the NVIDIA model warm. This timer is independent of the main
+// heartbeat timer (separate state, separate client, separate stats).
+let scoutHeartbeatTimer: ReturnType<typeof setInterval> | null = null;
+let scoutHeartbeatRunning = false;
+
 // --- Event system (for TUI display) ----------------------------------------
 // Since commit 50898c8, log.* calls are suppressed in TUI mode. To surface
 // heartbeat results to the user without re-introducing scroll-stealing
@@ -168,6 +175,81 @@ export function stopHeartbeat(): void {
   }
   // BH3 MEDIUM 2: reset so first_success re-fires on restart.
   lastModelState = "unknown";
+  // BH-SCOUT-1 HIGH-3: also stop the scout heartbeat
+  stopScoutHeartbeat();
+}
+
+/**
+ * Start a SEPARATE heartbeat for the scout client.
+ *
+ * BH-SCOUT-1 HIGH-3 fix: when main=bridge + scout=nvidia, the scout's NVIDIA
+ * client needs its own heartbeat to avoid cold starts. This is independent
+ * of the main heartbeat (separate timer, separate stats, separate client).
+ *
+ * The scout heartbeat uses the SCOUT_MODEL env var (or default DiffusionGemma)
+ * instead of MODEL, because the scout uses a different model than the main agent.
+ *
+ * §17.11 rule 105: scout provider is independent of main provider.
+ */
+export function startScoutHeartbeat(client: OpenAI): void {
+  if (!HEARTBEAT_ENABLED) {
+    log.debug("[SCOUT-HEARTBEAT] Disabled via HEARTBEAT_ENABLED=0");
+    return;
+  }
+  if (scoutHeartbeatTimer) {
+    log.debug("[SCOUT-HEARTBEAT] Already running");
+    return;
+  }
+
+  const scoutModel = process.env.SCOUT_MODEL ?? "google/diffusiongemma-26b-a4b-it";
+  log.info(`[SCOUT-HEARTBEAT] Starting (interval=${HEARTBEAT_INTERVAL_MS}ms, model=${scoutModel})`);
+
+  // Send first heartbeat immediately
+  sendScoutHeartbeat(client, scoutModel).catch(() => { /* errors logged inside */ });
+
+  // Schedule periodic heartbeats
+  scoutHeartbeatTimer = setInterval(() => {
+    sendScoutHeartbeat(client, scoutModel).catch(() => { /* errors logged inside */ });
+  }, HEARTBEAT_INTERVAL_MS);
+
+  if (scoutHeartbeatTimer && typeof scoutHeartbeatTimer.unref === "function") {
+    scoutHeartbeatTimer.unref();
+  }
+  scoutHeartbeatRunning = true;
+}
+
+/**
+ * Stop the scout heartbeat. Safe to call even if not running.
+ */
+export function stopScoutHeartbeat(): void {
+  if (scoutHeartbeatTimer) {
+    clearInterval(scoutHeartbeatTimer);
+    scoutHeartbeatTimer = null;
+    log.info("[SCOUT-HEARTBEAT] Stopped");
+  }
+  scoutHeartbeatRunning = false;
+}
+
+/**
+ * Send a single scout heartbeat. Uses the scout model (not the main model).
+ * Errors are logged but don't crash the process.
+ */
+async function sendScoutHeartbeat(client: OpenAI, model: string): Promise<void> {
+  if (scoutHeartbeatRunning === false && !scoutHeartbeatTimer) return;
+  try {
+    const start = Date.now();
+    await client.chat.completions.create({
+      model,
+      messages: [{ role: "user", content: "ok" }],
+      max_tokens: 1,
+      temperature: 0.01,
+      stream: false,
+    });
+    const elapsed = Date.now() - start;
+    log.debug(`[SCOUT-HEARTBEAT] OK in ${elapsed}ms (model=${model})`);
+  } catch (err) {
+    log.debug(`[SCOUT-HEARTBEAT] Failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
 }
 
 /**

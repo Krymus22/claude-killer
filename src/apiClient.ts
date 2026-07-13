@@ -13,7 +13,7 @@ import { config } from "./config.js";
 import { getModelMaxOutputTokens } from "./modelRegistry.js";
 import * as log from "./logger.js";
 import { initApiKeyPool, acquireKeyForStreaming, tryAcquireKeyImmediate, getPoolSize, getAvailableKeyCount, getTotalKeyCount } from "./apiKeyPool.js";
-import { providerSendsThinkingMode, providerNeedsHedging } from "./apiProvider.js";
+import { providerSendsThinkingMode, providerNeedsHedging, providerUsesMultiKeyPool, detectScoutProvider, getScoutProviderConfig, scoutProviderSendsThinkingMode } from "./apiProvider.js";
 import { getModelInfo } from "./modelRegistry.js";
 import { t as i18nT } from "./i18n.js";
 
@@ -42,6 +42,67 @@ const client = new OpenAI({
   timeout: 5 * 60 * 1000,   // 5 min max request timeout (generous for long thinking)
   httpAgent: keepAliveAgent,
 });
+
+// --- Scout client (separate provider for scout sub-agent) -------------------
+//
+// §17.11 rule 105: when SCOUT_PROVIDER is set to a DIFFERENT provider than
+// the main provider, the scout uses this separate OpenAI client pointing at
+// the scout provider's baseUrl + apiKey. This lets you mix providers — e.g.,
+// API_PROVIDER=bridge (main agent uses remote LLM) + SCOUT_PROVIDER=nvidia
+// (scout uses fast local NVIDIA API).
+//
+// When SCOUT_PROVIDER is unset OR matches the main provider, `scoutClient`
+// is `null` and the scout falls through to the main `client` (preserves
+// backwards compatibility — no behavior change for existing configs).
+//
+// Lazy-initialized on first call to getScoutClient() to avoid building a
+// client at module load when SCOUT_PROVIDER isn't set (which would call
+// getScoutProviderConfig() → potentially exit(1) if env vars are missing).
+let scoutClient: OpenAI | null = null;
+
+/**
+ * Get the OpenAI client for the scout sub-agent.
+ *
+ * Returns a separate client when SCOUT_PROVIDER differs from the main
+ * provider; returns the main `client` when they match (or SCOUT_PROVIDER
+ * is unset). This lets the scout use a different API endpoint than the
+ * main agent — e.g., main=bridge, scout=nvidia.
+ *
+ * §17.11 rule 106: scout client is lazy-initialized to avoid exit(1) at
+ * module load when SCOUT_PROVIDER env vars are missing.
+ */
+function getScoutClient(): OpenAI {
+  if (scoutClient !== null) return scoutClient;
+
+  const scoutProvider = detectScoutProvider();
+  const mainProvider = config.apiProvider;
+
+  if (scoutProvider === mainProvider) {
+    // Same provider — use main client (no separate client needed)
+    scoutClient = client;
+    return scoutClient;
+  }
+
+  // Different provider — build a separate client
+  const scoutConfig = getScoutProviderConfig();
+  scoutClient = new OpenAI({
+    apiKey: scoutConfig.apiKey,
+    baseURL: scoutConfig.baseUrl,
+    timeout: 5 * 60 * 1000,
+    httpAgent: keepAliveAgent, // reuse the same keepalive agent
+  });
+  log.debug(`[SCOUT_CLIENT] Initialized scout client for provider=${scoutProvider} (main=${mainProvider}, baseUrl=${scoutConfig.baseUrl})`);
+  return scoutClient;
+}
+
+/**
+ * Check if the scout uses a DIFFERENT provider than the main agent.
+ * Used by chatWithModel to decide whether to use the scout client or
+ * the main client.
+ */
+export function scoutUsesDifferentProvider(): boolean {
+  return detectScoutProvider() !== config.apiProvider;
+}
 
 // --- Rate Limiter (Sliding Window Token Bucket) -----------------------------
 
@@ -655,9 +716,12 @@ function detectRepetition(state: StreamState): boolean {
 function createStreamRequest(
   messages: Message[],
   tools?: OpenAI.Chat.Completions.ChatCompletionTool[],
-  clientOverride?: OpenAI
+  explicitClientOverride?: OpenAI
 ) {
-  const c = clientOverride ?? client;
+  // §17.11 rule 105: prefer explicitClientOverride (from pool handles), then
+  // the module-level clientOverride (set by chatWithModel for scout), then
+  // the main `client` singleton.
+  const c = explicitClientOverride ?? clientOverride ?? client;
 
   // BUG FIX (scout-race-condition): use modelOverride if set (by chatWithModel
   // for scout calls), otherwise fall back to config.model. This avoids
@@ -677,7 +741,15 @@ function createStreamRequest(
   // supports it. The scout only needs fast tool calls, not reasoning. Thinking
   // would consume the model's token budget (e.g., 4096 for DiffusionGemma)
   // leaving nothing for tool_calls.
-  const shouldSendThinking = !disableThinkingOverride && providerSendsThinkingMode() && modelInfo.hasThinking;
+  // BH-SCOUT-1 HIGH-4 fix: when clientOverride is set (scout using a different
+  // provider), use scoutProviderSendsThinkingMode() instead of the main
+  // provider's thinking mode. Without this, main=bridge (no thinking kwargs)
+  // + scout=nvidia (needs thinking kwargs) would NOT send thinking_mode for
+  // the scout's NVIDIA request, breaking reasoning models.
+  const sendsThinking = clientOverride
+    ? scoutProviderSendsThinkingMode()
+    : providerSendsThinkingMode();
+  const shouldSendThinking = !disableThinkingOverride && sendsThinking && modelInfo.hasThinking;
 
   const requestBody: any = {
     model: effectiveModel,
@@ -1474,8 +1546,18 @@ export async function chat(
       : undefined;
 
     const chatPromise = (async (): Promise<ChatResponse> => {
-      const poolActive = getPoolSize() > 0 || initApiKeyPool();
-      if (poolActive) {
+      // BH-SCOUT-1 HIGH-2 fix: gate pool init on main provider's multi-key
+      // pool flag. Without this, when main=bridge (no multi-key pool) but
+      // NVIDIA_API_KEY is set (for the scout), initApiKeyPool() would load
+      // NVIDIA keys and route the MAIN agent's request through NVIDIA.
+      // §17.11 rule 88: bridge does NOT use multi-key pool.
+      const poolActive = providerUsesMultiKeyPool() && (getPoolSize() > 0 || initApiKeyPool());
+      // BH-SCOUT-1 CRITICAL-1 fix: when clientOverride is set (scout using a
+      // different provider), SKIP the pool entirely — pool handles are always
+      // built from the MAIN provider's keys, so they'd send the scout's
+      // request to the wrong endpoint. Route directly through chatSingleKey,
+      // which uses createStreamRequest(messages, tools) → picks up clientOverride.
+      if (poolActive && clientOverride === null) {
         try {
           // BH1-CRIT-1 fix: pass resetHangTimer so chatWithPool's hedge race
           // branch can reset the timer on every chunk from BOTH racing streams
@@ -1602,6 +1684,17 @@ export async function chat(
 let modelOverride: string | null = null;
 
 /**
+ * When set (by chatWithModel when scout uses a different provider),
+ * createStreamRequest will use this OpenAI client INSTEAD of the default
+ * `client` singleton. This lets the scout sub-agent talk to a different
+ * API endpoint than the main agent — e.g., main=bridge, scout=nvidia.
+ *
+ * §17.11 rule 105: scout provider can differ from main provider.
+ * §17.11 rule 106: cleared in chatWithModel's finally block (same as modelOverride).
+ */
+let clientOverride: OpenAI | null = null;
+
+/**
  * When true, createStreamRequest will NOT send chat_template_kwargs (thinking_mode)
  * even if the model has hasThinking=true. Used by the scout to disable thinking —
  * the scout only needs fast tool calls, not reasoning. Thinking would consume
@@ -1644,12 +1737,23 @@ export async function chatWithModel(
   modelOverride = modelId;
   disableThinkingOverride = disableThinking;
 
+  // §17.11 rule 105: if the scout uses a DIFFERENT provider than the main
+  // agent, set clientOverride so createStreamRequest uses the scout's client.
+  // This lets the scout talk to a different API endpoint (e.g., NVIDIA while
+  // main agent uses bridge). When scout uses the same provider, clientOverride
+  // stays null and the main `client` is used (backwards compat).
+  const previousClientOverride = clientOverride;
+  if (scoutUsesDifferentProvider()) {
+    clientOverride = getScoutClient();
+  }
+
   try {
-    log.debug(`[CHAT_WITH_MODEL] Calling ${modelId} (override set, config.model=${config.model} unchanged, thinking=${disableThinking ? "disabled" : "default"})`);
+    log.debug(`[CHAT_WITH_MODEL] Calling ${modelId} (override set, config.model=${config.model} unchanged, thinking=${disableThinking ? "disabled" : "default"}, scoutClient=${clientOverride ? "yes" : "no"})`);
     return await chat(messages, onStreamStart, onToken, onThinking, tools);
   } finally {
     modelOverride = null;
     disableThinkingOverride = false;
+    clientOverride = previousClientOverride;
   }
 }
 
@@ -1675,6 +1779,10 @@ export async function chatWithModel(
 export function clearModelOverride(): void {
   modelOverride = null;
   disableThinkingOverride = false;
+  // §17.11 rule 106: also clear clientOverride so a leaked chatWithModel
+  // (raced against a timeout) doesn't leave the scout client active for
+  // subsequent main-agent chat() calls.
+  clientOverride = null;
 }
 
 // BUG FIX (BUG 6): helper for cancelar/abortar um stream perdedor do hedging.
